@@ -1,0 +1,7 @@
+.git
+data
+media
+web/node_modules
+web/dist
+web/src/types.gen.ts
+*.log

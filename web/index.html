@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0c0e13" />
+  <title>Mediator</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c8cff'/%3E%3Cstop offset='1' stop-color='%2338d0ff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M13 10.5v11l9-5.5z' fill='%23fff'/%3E%3C/svg%3E" />
+  <script type="module" src="/src/main.ts"></script>
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div class="bar-inner">
+      <div class="bar-row">
+        <a class="brand" href="#" id="brand" aria-label="Mediator home">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <span class="brand-name">Mediator</span>
+        </a>
+        <div class="search" id="searchbox">
+          <span class="search-icon" aria-hidden="true"></span>
+          <input id="search" type="search" placeholder="Search your library…"
+                 autocomplete="off" spellcheck="false" enterkeyhint="search" />
+          <button id="search-clear" class="icon-btn ghost" aria-label="Clear search" hidden></button>
+        </div>
+        <button id="share" class="icon-btn ghost" aria-label="Copy a link to this view" title="Copy a link to this view"></button>
+        <button id="prefs" class="icon-btn ghost" aria-label="Preferences" title="Preferences"></button>
+        <div class="conn" id="conn" title="Live updates connected"></div>
+      </div>
+      <div class="bar-row bar-row-2">
+        <nav id="chips" class="chips" aria-label="Media type filter"></nav>
+        <div class="toolbar">
+          <label class="sort-wrap">
+            <select id="sort" aria-label="Sort by">
+              <option value="mtime">Modified</option>
+              <option value="name">Name</option>
+              <option value="size">Size</option>
+            </select>
+          </label>
+          <button id="sort-dir" class="icon-btn" aria-label="Toggle sort direction"></button>
+          <button id="queue-all" class="icon-btn" aria-label="Queue all" title="Add everything listed to the queue" hidden></button>
+          <span id="count" class="count"></span>
+        </div>
+      </div>
+      </div>
+    </header>
+
+    <main id="scroller">
+      <div id="spacer">
+        <div id="plane"></div>
+      </div>
+      <div id="status" class="status" hidden></div>
+    </main>
+
+    <footer id="audiobar" hidden></footer>
+  </div>
+  <div id="overlays"></div>
+  <div id="toasts"></div>
+</body>
+</html>

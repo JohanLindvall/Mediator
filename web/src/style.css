@@ -1,0 +1,2351 @@
+/* ---------- design tokens ---------- */
+:root {
+  --bg: #0b0d12;
+  --bg-elev: #10131b;
+  --card: #151924;
+  --card-2: #1a1f2e;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #e9ecf4;
+  --muted: #8d94a6;
+  --accent: #7c8cff;
+  --accent-2: #38d0ff;
+  --grad: linear-gradient(135deg, var(--accent), var(--accent-2));
+  --danger: #ff6b7a;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --topbar-h: 108px;
+  --audiobar-h: 92px;
+  color-scheme: dark;
+}
+
+/* ---------- base ---------- */
+* {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, 'Segoe UI', Roboto, Ubuntu, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+body.no-scroll #scroller {
+  overflow: hidden;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
+}
+svg {
+  width: 22px;
+  height: 22px;
+  display: block;
+  flex: none;
+}
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---------- top bar ---------- */
+#topbar {
+  position: relative;
+  z-index: 20;
+  /* One grid row that can animate to nothing: 1fr -> 0fr transitions where
+     height: auto cannot, so the bar can leave without anyone measuring it.
+     The padding lives on the inner element for the same reason — padding
+     here would survive the collapse as a blank strip. */
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.28s ease;
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+body.bar-away #topbar {
+  grid-template-rows: 0fr;
+  border-bottom-color: transparent;
+}
+.bar-inner {
+  overflow: hidden;
+  min-height: 0;
+  padding: 10px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text);
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.2px;
+  flex: none;
+}
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--grad);
+  position: relative;
+  box-shadow: 0 4px 14px rgba(124, 140, 255, 0.4);
+}
+.brand-mark::after {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  border-left: 9px solid #fff;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+
+.search {
+  flex: 1;
+  /* Shrink rather than push what is beside it off the edge: the row does not
+     wrap, so a search box that refused to give way would carry the buttons
+     past the right-hand side of a phone. The input inside it already gives
+     way; without this the box around it does not. */
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 560px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 8px 0 14px;
+  height: 40px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.18);
+}
+.search-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--muted);
+}
+.search input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font: inherit;
+  height: 100%;
+}
+.search input::placeholder {
+  color: var(--muted);
+}
+.search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.conn {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #3ddc84;
+  box-shadow: 0 0 8px rgba(61, 220, 132, 0.7);
+  flex: none;
+  transition: background 0.3s;
+}
+.conn.offline {
+  background: #f5a524;
+  box-shadow: 0 0 8px rgba(245, 165, 36, 0.6);
+}
+
+/*
+ * Every filter stays reachable at every width. Sideways scrolling hid the
+ * later ones — albums and artists, the two that are not just a kind of file
+ * — behind an edge with nothing to hint at it, and a window merely narrow
+ * rather than small was enough to do it: six chips and their counts need
+ * more room than a laptop leaves beside the sort controls. So they wrap onto
+ * as many rows as they need and the bar grows, which it can, having no fixed
+ * height.
+ */
+.bar-row-2 {
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  row-gap: 6px;
+  min-width: 0;
+  padding: 2px;
+  margin: -2px;
+}
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 13.5px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s, transform 0.1s;
+}
+.chip svg {
+  width: 16px;
+  height: 16px;
+}
+.chip b {
+  font-weight: 600;
+  font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 1px 7px;
+  border-radius: 999px;
+  color: inherit;
+}
+.chip:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+.chip:active {
+  transform: scale(0.96);
+}
+.chip.active {
+  background: var(--grad);
+  border-color: transparent;
+  color: #fff;
+}
+.chip.active b {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.sort-wrap select {
+  appearance: none;
+  background: var(--card) url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238d94a6' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E") no-repeat right 12px center;
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 999px;
+  height: 36px;
+  padding: 0 32px 0 14px;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.sort-wrap select:focus-visible {
+  border-color: var(--accent);
+}
+.count {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ---------- buttons ---------- */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  transition: background 0.15s, transform 0.1s, color 0.15s;
+  text-decoration: none;
+}
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.icon-btn:active {
+  transform: scale(0.92);
+}
+.icon-btn.sm {
+  width: 34px;
+  height: 34px;
+}
+.icon-btn.sm svg {
+  width: 18px;
+  height: 18px;
+}
+.icon-btn.ghost {
+  background: none;
+  border: 0;
+  width: 32px;
+  height: 32px;
+}
+.icon-btn.active {
+  color: var(--accent-2);
+}
+#sort-dir {
+  width: 36px;
+  height: 36px;
+}
+#sort-dir svg {
+  width: 17px;
+  height: 17px;
+}
+.txt-btn {
+  font-weight: 700;
+  font-size: 13.5px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--line);
+  min-width: 52px;
+}
+.txt-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--line-strong);
+  transition: transform 0.1s, background 0.15s, box-shadow 0.15s;
+}
+.btn svg {
+  width: 18px;
+  height: 18px;
+}
+.btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+.btn:active {
+  transform: scale(0.96);
+}
+.btn.primary {
+  background: var(--grad);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(124, 140, 255, 0.35);
+}
+
+/* ---------- content grid ---------- */
+#scroller {
+  flex: 1;
+  overflow-y: auto;
+  /* The grid wraps; nothing in this view is ever meant to be reached by
+     scrolling sideways, and a stray overflow that made it possible would
+     hide the right-hand column behind an edge with nothing to hint at it. */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+/*
+ * The whole window, from the top left. There is no cap and nothing is
+ * centred: on a wide screen a capped grid leaves the first card hundreds of
+ * pixels from the edge with the chips above it at the edge, and every column
+ * that would have fitted in the margins is a row of the library not on
+ * screen.
+ */
+#spacer {
+  padding: 18px;
+}
+#plane {
+  position: relative;
+}
+body.has-audio #spacer {
+  padding-bottom: calc(var(--audiobar-h) + 34px + env(safe-area-inset-bottom));
+}
+
+.cell {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+  contain: layout paint style;
+}
+/*
+ * A cell the new data brought eases in rather than appearing between one
+ * frame and the next, so a search reads as the listing changing rather than
+ * as the screen being replaced. Opacity only: the cell's own transform is
+ * what puts it in the grid, and animating that would move it off its place.
+ * Cells mounted by scrolling are not given this — they are rows the viewer
+ * is travelling towards and should simply be there.
+ */
+@keyframes cell-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.cell.cell-in {
+  animation: cell-in 220ms ease both;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+@media (hover: hover) {
+  .card:hover {
+    transform: translateY(-3px);
+    border-color: var(--line-strong);
+    box-shadow: var(--shadow);
+  }
+  .card:hover .hover-play {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .card:hover .thumb img.ok {
+    transform: scale(1.045);
+  }
+}
+.thumb {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--card-2);
+  overflow: hidden;
+}
+.thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 0.25s ease, transform 0.3s ease;
+}
+.thumb img.ok {
+  opacity: 1;
+}
+.thumb-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.16);
+}
+.thumb-fallback svg {
+  width: 34%;
+  height: 34%;
+  max-width: 72px;
+  max-height: 72px;
+  stroke-width: 1.5;
+}
+.kind-audio .thumb-fallback {
+  background: linear-gradient(135deg, rgba(124, 140, 255, 0.16), rgba(56, 208, 255, 0.1));
+}
+.kind-playlist .thumb-fallback {
+  background: linear-gradient(135deg, rgba(56, 208, 255, 0.14), rgba(124, 140, 255, 0.08));
+}
+.badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+.badge:empty {
+  display: none;
+}
+.hover-play {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 12, 18, 0.65);
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.15s, transform 0.15s;
+  pointer-events: none;
+}
+/*
+ * Where the badge does something the rest of the cell does not, it has to be
+ * hittable — and on a touch screen it has to be visible without a hover to
+ * reveal it, or the action it offers cannot be reached at all.
+ */
+.hover-play[data-play] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+@media (hover: none) {
+  .hover-play[data-play] {
+    opacity: 0.9;
+    transform: none;
+  }
+}
+.hover-play svg {
+  width: 20px;
+  height: 20px;
+}
+.artist-card .thumb.square {
+  border-radius: 50%; /* performers read as portraits, releases as sleeves */
+  overflow: hidden;
+}
+.artist-card .badge {
+  top: auto;
+  bottom: 8px;
+  right: 50%;
+  transform: translateX(50%);
+}
+.artist-card .title,
+.artist-card .sub {
+  text-align: center;
+}
+.vo-row .icon-btn.active {
+  color: var(--accent, #6ea8fe);
+}
+/* Keep cues clear of the control bar. */
+.video-overlay video::cue {
+  background: rgba(0, 0, 0, 0.72);
+  font-size: 92%;
+}
+.thumb-overlays .dur {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+.thumb-overlays .prog {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.thumb-overlays .prog i {
+  display: block;
+  height: 100%;
+  background: var(--grad);
+  border-radius: 0 2px 2px 0;
+}
+.thumb-overlays .watched {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--grad);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.thumb-overlays .watched svg {
+  width: 13px;
+  height: 13px;
+  stroke-width: 3;
+}
+.meta {
+  padding: 9px 11px 10px;
+  flex: none;
+  height: 56px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.meta .title {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.meta .sub {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+/* skeleton shimmer */
+.sk-card {
+  pointer-events: none;
+}
+.sk,
+.sk-line {
+  position: relative;
+  overflow: hidden;
+  background: var(--card-2);
+}
+.sk::after,
+.sk-line::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, 0.055) 50%, transparent 70%);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.sk-line {
+  height: 12px;
+  border-radius: 6px;
+  margin: 3px 0;
+}
+.sk-line.short {
+  width: 55%;
+}
+
+/* ---------- status / empty ---------- */
+.status {
+  position: sticky;
+  top: 20vh;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+.empty {
+  text-align: center;
+  color: var(--muted);
+  max-width: 380px;
+  padding: 20px;
+}
+.empty svg {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 12px;
+  opacity: 0.5;
+}
+.empty h3 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 17px;
+}
+.empty p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ---------- overlays ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  /*
+   * The full-screen viewers are placed on the visible viewport instead of
+   * this one — see below. Nothing shows around them, because the app behind
+   * is hidden while one is open.
+   */
+  overscroll-behavior: none;
+  z-index: 100;
+  background: rgba(5, 6, 10, 0.94);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.overlay.open {
+  opacity: 1;
+}
+/*
+ * The picture and the player take the part of the screen that can actually be
+ * seen. iOS lays a fixed element out against the layout viewport, which is
+ * both taller and — after a pinch, or while the bars move — wider than what
+ * is on screen: the controls ended up under Safari's bar, and the picture ran
+ * past the right-hand edge along with the close button. viewport.ts measures
+ * the visible box; this is where it is used.
+ */
+.video-overlay,
+.lightbox {
+  top: var(--app-top, 0px);
+  left: var(--app-left, 0px);
+  right: auto;
+  bottom: auto;
+  width: var(--app-vw, 100%);
+  height: var(--app-vh, 100%);
+}
+/* Nothing of the app is visible behind a viewer, so nothing can show around
+   one that is smaller than the layout viewport. */
+body.viewing #app {
+  visibility: hidden;
+}
+
+.spinner {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 255, 255, 0.15);
+  border-top-color: var(--accent-2);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- video player ---------- */
+.video-overlay {
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+/*
+ * The still that stands in for the picture while a file opens, and the three
+ * layers a drag moves. Both sit over the video and neither takes a gesture:
+ * the drag is the overlay's, and the still is only ever something to look at.
+ */
+.vo-poster,
+.vo-slides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.video-overlay.posted .vo-poster,
+.video-overlay.sliding .vo-slides {
+  opacity: 1;
+  visibility: visible;
+}
+/* What the conversion is doing, over the still that stands in for the
+   picture. Placed above centre so it does not sit on the face of the frame. */
+.vo-prep {
+  position: absolute;
+  left: 50%;
+  top: 62%;
+  transform: translateX(-50%);
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(10, 12, 18, 0.72);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--line-strong);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  z-index: 2;
+}
+.vo-poster {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: opacity 0.18s ease;
+}
+.vo-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+/* Stacked a screen apart, so moving the group brings the next one in as the
+   current one leaves. */
+.vo-slide-prev {
+  transform: translateY(-100%);
+}
+.vo-slide-next {
+  transform: translateY(100%);
+}
+.video-overlay video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* A picture scaled past the edges to push its own black borders off them.
+   The clip belongs on the element rather than the overlay, which has the
+   controls in it and must not have them cut off. */
+.video-overlay video.cropped {
+  clip-path: inset(0);
+}
+/* Quarter-turned playback: the element is sized to the swapped axes and
+   recentered by applyRotation; absolute positioning keeps the layout box
+   from pushing the overlay around. */
+.video-overlay video.rotated {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+}
+.lb-stage img {
+  transition: opacity 0.18s, transform 0.15s;
+}
+.vo-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+/* Track chooser, opening upwards from its button — the controls sit at the
+   bottom of the overlay, so there is only room above. */
+.vo-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: 3;
+  min-width: 168px;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+.vo-menu[hidden] {
+  display: none;
+}
+.vo-menu-item {
+  padding: 8px 12px;
+  border-radius: 8px;
+  text-align: left;
+  white-space: nowrap;
+  color: var(--text);
+  background: none;
+  border: 0;
+  font-size: 14px;
+}
+.vo-menu-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.vo-menu-item.on {
+  color: var(--accent-2);
+  font-weight: 700;
+}
+/*
+ * Nothing in the player scrolls, so no gesture over it belongs to the
+ * browser: every one of them is the player's. That covers the double tap
+ * that asks for fullscreen, and it stops the drag that used to move the
+ * whole page around underneath. (Pinch is left to iOS, which keeps it for
+ * accessibility whatever the page says.)
+ */
+.video-overlay {
+  touch-action: none;
+}
+/*
+ * The picture viewer is the exception: an enlarged picture is panned by
+ * dragging it, and that panning is the browser's.
+ */
+.lightbox {
+  touch-action: manipulation;
+}
+.lightbox.zoomed .lb-stage {
+  touch-action: auto;
+}
+.vo-fade {
+  transition: opacity 0.25s ease;
+}
+.video-overlay.idle .vo-fade {
+  opacity: 0;
+  pointer-events: none;
+}
+.video-overlay.idle {
+  cursor: none;
+}
+.vo-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(14px, env(safe-area-inset-top)) 18px 26px;
+  background: linear-gradient(rgba(0, 0, 0, 0.72), transparent);
+}
+.vo-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.vo-top .icon-btn {
+  background: rgba(0, 0, 0, 0.4);
+}
+.vo-spinner {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.video-overlay.buffering .vo-spinner {
+  display: flex;
+}
+.vo-center {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: rgba(10, 12, 18, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+}
+.vo-center svg {
+  width: 36px;
+  height: 36px;
+}
+.vo-center.pop {
+  animation: pop 0.5s ease forwards;
+}
+@keyframes pop {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.7);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.25);
+  }
+}
+.vo-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 30px 18px max(14px, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.78));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.seek {
+  position: relative;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+.seek-track,
+.seek-buf,
+.seek-fill {
+  position: absolute;
+  left: 0;
+  height: 5px;
+  border-radius: 3px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.seek-track {
+  right: 0;
+  background: rgba(255, 255, 255, 0.22);
+}
+.seek-buf {
+  width: 0;
+  background: rgba(255, 255, 255, 0.35);
+}
+.seek-fill {
+  width: 0;
+  background: var(--grad);
+}
+.seek-dot {
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%) scale(0.6);
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.15s, transform 0.15s;
+}
+.seek:hover .seek-dot,
+.seek:active .seek-dot {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+.vo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.vo-row .icon-btn {
+  background: none;
+  border: 0;
+}
+.vo-row .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.vo-time {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.vo-spacer {
+  flex: 1;
+}
+.vol-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* range inputs (volume) */
+input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 20px;
+  background: none;
+  cursor: pointer;
+}
+.vol {
+  width: 86px;
+}
+input[type='range']::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff;
+  margin-top: -4.5px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+input[type='range']::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+}
+input[type='range']::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* ---------- lightbox ---------- */
+.lightbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lb-stage {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lb-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: opacity 0.18s;
+  user-select: none;
+}
+.lightbox.loading .lb-stage img {
+  opacity: 0.3;
+}
+.lightbox.zoomed .lb-stage {
+  overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+.lightbox.zoomed .lb-stage img {
+  max-width: none;
+  max-height: none;
+  margin: auto;
+}
+.lb-spinner {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.lightbox.loading .lb-spinner {
+  display: flex;
+}
+.lb-top {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: max(14px, env(safe-area-inset-top)) 18px 26px;
+  background: linear-gradient(rgba(0, 0, 0, 0.72), transparent);
+}
+.lb-cap {
+  flex: 1;
+  min-width: 0;
+}
+.lb-name {
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.lb-meta {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.lb-top .icon-btn {
+  background: rgba(0, 0, 0, 0.4);
+}
+/* The layers a drag moves, over the stage and taking no gestures of their
+   own — the drag belongs to the overlay. */
+.lb-slides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+.lightbox.sliding .lb-slides {
+  opacity: 1;
+  visibility: visible;
+}
+.lb-slide {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+/* A screen apart, so moving the group brings one in as the other leaves. */
+.lb-slide-prev {
+  transform: translateX(-100%);
+}
+.lb-slide-next {
+  transform: translateX(100%);
+}
+.lb-arrow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: 46px;
+  background: rgba(15, 18, 26, 0.6);
+  backdrop-filter: blur(6px);
+}
+.lb-prev {
+  left: 14px;
+}
+.lb-next {
+  right: 14px;
+}
+
+/* ---------- album sheet ---------- */
+.sheet-overlay {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(5, 6, 10, 0.7);
+  backdrop-filter: blur(6px);
+}
+.sheet {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: min(86vh, 900px);
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-bottom: 0;
+  border-radius: 20px 20px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: translateY(24px);
+  transition: transform 0.22s ease;
+  box-shadow: var(--shadow);
+}
+.overlay.open .sheet {
+  transform: translateY(0);
+}
+.sheet-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 80px;
+}
+.sheet-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  background: rgba(0, 0, 0, 0.4);
+}
+.sheet-head {
+  display: flex;
+  gap: 18px;
+  padding: 22px;
+  background: linear-gradient(180deg, rgba(124, 140, 255, 0.1), transparent);
+  flex: none;
+}
+.sheet-cover {
+  width: 148px;
+  height: 148px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--card-2);
+  box-shadow: var(--shadow);
+  flex: none;
+}
+.sheet-cover.fallback {
+  background: linear-gradient(135deg, rgba(124, 140, 255, 0.25), rgba(56, 208, 255, 0.15));
+}
+.sheet-headtext {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 3px;
+}
+.sheet-kicker {
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--accent-2);
+}
+.sheet-title {
+  margin: 0;
+  font-size: clamp(19px, 4vw, 26px);
+  line-height: 1.15;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.sheet-sub {
+  color: var(--text);
+  opacity: 0.85;
+  font-size: 14px;
+}
+.sheet-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+/* The primary button's label changes with the play state (Play / Pause /
+   Resume), and the sheet clips its overflow: without a reserved width the
+   longest label pushed the Shuffle button past the sheet's edge, and on a
+   phone Shuffle was simply cut off. Reserve room for the longest label so no
+   state change can move or clip its neighbour, and let the row wrap when even
+   that does not fit — a second line is reachable, a clipped button is not. */
+.sheet-actions .btn.primary {
+  min-width: 128px;
+  justify-content: center;
+}
+.sheet-tracks {
+  overflow-y: auto;
+  padding: 4px 10px 14px;
+}
+.track {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background 0.12s;
+}
+.track:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.t-num {
+  width: 24px;
+  text-align: right;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.t-playing {
+  display: none;
+  width: 24px;
+  color: var(--accent-2);
+  flex: none;
+}
+.t-playing svg {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+}
+.track.current .t-num {
+  display: none;
+}
+.track.current .t-playing {
+  display: block;
+}
+.track.current .t-title {
+  color: var(--accent-2);
+}
+.t-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.t-title {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-artist {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-artist:empty {
+  display: none;
+}
+.t-size {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* ---------- audio bar ---------- */
+#audiobar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 60;
+  padding: 0 14px calc(10px + env(safe-area-inset-bottom));
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-top: 1px solid var(--line);
+}
+.ab-seekrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 26px;
+}
+.ab-time {
+  font-size: 11.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+}
+.ab-time:last-child {
+  text-align: right;
+}
+.ab-seek {
+  flex: 1;
+}
+.ab-seek::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, var(--accent) var(--fill, 0%), rgba(255, 255, 255, 0.18) var(--fill, 0%));
+}
+.ab-seek::-moz-range-track {
+  background: rgba(255, 255, 255, 0.18);
+}
+.ab-seek::-moz-range-progress {
+  background: var(--accent);
+  height: 4px;
+  border-radius: 2px;
+}
+.ab-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 58px;
+}
+.ab-cover,
+.ab-cover-fallback {
+  width: 46px;
+  height: 46px;
+  border-radius: 9px;
+  flex: none;
+  object-fit: cover;
+}
+.ab-cover-fallback {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(124, 140, 255, 0.3), rgba(56, 208, 255, 0.18));
+  color: rgba(255, 255, 255, 0.8);
+}
+.ab-cover[hidden] + .ab-cover-fallback {
+  display: flex;
+}
+.ab-cover-fallback svg {
+  width: 22px;
+  height: 22px;
+}
+.ab-info {
+  flex: 1;
+  min-width: 0;
+}
+.ab-title {
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ab-artist {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ab-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ab-play {
+  background: var(--grad);
+  border: 0;
+  width: 44px;
+  height: 44px;
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(124, 140, 255, 0.4);
+}
+.ab-play:hover {
+  background: var(--grad);
+  filter: brightness(1.12);
+}
+.ab-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ab-vol {
+  width: 92px;
+}
+
+/* queue panel */
+/*
+ * The spectrum sits where the queue does, and behaves the same way: anchored
+ * above the bar, out of the grid's way, and gone when the player closes.
+ */
+.viz-panel {
+  position: fixed;
+  right: 14px;
+  bottom: calc(var(--audiobar-h) + 8px + env(safe-area-inset-bottom));
+  z-index: 70;
+  width: min(400px, calc(100vw - 28px));
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.viz-panel.open {
+  opacity: 1;
+  transform: none;
+}
+/*
+ * The player's own copy sits inside the overlay rather than against the
+ * window, so it is above the picture and travels with fullscreen — a panel
+ * fixed to the viewport is left behind the moment the video takes the
+ * screen, which is where a film is most likely to be watched.
+ *
+ * It deliberately does not hide with the controls. They go after a few
+ * seconds of stillness and this is something the viewer asked to watch;
+ * putting it on that timer would make it flicker in and out of a film. It
+ * sits clear of the control furniture instead, and only its own box takes
+ * the pointer, so the tap that shows the controls still reaches the video
+ * around it.
+ */
+/*
+ * The player's own copy is part of the control furniture rather than a thing
+ * floating over the picture: it is the first child of .vo-controls, so it
+ * sits directly above the seek bar however many rows the buttons have
+ * wrapped onto, and it fades with them — a spectrum is something to glance
+ * at, not something to leave over a film.
+ *
+ * Static, so it takes its place in the controls' own flex column instead of
+ * being positioned against anything, and pushed to the right-hand end.
+ */
+.vo-viz {
+  position: static;
+  align-self: flex-end;
+  width: min(340px, 100%);
+  margin-bottom: 2px;
+}
+/*
+ * And nothing at all with the film taking the whole screen. Fullscreen is
+ * where a film is watched rather than inspected, and the analyser stops
+ * painting to match (see syncViz) rather than merely being covered.
+ */
+.video-overlay:fullscreen .vo-viz {
+  display: none;
+}
+/*
+ * The padding belongs to a wrapper, not to the canvas.
+ *
+ * With the app's global border-box and padding on the canvas itself, the
+ * bitmap was sized from the padding box while the drawing surface was the
+ * content box: a 398x120 element holding a 374x98 image, resampled 0.94 by
+ * 0.82 on every composite. Everything in the analyser that snaps to device
+ * pixels was being stretched unevenly afterwards.
+ */
+.viz-body {
+  position: relative;
+  /* Nearly nothing: the panel exists to hold the picture, and with the
+     heading gone the padding was the next largest thing in it that was not
+     bars. Enough to keep the rounded corners off the glass floor. */
+  padding: 6px;
+}
+.viz-canvas {
+  display: block;
+  width: 100%;
+  border-radius: 9px;
+  /* Taller than the panel used to allow, having taken the heading's row —
+     the panel is about the size it was and almost all of it is now bars.
+     Shorter on a phone held sideways, where the panel and the bar together
+     would otherwise take most of the screen. */
+  height: clamp(96px, 26vh, 156px);
+}
+/*
+ * Said only when something is wrong — over the picture, since there is
+ * nothing to obscure when there is nothing to draw. Empty the rest of the
+ * time, and `:empty` is what keeps it from taking a row it does not need.
+ */
+.viz-note {
+  position: absolute;
+  inset: 6px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+  border-radius: 9px;
+}
+.viz-note:empty {
+  display: none;
+}
+.queue-panel {
+  position: fixed;
+  right: 14px;
+  bottom: calc(var(--audiobar-h) + 8px + env(safe-area-inset-bottom));
+  z-index: 70;
+  width: min(400px, calc(100vw - 28px));
+  max-height: 46vh;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.queue-panel.open {
+  opacity: 1;
+  transform: none;
+}
+.q-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 10px 10px 16px;
+  font-weight: 700;
+  font-size: 13.5px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.q-list {
+  overflow-y: auto;
+  padding: 6px;
+}
+/* The queue panel lays a window of rows over one tall spacer (renderQueue),
+   so a row is placed by position and its height is fixed and pinned here:
+   Q_ROW in audio.ts must agree with it. */
+.q-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 38px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+.q-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.q-num {
+  width: 26px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.q-num svg {
+  width: 14px;
+  height: 14px;
+  margin-left: auto;
+  color: var(--accent-2);
+}
+.q-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.q-row.current .q-title {
+  color: var(--accent-2);
+}
+.q-artist {
+  max-width: 35%;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- toasts ---------- */
+#toasts {
+  position: fixed;
+  left: 50%;
+  bottom: calc(24px + env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+body.has-audio #toasts {
+  bottom: calc(var(--audiobar-h) + 18px + env(safe-area-inset-bottom));
+}
+.toast {
+  background: rgba(24, 28, 40, 0.94);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 10px 18px;
+  border-radius: 999px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.25s, transform 0.25s;
+}
+.toast.show {
+  opacity: 1;
+  transform: none;
+}
+
+/* ---------- scrollbars ---------- */
+#scroller::-webkit-scrollbar,
+.sheet-tracks::-webkit-scrollbar,
+.q-list::-webkit-scrollbar {
+  width: 10px;
+}
+#scroller::-webkit-scrollbar-thumb,
+.sheet-tracks::-webkit-scrollbar-thumb,
+.q-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+#scroller::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.25);
+}
+
+/* ---------- mobile ---------- */
+@media (max-width: 720px) {
+  :root {
+    --audiobar-h: 100px;
+  }
+  .bar-inner {
+    padding: 6px 12px 8px;
+    gap: 6px;
+  }
+  .search {
+    height: 36px;
+  }
+  .brand-name {
+    display: none;
+  }
+  #spacer {
+    padding: 12px;
+  }
+  .count {
+    display: none;
+  }
+  .sort-wrap select {
+    padding-left: 10px;
+    font-size: 13px;
+  }
+  .vol-group .vol {
+    display: none;
+  }
+  .vo-pip {
+    display: none;
+  }
+  /*
+   * Wrap onto as many rows as the controls need instead of running off the
+   * edge. A row that overflows puts fullscreen past the right-hand side of a
+   * phone, reachable only by dragging the whole page across — the same trap
+   * the filter chips were in. The control bar has no fixed height, so it
+   * simply grows.
+   */
+  .vo-row {
+    gap: 2px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  /* Packed left and wrapping reads better than a gap that pushes the tail
+     of the controls onto a line of its own. */
+  .vo-spacer {
+    display: none;
+  }
+  .lb-arrow {
+    width: 40px;
+    height: 40px;
+    background: rgba(15, 18, 26, 0.45);
+  }
+  .lb-prev {
+    left: 8px;
+  }
+  .lb-next {
+    right: 8px;
+  }
+  .sheet {
+    max-height: 92vh;
+    border-radius: 18px 18px 0 0;
+  }
+  .sheet-head {
+    padding: 18px;
+    gap: 14px;
+  }
+  .sheet-cover {
+    width: 110px;
+    height: 110px;
+  }
+  .ab-side .ab-vol {
+    display: none;
+  }
+  .ab-shuffle,
+  .ab-repeat {
+    display: none;
+  }
+  .ab-main {
+    gap: 10px;
+  }
+}
+
+/* Phones: every vertical pixel here is a row of the library not on screen,
+   so the top bar gives back what it can without hiding anything.
+
+   The chips container dissolves (display: contents) so the chips and the
+   sort controls share one wrapping flow: the sort pill sits at the end of
+   the last chip line whenever it fits there — which on a phone it usually
+   does, the last line being short — instead of always costing a row of its
+   own. When the line is full it wraps and is right-aligned, which is
+   exactly the layout this replaces, so nothing is ever worse. This is why
+   the chips must not be squeezed against the toolbar: they are not beside
+   it, they are in the same flow as it.
+
+   Dissolving the container also means space-between must go: it would
+   spread each line of chips across the full width. Chips pack left; the
+   toolbar's own margin pushes it right. */
+@media (max-width: 560px) {
+  .bar-row-2 {
+    justify-content: flex-start;
+    gap: 8px;
+    row-gap: 6px;
+  }
+  #chips {
+    display: contents;
+  }
+  .toolbar {
+    margin-left: auto;
+  }
+  /* The sort controls match the chips' height so a shared line reads as
+     one row of controls, not two heights fighting. */
+  .sort-wrap select {
+    height: 31px;
+  }
+  .toolbar .icon-btn {
+    width: 31px;
+    height: 31px;
+  }
+  .chip {
+    gap: 5px;
+    padding: 6px 10px;
+    font-size: 12.5px;
+  }
+  .chip svg {
+    width: 15px;
+    height: 15px;
+  }
+  .chip b {
+    font-size: 11px;
+    padding: 1px 5px;
+  }
+}
+
+/*
+ * iOS Safari zooms the page in when a text field with a font smaller than
+ * 16px takes focus, and nothing can zoom it back out: the layout is then
+ * wider than the screen and the right-hand column of the grid sits off the
+ * edge until the page is panned across. Sizing the fields that take a
+ * keyboard at 16px is the whole fix — asked for only where there is a touch
+ * keyboard, since nothing else about the design wants that size.
+ */
+@media (pointer: coarse) {
+  .search input,
+  .prefs-add input {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------- preferences ---------- */
+.prefs {
+  max-width: 560px;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.prefs-head .sheet-meta {
+  margin-top: 4px;
+}
+.prefs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+.prefs-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card-2);
+}
+/* The path is the long part; it shrinks and ellipsises so the remove button
+   cannot be pushed off the edge of a phone. */
+.prefs-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl; /* a truncated path is more useful from its end */
+  text-align: left;
+}
+/*
+ * The path itself is an isolated run inside that right-to-left box.
+ * A leading "/" is bidi-neutral, so on its own it takes the direction of the
+ * paragraph around it and is drawn at the far end of the line: every path in
+ * the list appeared to have lost its first slash and grown a trailing one.
+ * Isolating the path fixes its direction from its own first strong character
+ * — a letter, so left to right — while the box stays right-to-left and goes
+ * on clipping the head of a long path rather than its tail. The tooltip is
+ * on the same element for the same reason: it inherits directionality from
+ * whatever carries the title, and showed the same reordering.
+ */
+.prefs-path > bdi {
+  unicode-bidi: isolate;
+}
+/*
+ * The performer's name under a release, which is a way to the rest of their
+ * work rather than decoration. It has to look like the line it replaced
+ * until it is pointed at, or the card grows a button in the middle of its
+ * caption; the hit area is the name itself, so the rest of the caption still
+ * opens the release.
+ */
+.link-artist {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.link-artist:hover,
+.link-artist:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.prefs-empty {
+  padding: 10px;
+  color: var(--muted, rgba(255, 255, 255, 0.6));
+  font-size: 13.5px;
+}
+.prefs-add {
+  display: flex;
+  gap: 8px;
+}
+.prefs-add input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--text);
+  font-size: 14px;
+}
+.prefs-overlay.busy .sheet {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* ---- playing to a television ------------------------------------------
+   The picture is not here: the set fetched the file itself and is decoding
+   it. So the element is left holding nothing and the film's own still stands
+   in for it, with a line saying where it went — a black rectangle and a
+   running clock would look like a fault. */
+.video-overlay.vo-casting video {
+  visibility: hidden;
+}
+.video-overlay.vo-casting .vo-poster {
+  opacity: 1;
+  visibility: visible;
+}
+/* The two lines that stand in the middle of the picture: where the film is
+   playing instead, and why it is not playing at all. */
+.vo-on-tv,
+.vo-fault {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  padding: 12px 22px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 62%);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  font-size: 15px;
+  text-align: center;
+  pointer-events: none;
+}
+/* Muting is the element's, and the element is not what is making the sound;
+   the slider is, since a renderer has a volume of its own to set. */
+.video-overlay.vo-casting [data-mute],
+.video-overlay.vo-casting [data-pip],
+.video-overlay.vo-casting [data-crop],
+.video-overlay.vo-casting [data-rotate],
+.video-overlay.vo-casting [data-rate] {
+  display: none;
+}
+
+/* The receiver list, opening upward from the bar's own button. */
+.ab-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ab-menu {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  right: 0;
+  z-index: 40;
+  min-width: 180px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+.ab-menu[hidden] {
+  display: none;
+}
+
+/* A control that is temporarily not applicable — the spectrum while the
+   sound is on a television, where there is nothing here to draw — is dimmed
+   rather than removed: one that vanishes and comes back reads as a fault. */
+.icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon-btn:disabled:hover {
+  background: none;
+}
+
+/* ---- the moving preview -------------------------------------------------
+   Frames from the scrub sheet, stepped under the pointer. It sits over the
+   still and under everything that says something about the tile — the play
+   badge above all, which is what makes a film look openable and must not
+   vanish at the moment the pointer is on it. Cover, like the still, so the
+   picture does not change shape when it starts. */
+.thumb-preview {
+  position: absolute;
+  inset: 0;
+  /* The bars. A frame is fitted to the tile at its own proportions, so
+     whatever is left over is filled rather than stretched into. */
+  background-color: #000;
+  background-repeat: no-repeat;
+  background-position: 0 0;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+}
+.thumb-preview.on {
+  opacity: 1;
+}
+
+/* A genre is a label tied to releases, not a release: the card reads like an
+   artist's, and its own name is the thing to press. */
+.genre-card .thumb-fallback {
+  color: rgba(255, 255, 255, 0.13);
+}
+/* The genre written beside a performer or under a release is a way across to
+   everything else filed under it, exactly as the performer's name is a way to
+   the rest of their work. Both look like the caption they replaced until they
+   are pointed at — a card whose every fact is a visible button is a card
+   nobody can read. */
+.link-genre {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+.link-genre:hover,
+.link-genre:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/*
+ * What is running, at the foot of the preferences.
+ *
+ * Set apart from the directories above it rather than given a sheet of its
+ * own: it is read once in a while, usually while wondering why something
+ * behaved the way it did, and a dialog nobody opens is a dialog that goes
+ * stale without anybody noticing.
+ */
+.about {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.about-head {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.about-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 13px;
+}
+.about-list dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.about-list dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.about-list .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+/* What is missing is the part worth reading, so it is the part that is
+   coloured. Everything working says nothing at all. */
+.about-missing {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: var(--warn, #e0b341);
+}
+.about-missing li {
+  margin: 3px 0;
+}
+
+/* The verdict thumbs light the way shuffle and repeat do; a dislike is not a
+   fault, so it takes the same colour. */
+.ab-like.active,
+.ab-radio.active {
+  color: var(--accent);
+}
+.q-space {
+  position: relative;
+}
+
+/* bar: what a phone has no room for folds into one menu. Below 720px the
+   spectrum, the radio and the link leave the bar for the "⋯" menu
+   (audio.ts, toggleMoreMenu), which is hidden above it; the verdict and
+   the queue stay, a phone being where the listening happens; and the
+   title keeps a third of the row, so it cannot collapse to nothing under
+   the buttons. */
+.ab-more-wrap {
+  display: none;
+}
+.ab-more,
+.sheet-more > .btn {
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 700;
+}
+@media (max-width: 720px) {
+  .ab-more-wrap {
+    display: inline-flex;
+  }
+  .ab-side .ab-viz,
+  .ab-side .ab-radio,
+  .ab-side [data-share] {
+    display: none;
+  }
+  .ab-info {
+    min-width: 30%;
+  }
+}
+/* The sheet's overflow drops below its button rather than above, and sits
+   inside the sheet. */
+.sheet-more {
+  position: relative;
+  display: inline-flex;
+}
+.sheet-menu {
+  top: calc(100% + 8px);
+  bottom: auto;
+  left: 0;
+  right: auto;
+}
+
+/* ---- shell ----------------------------------------------------------------
+   The marks on a tile — the play count, the verdict, the spoken-word book —
+   share one row at the top-left, styled like the duration pill. They used
+   to sit in normal flow at the global icon size, unstyled, stacking where
+   the watched tick sits; the tick keeps its corner and the row starts after
+   it. And a cell can be reached from the keyboard, so it says when it is. */
+.thumb-overlays .marks {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  display: flex;
+  gap: 4px;
+  pointer-events: none;
+}
+.thumb-overlays .watched ~ .marks,
+.thumb-overlays .marks ~ .watched ~ .marks {
+  left: 36px;
+}
+.thumb-overlays .marks .plays {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.92);
+}
+.thumb-overlays .marks .plays svg {
+  width: 13px;
+  height: 13px;
+}
+.cell:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 2px;
+}
+
+/* The fault badge offers a way back: a disk that stopped answering usually
+   comes back. The badge itself takes no pointer events, so the button asks
+   for them. */
+.vo-fault {
+  pointer-events: auto;
+}
+.vo-retry {
+  margin-left: 10px;
+  padding: 4px 12px;
+  border: 1px solid rgb(255 255 255 / 35%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 12%);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.vo-retry:hover {
+  background: rgb(255 255 255 / 22%);
+}
+/* The player's keys, on request (?): a card over the picture, drawn from
+   the table in playback.ts so it cannot drift from the handler. */
+.vo-help {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  max-width: min(92vw, 420px);
+  padding: 14px 18px;
+  border-radius: 14px;
+  background: rgb(0 0 0 / 78%);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  font-size: 14px;
+}
+.vo-help table {
+  border-collapse: collapse;
+}
+.vo-help td {
+  padding: 4px 10px 4px 0;
+  vertical-align: top;
+  white-space: nowrap;
+}
+.vo-help td:last-child {
+  white-space: normal;
+  color: rgb(255 255 255 / 80%);
+}
+.vo-help kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border: 1px solid rgb(255 255 255 / 30%);
+  border-radius: 5px;
+  background: rgb(255 255 255 / 10%);
+  font: 12px ui-monospace, monospace;
+  text-align: center;
+}

@@ -1,0 +1,6 @@
+/mediator
+/media
+/data/
+*.db
+web/node_modules/
+web/dist/
