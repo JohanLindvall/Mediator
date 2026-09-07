@@ -1302,9 +1302,23 @@ Frontend (`web/src`, no framework, no runtime deps):
   hands whatever the two queries have in common its existing cell. The one
   total not held is 0: it means the last query matched nothing, so there is
   nothing to hold, and `fetchPage`'s past-the-end guard would refuse the very
-  fetch meant to replace it. A total of -1 still means nothing has ever
-  arrived — a first load has no rows to keep and shows skeletons, because
+  fetch meant to replace it. A total of -1 still means nothing has ever arrived — a first load has no rows to keep and shows skeletons, because
   there the wait is real.
+  **Rows are held over only while they are the rows on screen.** A source
+  the grid has not been drawing holds the answer to a question nobody asked
+  lately, and holding *that* over is not the listing settling but a
+  different listing entirely: coming back to the items from the albums view
+  with a search in the box put **22,415 items** — the whole library, from
+  the last time that source was on screen — under chips that said 27, until
+  the answer landed. So `setAdapter` reports whether the adapter actually
+  changed, and a view arriving from another one calls `reset` rather than
+  holding anything over. Its mirror is that the off-screen source is no
+  longer refetched at all: a library being written to changes every few
+  seconds, and the item source was fetching a page of the whole library
+  behind every one of them for a view nobody could see (`itemsOnScreen`,
+  which is `collectionOnScreen()` answering null, so the two cannot
+  disagree about which source the grid is drawing). What it misses is
+  picked up when the listing is entered, which fetches anyway.
 - **Nothing is refetched behind an open viewer.** A library being written to
   sends a change event every few seconds, and each one had the listing
   fetched again — two hundred items at a time, for a screen covered by a

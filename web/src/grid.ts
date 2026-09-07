@@ -81,13 +81,20 @@ export class VirtualGrid<T> {
    * different adapter — a different kind of thing, sized and rendered
    * differently — is worth a hard reset.
    */
-  setAdapter(adapter: GridAdapter<T>): void {
+  /**
+   * Point the grid at a source of cells. Answers whether it is a different
+   * one — which is to say whether the view being entered was off screen
+   * until now, since a source that was not on screen holds rows nobody was
+   * looking at and its caller may want to say so.
+   */
+  setAdapter(adapter: GridAdapter<T>): boolean {
     if (adapter === this.adapter) {
       this.rewind();
-      return;
+      return false;
     }
     this.adapter = adapter;
     this.hardReset();
+    return true;
   }
 
   /**

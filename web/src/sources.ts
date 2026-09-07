@@ -95,6 +95,27 @@ export class LibrarySource {
   }
 
   /**
+   * Forget everything: the next query starts from nothing on screen.
+   *
+   * Rows are worth holding over a change of query only while they are the
+   * rows the viewer is looking at — that is what makes a search read as the
+   * listing settling rather than as a flash. A source the grid has not been
+   * drawing holds the answer to a question nobody asked lately: coming back
+   * to the listing from the albums view, what it had was the whole library
+   * from the last time it was on screen, and holding that over put 22,415
+   * items under a search's chips until the answer landed.
+   */
+  reset(): void {
+    this.gen++;
+    this.pages.clear();
+    this.stale.clear();
+    this.inflight.clear();
+    this.total = -1;
+    this.matching = null;
+    this.onUpdate();
+  }
+
+  /**
    * The library changed (SSE): refetch, but keep serving what is on screen
    * until the fresh pages land — the rows are still the right rows, at
    * most slightly outdated for a moment.

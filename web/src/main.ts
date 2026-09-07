@@ -1268,7 +1268,7 @@ function applyQuery(reset: boolean, push = false): void {
       // season's episodes. Which is on screen is what the drill-down state
       // says, and only the first of them fetches anything.
       if (state.series && state.season) {
-        if (reset) grid.setAdapter(itemAdapter);
+        if (reset && grid.setAdapter(itemAdapter)) libSource.reset();
         libSource.setQuery(queryState());
       } else if (state.series) {
         grid.setAdapter(seasonAdapter);
@@ -1279,7 +1279,11 @@ function applyQuery(reset: boolean, push = false): void {
       }
       break;
     default:
-      if (reset) grid.setAdapter(itemAdapter);
+      // Arriving from another view, whatever the source holds is a listing
+      // nobody has been looking at — so it is dropped rather than held over
+      // while the new query is answered. Held over, it was the whole library
+      // standing under a search's chips for as long as the request took.
+      if (reset && grid.setAdapter(itemAdapter)) libSource.reset();
       libSource.setQuery(queryState());
   }
   // No reset of the grid beyond what setAdapter did: pointing it at the same
@@ -1484,6 +1488,17 @@ function syncStatus(): void {
  * change and the counts on an answer each used to list the modes, and one
  * list had fallen behind the other.
  */
+/**
+ * Whether the grid is drawing the item listing rather than one of the
+ * grouped views. Derived from the same answer, so the two cannot disagree
+ * about which source is on screen — and every view that fetches nothing of
+ * its own (a show's seasons) counts as its grouped view's, not the
+ * listing's.
+ */
+function itemsOnScreen(): boolean {
+  return collectionOnScreen() === null;
+}
+
 function collectionOnScreen(): { load(q: QueryState): void } | null {
   switch (state.mode) {
     case 'albums':
@@ -1661,7 +1676,7 @@ function reloadGroupedView(): void {
 
 /** Take the library's changes into the views that are on screen. */
 function refreshLibrary(): void {
-  libSource.invalidate();
+  if (itemsOnScreen()) libSource.invalidate();
   retryThumbs();
   reloadGroupedView();
 }
@@ -1679,7 +1694,12 @@ subscribeEvents(
     // Debounce bursts; refresh in place (no scroll jump).
     window.clearTimeout(refreshTimer);
     refreshTimer = window.setTimeout(() => {
-      libSource.invalidate();
+      // Only the listing on screen. A library being written to changes every
+      // few seconds, and the item source went on fetching its first page
+      // behind the albums view for as long as that lasted — a page of the
+      // whole library each time, for a view nobody could see. What it missed
+      // is picked up when the listing is entered again, which fetches anyway.
+      if (itemsOnScreen()) libSource.invalidate();
       // Thumbnails that failed earlier may exist now that the library
       // changed (a file finished arriving, generation completed).
       retryThumbs();
