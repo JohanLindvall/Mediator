@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import type { ViewMode } from './content';
-import { openingSort, sortOptions } from './sorts.ts';
+import { openingDesc, openingSort, sortOptions } from './sorts.ts';
 
 const modes: ViewMode[] = [
   'all', 'video', 'image', 'audio', 'started', 'watched', 'popular', 'albums', 'artists', 'genres', 'audiobooks', 'series',
@@ -55,4 +55,16 @@ test('what sounds like one thing is ordered by resemblance alone', () => {
   assert.equal(openingSort('albums', { near: 'abc' }), 'similarity');
   // The audiobook shelf sorts like the records.
   assert.deepEqual(sortOptions('audiobooks'), sortOptions('albums'));
+});
+
+test('a season opens on its first episode, and everything else newest first', () => {
+  // The one view whose subject is an order that runs the other way.
+  assert.equal(openingSort('series', { series: 'An Episode', season: 2 }), 'episode');
+  assert.equal(openingDesc('series', { series: 'An Episode', season: 2 }), false);
+  // The shows themselves, and every other view, open at the newest end.
+  assert.equal(openingDesc('series', { series: 'An Episode' }), true);
+  assert.equal(openingDesc('series'), true);
+  for (const mode of modes) {
+    assert.equal(openingDesc(mode), true, `${mode} opened ascending`);
+  }
 });

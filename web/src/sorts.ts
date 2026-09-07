@@ -17,6 +17,8 @@ import type { ViewMode } from './content';
 export interface Narrowing {
   artist?: string;
   series?: string;
+  /** An open season, whose episodes are listed in the order they are watched. */
+  season?: number;
   /** Listing what sounds like one thing: the order is the resemblance. */
   near?: string;
 }
@@ -116,4 +118,24 @@ export function openingSort(mode: ViewMode, where: Narrowing = {}): string {
   if (mode === 'popular') return 'popular';
   if (mode === 'albums' && where.artist) return 'year';
   return sortOptions(mode, where)[0]![0];
+}
+
+/**
+ * Which way a view opens.
+ *
+ * Newest first nearly everywhere, a library being read from what arrived
+ * last — and the direction is the viewer's own thereafter, the toggle
+ * meaning what it says. The exception is a view whose subject *is* an
+ * order and whose order runs the other way: a season is watched from its
+ * first episode, so opening one on the last is opening it at the end.
+ *
+ * It is the companion of `openingSort` and lives beside it because they are
+ * one question asked twice — how does this view open — and the key was
+ * settled here while the direction was left to whatever the last view
+ * happened to be sorted by. A show list read Z to A therefore opened its
+ * seasons on the final episode.
+ */
+export function openingDesc(mode: ViewMode, where: Narrowing = {}): boolean {
+  if (mode === 'series' && where.season) return false;
+  return true;
 }

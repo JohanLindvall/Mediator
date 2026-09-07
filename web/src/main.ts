@@ -54,7 +54,7 @@ import {
 import { watchState } from './playback';
 import { countKey, countsToShow, listFilters, narrowed, viewSource } from './query';
 import { defaultMode, fallbackMode, modeShown, queueSource, type ViewMode } from './content';
-import { openingSort, sortOptions } from './sorts';
+import { openingDesc, openingSort, sortOptions } from './sorts';
 import { loadThumb, cancelThumb, retryThumbs } from './thumbs';
 import { showToast } from './toast';
 import { shareView } from './links';
@@ -1168,6 +1168,14 @@ function showNear(kind: 'albums' | 'artists', id: string, name: string): void {
  */
 function showSeason(season: number): void {
   state.season = season;
+  // From the first episode, which is how a season is watched — rather than
+  // from whichever end the list it was reached from happened to run. The
+  // key is the only one this view offers; the direction was the half that
+  // carried over, so a show list read Z to A opened its season on the last
+  // episode.
+  state.sort = openingSort('series', state);
+  state.desc = openingDesc('series', state);
+  renderSortDir();
   enterView('series');
 }
 
@@ -1647,7 +1655,11 @@ function readHash(): void {
   // back for anything that does not fit.
   const s = p.get('s') ?? '';
   state.sort = sortOptions(state.mode, state).some(([v]) => v === s) ? s : openingSort(state.mode, state);
-  state.desc = p.get('o') !== 'asc';
+  // And the direction the same way: an address that names one keeps it,
+  // and one that does not opens the view the way the view opens — a link to
+  // a season lands on its first episode, not its last.
+  const o = p.get('o');
+  state.desc = o ? o !== 'asc' : openingDesc(state.mode, state);
 }
 
 // ---- live updates ------------------------------------------------------

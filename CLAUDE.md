@@ -1621,10 +1621,19 @@ Frontend (`web/src`, no framework, no runtime deps):
   not survive the change falls back to the key the new view **opens on**
   rather than being sent to a server that would quietly ignore it —
   `openingSort`, which lives in `sorts.ts` beside the option table, both
-  pure and tested. That is the first row of the table except where a view's
-  subject is an order: the popularity listing opens on plays, and **a
-  performer's releases open by year**, a discography being read in the order
-  it was made where by name it is one shelf shuffled. A genre's releases are
+  pure and tested. That is the first row of the table except where a view's subject is an order:
+  the popularity listing opens on plays, and **a performer's releases open by
+  year**, a discography being read in the order it was made where by name it
+  is one shelf shuffled.
+  **Which way it opens is settled in the same place** (`openingDesc`, beside
+  `openingSort` and tested with it): newest first nearly everywhere, since a
+  library is read from what arrived last, and the direction is the viewer's
+  own thereafter. The exception is the view whose order runs the other way —
+  a **season**, which is watched from its first episode. Only the key was
+  settled before, so a season inherited whatever direction the list it was
+  reached from ran in and a show list read Z to A opened its season on the
+  final episode. An address that names a direction still keeps it, and one
+  that does not now opens the view the way the view opens. A genre's releases are
   many performers' and stay by name. The drill-down sets the key outright
   rather than only when the old one no longer fits, since the name key
   survives the change from the artists view and would otherwise carry over;
