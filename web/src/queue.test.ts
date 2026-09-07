@@ -122,12 +122,7 @@ test('radio draws the nearest likeliest, and never the same track twice', () => 
 
 test('radio is a different evening every time, in the same neighbourhood', () => {
   const pool = Array.from({ length: 50 }, (_, i) => i);
-  let seed = 1;
-  // A little deterministic generator, so a failure can be read back.
-  const rand = (): number => {
-    seed = (seed * 1103515245 + 12345) % 2147483648;
-    return seed / 2147483648;
-  };
+  const rand = seeded();
   const runs = Array.from({ length: 8 }, () => pickRadio(pool, 10, rand));
   for (const run of runs) {
     assert.equal(run.length, 10);
@@ -169,4 +164,57 @@ test('radio keeps one copy of a song it has not heard, and every untagged file',
     freshForRadio(batch, []).map((t) => t.id),
     ['1', '3', '4'],
   );
+});
+
+/** A little deterministic generator, so a failure can be read back. */
+function seeded(seed = 1): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1103515245 + 12345) % 2147483648;
+    return s / 2147483648;
+  };
+}
+
+test('radio does not play five songs by one band out of ten', () => {
+  // What a resemblance answer really looks like: the seed's own band takes
+  // the near half of it, the rest of the neighbourhood the far half.
+  const pool = [
+    ...Array.from({ length: 25 }, (_, i) => ({ id: `a${i}`, artist: 'Gorse Beacon' })),
+    ...Array.from({ length: 25 }, (_, i) => ({ id: `b${i}`, artist: `Band ${i % 8}` })),
+  ];
+  const rand = seeded();
+  let worst = 0;
+  for (let run = 0; run < 20; run++) {
+    const batch = pickRadio(pool, 10, rand);
+    const own = batch.filter((t) => t.artist === 'Gorse Beacon').length;
+    worst = Math.max(worst, own);
+    // Nothing twice, whatever the weights did.
+    assert.equal(new Set(batch.map((t) => t.id)).size, batch.length);
+  }
+  assert.ok(worst <= 4, `one batch held ${worst} songs by the seed's own band`);
+});
+
+test('a band already in the queue starts damped', () => {
+  const pool = [
+    { id: 'a', artist: 'Gorse Beacon' },
+    { id: 'b', artist: 'Gorse Beacon' },
+    { id: 'c', artist: 'Tern Signal' },
+    { id: 'd', artist: 'Sixth Quay' },
+  ];
+  const lately = Array.from({ length: 6 }, () => 'gorse beacon');
+  const rand = seeded(7);
+  let own = 0;
+  for (let run = 0; run < 20; run++) {
+    own += pickRadio(pool, 2, rand, lately).filter((t) => t.artist === 'Gorse Beacon').length;
+  }
+  // Two of four in the pool are theirs and they lead it, so an undamped
+  // draw would take one nearly every time.
+  assert.ok(own < 10, `the band lately played was drawn ${own} times in 40`);
+});
+
+test('a neighbourhood that really is one band still fills the batch', () => {
+  const pool = Array.from({ length: 12 }, (_, i) => ({ id: `${i}`, artist: 'Gorse Beacon' }));
+  const batch = pickRadio(pool, 10, seeded(3), ['gorse beacon', 'gorse beacon']);
+  assert.equal(batch.length, 10);
+  assert.equal(new Set(batch.map((t) => t.id)).size, 10);
 });

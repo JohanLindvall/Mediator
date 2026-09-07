@@ -601,6 +601,21 @@ Change propagation is the core loop:
   pure and tested): the nearest is as many times likelier than the farthest
   as there are tracks to draw from, so what plays sounds like the seed
   without sounding like it in the same order every evening.
+  **And not five songs by one band.** Every track a performer records
+  shares a voice, a producer and a decade, so the answer to "what sounds
+  like this" is mostly the seed's own catalogue — which is the right answer
+  to that question and the wrong answer to "what shall I play next": a
+  measured batch of ten held five of the seed's band. So a performer's
+  weight falls by `ARTIST_DAMP` (a third) for each of their tracks already
+  drawn, and for each already in the last `RADIO_MEMORY` of the queue,
+  which is what keeps one band out of batch after batch rather than only
+  out of one. A third at each step rather than a quota, because nothing is
+  ever zero: a neighbourhood that really is one band — a performer nobody
+  else in the library resembles — still fills the batch, every weight
+  having fallen together. Measured on a pool three fifths of which is one
+  band, and led by them: 2.7 of their songs in a batch of ten and six
+  performers in it, where the same weights undamped would take about eight
+  of the ten.
   **And nothing comes back that has been queued** (`freshForRadio`, tested,
   and the client's half of this — the server folds one answer, only the page
   knows what is already in the queue):

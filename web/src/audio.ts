@@ -65,6 +65,13 @@ const RADIO_AHEAD = 5;
 const RADIO_POOL = 50;
 
 const RADIO_BATCH = 10;
+
+/**
+ * How far back radio looks to see whose music has been playing. The batch
+ * spreads itself across performers on its own; this is what stops the batch
+ * after it filling up with the band the last one just introduced.
+ */
+const RADIO_MEMORY = 20;
 /** A queue panel row's height, pinned in the stylesheet: the window is laid out from it. */
 const Q_ROW = 38;
 /** Rows drawn beyond the visible window on either side, so a scroll never shows blank. */
@@ -551,7 +558,10 @@ export class AudioPlayer {
       // the track now playing asks for its own on the next change.
       if (this.current !== it) return;
       const fresh = freshForRadio(res.tracks, this.queue);
-      if (fresh.length > 0) this.append(pickRadio(fresh, RADIO_BATCH));
+      if (fresh.length > 0) {
+        const lately = this.queue.slice(-RADIO_MEMORY).map((t) => t.artist ?? '');
+        this.append(pickRadio(fresh, RADIO_BATCH, Math.random, lately));
+      }
       else if (this.order.length - 1 - this.orderPos <= 0) showToast('Radio: nothing else sounds like this yet');
     } catch {
       // The next track change asks again.

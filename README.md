@@ -368,7 +368,10 @@ Go binary with the TypeScript frontend embedded.
     batch whenever fewer than a handful remain. It draws from a wider field
     than it takes, nearest likeliest, so an evening does not repeat itself;
     and it never brings back a song already in the queue, in that file or in
-    any other copy of the same recording. Every queue is folded that way, not
+    any other copy of the same recording. It also spreads itself across
+    performers: what sounds most like a song is usually the same band, so
+    each of their tracks makes the next one less likely, and a batch of ten
+    comes out with half a dozen names in it. Every queue is folded that way, not
     only radio's: queueing a search or a discography holds one place for each
     recording, keeping the first, while a performance tagged as its own
     ("… [Live]") stays.

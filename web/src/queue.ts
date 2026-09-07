@@ -112,8 +112,32 @@ export function recordingKey(t: { artist?: string; title?: string }): string {
 }
 
 /**
+ * How much a performer's weight falls for each of their tracks already
+ * drawn or lately queued.
+ *
+ * Every track a performer records shares a voice, a producer and a decade,
+ * so a resemblance answer about one of their songs is mostly their own
+ * catalogue — measured on a radio batch of ten, five were the seed's band.
+ * That is the right answer to "what sounds like this" and the wrong answer
+ * to "what shall I play next".
+ *
+ * A third at each step, rather than a quota: the second track by a
+ * performer is a third as likely as it was, the third a ninth, so they fade
+ * instead of being cut off. A neighbourhood that really is one band — a
+ * performer nobody else in the library resembles — still fills the batch,
+ * since every weight falls together and nothing is ever zero.
+ */
+const ARTIST_DAMP = 1 / 3;
+
+/** A performer's name as a key, or "" for a track that names nobody. */
+function artistKey(t: { artist?: string }): string {
+  return (t.artist ?? '').toLowerCase();
+}
+
+/**
  * Draw what radio plays next from the tracks that sound like the one
- * playing: `want` of them, none twice, the nearest likeliest.
+ * playing: `want` of them, none twice, the nearest likeliest, and not five
+ * songs by one band.
  *
  * Taking the nearest few outright is what a resemblance answer is for, and
  * it makes a poor radio: the answer is the same every time it is asked, so
@@ -122,20 +146,43 @@ export function recordingKey(t: { artist?: string; title?: string }): string {
  * times likelier than the farthest as there are tracks to draw from — so
  * what plays still sounds like the seed, without sounding like it in the
  * same order every evening.
+ *
+ * `recent` is the performers already in the queue, which is what keeps one
+ * band out of batch after batch: their tracks start damped rather than
+ * being damped only once this batch has drawn them. A track that names
+ * nobody is never damped — the unnamed are not one performer.
  */
-export function pickRadio<T>(pool: T[], want: number, rand: () => number = Math.random): T[] {
+export function pickRadio<T extends { artist?: string }>(
+  pool: T[],
+  want: number,
+  rand: () => number = Math.random,
+  recent: readonly string[] = [],
+): T[] {
   const left = pool.slice();
   const out: T[] = [];
+  const drawn = new Map<string, number>();
+  const count = (key: string): void => {
+    if (key !== '') drawn.set(key, (drawn.get(key) ?? 0) + 1);
+  };
+  for (const name of recent) count(name.toLowerCase());
   while (out.length < want && left.length > 0) {
     const n = left.length;
-    let r = rand() * ((n * (n + 1)) / 2);
+    let total = 0;
+    const weights = left.map((t, i) => {
+      const w = (n - i) * ARTIST_DAMP ** (drawn.get(artistKey(t)) ?? 0);
+      total += w;
+      return w;
+    });
+    let r = rand() * total;
     let i = 0;
     for (; i < n - 1; i++) {
-      r -= n - i;
+      r -= weights[i]!;
       if (r < 0) break;
     }
-    out.push(left[i]!);
+    const picked = left[i]!;
     left.splice(i, 1);
+    out.push(picked);
+    count(artistKey(picked));
   }
   return out;
 }
