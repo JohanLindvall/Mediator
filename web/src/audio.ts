@@ -19,7 +19,16 @@ import { playButtonIcon } from './playback';
 import { recall, remember } from './remember';
 import { icons } from './icons';
 import { showToast } from './toast';
-import { appendToOrder, nextPosition, placeFirst, resumable, shuffleInPlace, windowRows } from './queue';
+import {
+  appendToOrder,
+  freshForRadio,
+  nextPosition,
+  pickRadio,
+  placeFirst,
+  resumable,
+  shuffleInPlace,
+  windowRows,
+} from './queue';
 import { sameRelease } from './cover';
 import { shareItem } from './links';
 import { SpectrumPanel } from './visualizer';
@@ -42,6 +51,20 @@ const QUEUE_CAP = 1 << 20;
  * and never fills with a hundred tracks nobody asked for.
  */
 const RADIO_AHEAD = 5;
+
+/**
+ * How wide a field radio draws from, and how many it takes from it.
+ *
+ * The pool is wider than the batch deliberately: a resemblance answer is the
+ * same every time it is asked, so taking its head outright plays one
+ * neighbourhood in one order for ever. Fifty is still close — the fiftieth
+ * nearest of twenty thousand analysed tracks is a near neighbour — and ten
+ * is a few top-ups' worth, so a listener is not waiting on a request after
+ * every song.
+ */
+const RADIO_POOL = 50;
+
+const RADIO_BATCH = 10;
 /** A queue panel row's height, pinned in the stylesheet: the window is laid out from it. */
 const Q_ROW = 38;
 /** Rows drawn beyond the visible window on either side, so a scroll never shows blank. */
@@ -523,13 +546,12 @@ export class AudioPlayer {
     if (this.order.length - 1 - this.orderPos >= RADIO_AHEAD) return;
     this.radioBusy = true;
     try {
-      const res = await tracksOf('similar', { id: it.id, n: 20 });
+      const res = await tracksOf('similar', { id: it.id, n: RADIO_POOL });
       // A fast skip meanwhile: the batch is for the track just left, and
       // the track now playing asks for its own on the next change.
       if (this.current !== it) return;
-      const have = new Set(this.queue.map((q) => q.id));
-      const fresh = res.tracks.filter((t) => !have.has(t.id));
-      if (fresh.length > 0) this.append(fresh);
+      const fresh = freshForRadio(res.tracks, this.queue);
+      if (fresh.length > 0) this.append(pickRadio(fresh, RADIO_BATCH));
       else if (this.order.length - 1 - this.orderPos <= 0) showToast('Radio: nothing else sounds like this yet');
     } catch {
       // The next track change asks again.

@@ -95,3 +95,89 @@ export function resumable(s: {
   if (!s.loaded || s.failed || s.exhausted) return false;
   return !(s.ended && s.atLast && !s.repeat);
 }
+
+/**
+ * What makes two tracks the same recording: the performer and the title, as
+ * the tags spell them. The server folds the copies of one recording out of a
+ * resemblance answer; this is the same rule applied to what is already in
+ * the queue, since a copy one batch left there would otherwise be matched by
+ * a different copy in the next.
+ *
+ * An untagged file has no key and is never folded — its title is unknown,
+ * and the file name is not one.
+ */
+export function recordingKey(t: { artist?: string; title?: string }): string {
+  if (!t.title) return '';
+  return `${(t.artist ?? '').toLowerCase()}\u0000${t.title.toLowerCase()}`;
+}
+
+/**
+ * Draw what radio plays next from the tracks that sound like the one
+ * playing: `want` of them, none twice, the nearest likeliest.
+ *
+ * Taking the nearest few outright is what a resemblance answer is for, and
+ * it makes a poor radio: the answer is the same every time it is asked, so
+ * the same handful comes back, and their neighbours are that same handful
+ * again. The weights are linear in the position — the nearest is as many
+ * times likelier than the farthest as there are tracks to draw from — so
+ * what plays still sounds like the seed, without sounding like it in the
+ * same order every evening.
+ */
+export function pickRadio<T>(pool: T[], want: number, rand: () => number = Math.random): T[] {
+  const left = pool.slice();
+  const out: T[] = [];
+  while (out.length < want && left.length > 0) {
+    const n = left.length;
+    let r = rand() * ((n * (n + 1)) / 2);
+    let i = 0;
+    for (; i < n - 1; i++) {
+      r -= n - i;
+      if (r < 0) break;
+    }
+    out.push(left[i]!);
+    left.splice(i, 1);
+  }
+  return out;
+}
+
+
+/** The little of a track this module needs to tell one from another. */
+export interface RadioTrack {
+  id: string;
+  artist?: string;
+  title?: string;
+}
+
+/**
+ * What of a batch of similar tracks is worth queueing: not what is queued
+ * already, by file or by recording.
+ *
+ * The second half of that is the one that matters. Radio asks again every
+ * few tracks, and each answer is drawn from the same neighbourhood as the
+ * last — so the song that has just played comes back at once, in a different
+ * file. Measured on a real library: one song is there nine times over, on
+ * three live records, four bootlegs and two albums, all tagged alike, and
+ * four of them arrived in one batch.
+ *
+ * The queue is the whole memory, played part included, so this holds for
+ * every later batch and not only the next.
+ */
+export function freshForRadio<T extends RadioTrack>(pool: T[], queued: RadioTrack[]): T[] {
+  const ids = new Set<string>();
+  const heard = new Set<string>();
+  for (const t of queued) {
+    ids.add(t.id);
+    const key = recordingKey(t);
+    if (key !== '') heard.add(key);
+  }
+  return pool.filter((t) => {
+    if (ids.has(t.id)) return false;
+    const key = recordingKey(t);
+    if (key !== '' && heard.has(key)) return false;
+    // Within the batch too: the answer is deduplicated by the server, but a
+    // page open across a restart may hold one from before it was.
+    ids.add(t.id);
+    if (key !== '') heard.add(key);
+    return true;
+  });
+}

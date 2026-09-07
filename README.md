@@ -365,7 +365,10 @@ Go binary with the TypeScript frontend embedded.
   core per track. Three things are read off it:
   - **Radio, and similar tracks.** The bar's radio button keeps the queue
     going with the tracks that sound most like the one playing, fetching a
-    batch whenever fewer than a handful remain.
+    batch whenever fewer than a handful remain. It draws from a wider field
+    than it takes, nearest likeliest, so an evening does not repeat itself;
+    and it never brings back a song already in the queue, in that file or in
+    any other copy of the same recording.
   - **Similar releases and performers.** A release's sheet offers *Similar*,
     the releases that sound most like it, each saying how alike; a performer,
     once drilled into, offers *Similar artists*. Nearest first, a chip back.

@@ -497,7 +497,18 @@ Change propagation is the core loop:
   to keep right. `Similar` keeps the n best as a short sorted slice a
   candidate is slotted into only when it beats the last, rather than sorting
   every candidate to keep twenty, and the releases and the performers that
-  sound like one are ordered by one generic rule (`nearest`). `Similar` is "more like this" and radio (`of=similar` on
+  sound like one are ordered by one generic rule (`nearest`).
+  **One recording is offered once** (`recordingKey`, the performer and the
+  title as the tags spell them). A song is in a library many times over —
+  measured on this one, nine files of one song across two albums, three live
+  records and four bootlegs, all tagged alike — and copies of one recording
+  are the nearest thing there is to each other, so they took the head of the
+  answer between them: four of them arrived in one radio batch and the queue
+  played one song four times. Only the nearest copy is kept, and a copy of
+  the **seed itself** is dropped outright, being the nearest thing of all to
+  it and the least worth being told about. An untagged file has no key and
+  is never folded: its title is unknown, and taking the file name for one
+  would make two different songs called "01" the same recording. `Similar` is "more like this" and radio (`of=similar` on
   `/api/tracks`); a release's or a performer's **sound** is the mean of its
   tracks' vectors (`sounds`, cached per version and features generation),
   which is what `near=` on the album and artist listings orders by, the
@@ -572,6 +583,23 @@ Change propagation is the core loop:
   one playing — on every track change and when the queue runs out, where
   the appending finds the player parked and moves it on. `append` is the
   enqueue without its toasts, shared by both.
+  **What it draws is not the head of the answer.** A resemblance answer is
+  the same every time it is asked, so taking the nearest few outright plays
+  one neighbourhood in one order for ever — and their neighbours are that
+  same handful again. Radio asks for a pool (`RADIO_POOL`, 50, still a near
+  neighbourhood at twenty thousand analysed tracks) and draws
+  `RADIO_BATCH` from it with weights linear in the position (`pickRadio`,
+  pure and tested): the nearest is as many times likelier than the farthest
+  as there are tracks to draw from, so what plays sounds like the seed
+  without sounding like it in the same order every evening.
+  **And nothing comes back that has been queued** (`freshForRadio`, tested):
+  not the same file, and not another copy of the same recording, which is
+  the one that bites — each batch is drawn from the neighbourhood the last
+  one came from, so the song that has just played returns at once in a
+  different file. The queue is the whole memory, played part included, so
+  this holds for every later batch and not only the next. The server folds
+  the copies within one answer; this is what keeps the next answer from
+  bringing another copy of what the last one left behind.
   **The queue has no limit worth the name** (`QUEUE_CAP` and `maxQueue`, a
   million): the whole library goes in and is shuffled there. Two things made
   that true. A spread over a hundred thousand arguments is more than a call

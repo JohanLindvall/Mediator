@@ -440,3 +440,62 @@ func TestGroupingsFromReleases(t *testing.T) {
 		t.Errorf("genres = %+v, want Folk with two performers and three releases, the reading left out", genres)
 	}
 }
+
+// One song is in a library several times over — on its album, on a
+// compilation, on a live record — and those files sound alike, so they take
+// the head of a resemblance answer between them and a radio plays one song
+// four times. Only the nearest copy is offered, and a copy of the seed
+// itself never is: it is the nearest thing there is to the seed and the
+// least worth being told about.
+func TestOneRecordingIsOfferedOnce(t *testing.T) {
+	l := libWithSounds(t)
+	// Four files of one song by the other performer, and four of the seed's
+	// own, each a little apart so nothing is decided by a tie.
+	copyOf := func(dir, artist, title string, n int, timbre float32) {
+		for i := 1; i <= n; i++ {
+			path := fmt.Sprintf("/library/%s/%d/%02d track.mp3", dir, i, i)
+			l.upsert(path, KindAudio, 1000, time.Unix(1, 0), fileKey{}, false)
+			l.setMeta(PathID(path), tagMeta{artist: artist, album: fmt.Sprintf("Record %d", i), title: title}, 1000)
+			v := shapedVector(timbre, false)
+			v[0] += float32(i) * 0.001
+			l.SetFeatures(PathID(path), time.Unix(1, 0).UnixMilli(), 1000, v)
+		}
+	}
+	copyOf("Tern Signal/Low Water", "Tern Signal", "Low Water", 4, 1)
+	copyOf("Gorse Beacon/First Breath", "Gorse Beacon", "First Breath", 4, 1)
+
+	seed := PathID("/library/Gorse Beacon/First Breath/1/01 track.mp3")
+	got := l.Similar(seed, 20, 0, PathFilter{})
+	if len(got) == 0 {
+		t.Fatal("nothing similar was found")
+	}
+	seen := map[string]int{}
+	for _, it := range got {
+		if it.Title == "First Breath" {
+			t.Errorf("another copy of the seed's own recording was offered: %s", it.Rel)
+		}
+		if it.Title != "" {
+			seen[it.Title]++
+		}
+	}
+	for title, n := range seen {
+		if n > 1 {
+			t.Errorf("one recording was offered %d times: %q", n, title)
+		}
+	}
+	if seen["Low Water"] != 1 {
+		t.Errorf("the other performer's song was offered %d times, want once", seen["Low Water"])
+	}
+
+	// Untagged files are not folded together: their titles are unknown, and
+	// the catalogue's own tracks carry none.
+	untitled := 0
+	for _, it := range got {
+		if it.Title == "" {
+			untitled++
+		}
+	}
+	if untitled < 2 {
+		t.Errorf("untitled tracks offered: %d, want them all", untitled)
+	}
+}

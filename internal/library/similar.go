@@ -144,9 +144,29 @@ func (l *Library) spokenSet(sv *scaled) func(id string) bool {
 	}
 }
 
+// recordingKey is what makes two files the same recording: the performer and
+// the title, as the tags spell them.
+//
+// A library holds a song on its album, on a compilation and on a live
+// record, and those are different files with different ids — but they are
+// the same music, so they score alike against anything, and the head of a
+// resemblance answer came out as one song several times over. A radio
+// playing that is a radio playing one song four times.
+//
+// An untagged file has no key and is never folded: its title is unknown, and
+// taking the file name for one would make two different songs called "01"
+// the same recording.
+func recordingKey(it *Item) string {
+	if it.Title == "" {
+		return ""
+	}
+	return strings.ToLower(it.Artist) + "\x00" + strings.ToLower(it.Title)
+}
+
 // Similar answers the n tracks that sound most like the given one, nearest
 // first: analysed tracks the caller may see, of the seed's own kind — music
-// for music, speech for speech — and never the seed itself.
+// for music, speech for speech — never the seed itself, and one copy of each
+// recording (the nearest), the seed's own other copies included.
 func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item {
 	sv := l.scaledVectors()
 	seed, ok := sv.vecs[id]
@@ -157,8 +177,8 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 	isSpoken := l.spokenSet(sv)
 	spoken := isSpoken(id)
 	type hit struct {
-		id    string
-		score float32
+		id, key string
+		score   float32
 	}
 	// Nearest first, ties by id so two answers cannot disagree.
 	before := func(a, b hit) int {
@@ -176,6 +196,22 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 		if len(best) == n && before(h, best[n-1]) >= 0 {
 			return
 		}
+		// One entry per recording, and it is the nearest copy: a candidate
+		// whose recording is already here either replaces it or is dropped.
+		// The scan is over the answer rather than the library, and only
+		// candidates good enough to be kept ever reach it.
+		if h.key != "" {
+			for i, b := range best {
+				if b.key != h.key {
+					continue
+				}
+				if before(b, h) <= 0 {
+					return
+				}
+				best = slices.Delete(best, i, i+1)
+				break
+			}
+		}
 		i, _ := slices.BinarySearchFunc(best, h, before)
 		best = slices.Insert(best, i, h)
 		if len(best) > n {
@@ -186,6 +222,10 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 	st := l.stamper()
 	l.ensureFlags()
 	l.mu.RLock()
+	seedKey := ""
+	if it, ok := l.items[id]; ok {
+		seedKey = recordingKey(it)
+	}
 	for other, v := range sv.vecs {
 		if other == id || isSpoken(other) != spoken {
 			continue
@@ -194,7 +234,14 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 		if !ok || !kinds.Has(it.Kind) || !allowed(it.Path) {
 			continue
 		}
-		consider(hit{other, dot(seed, v)})
+		// Another copy of the seed itself is the nearest thing there is to
+		// it, and the least worth offering: "more like this" that opens with
+		// this, again.
+		key := recordingKey(it)
+		if key != "" && key == seedKey {
+			continue
+		}
+		consider(hit{other, key, dot(seed, v)})
 	}
 	out := make([]Item, 0, len(best))
 	for _, h := range best {

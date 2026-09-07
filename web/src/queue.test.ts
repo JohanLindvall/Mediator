@@ -9,7 +9,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { appendToOrder, nextPosition, placeFirst, resumable, shuffleInPlace, windowRows } from './queue.ts';
+import {
+  appendToOrder,
+  freshForRadio,
+  nextPosition,
+  pickRadio,
+  placeFirst,
+  recordingKey,
+  resumable,
+  shuffleInPlace,
+  windowRows,
+} from './queue.ts';
 
 test('added tracks follow everything already queued, in the order they came', () => {
   const order = [2, 0, 1];
@@ -76,4 +86,87 @@ test('resumable: loaded, not failed, not played out, and not parked on the final
   assert.ok(resumable({ ...ok, ended: true }), 'a boundary with more to come');
   assert.ok(!resumable({ ...ok, ended: true, atLast: true }), 'the final boundary restarts from zero');
   assert.ok(resumable({ ...ok, ended: true, atLast: true, repeat: true }), 'unless repeat wraps it');
+});
+
+test('one recording is one key, whatever file it is in', () => {
+  // The same song on the album, on a compilation and on a live record.
+  assert.equal(
+    recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' }),
+    recordingKey({ artist: 'gorse beacon', title: 'signal fires' }),
+  );
+  assert.notEqual(
+    recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' }),
+    recordingKey({ artist: 'Tern Signal', title: 'Signal Fires' }),
+  );
+  // Nothing tagged has no key: the file name is not a title, and two
+  // different songs called "01" are not one recording.
+  assert.equal(recordingKey({}), '');
+  assert.equal(recordingKey({ artist: 'Gorse Beacon' }), '');
+});
+
+test('radio draws the nearest likeliest, and never the same track twice', () => {
+  const pool = ['a', 'b', 'c', 'd', 'e'];
+  // The bottom of every weight range is the nearest still in hand.
+  assert.deepEqual(pickRadio(pool, 3, () => 0), ['a', 'b', 'c']);
+  // The top of it is the farthest.
+  assert.deepEqual(
+    pickRadio(pool, 3, () => 0.999999),
+    ['e', 'd', 'c'],
+  );
+  // Asked for more than there is, it gives what there is, each once.
+  const all = pickRadio(pool, 99, () => 0.5);
+  assert.equal(all.length, pool.length);
+  assert.equal(new Set(all).size, pool.length);
+  assert.deepEqual(pickRadio([], 5), []);
+});
+
+test('radio is a different evening every time, in the same neighbourhood', () => {
+  const pool = Array.from({ length: 50 }, (_, i) => i);
+  let seed = 1;
+  // A little deterministic generator, so a failure can be read back.
+  const rand = (): number => {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    return seed / 2147483648;
+  };
+  const runs = Array.from({ length: 8 }, () => pickRadio(pool, 10, rand));
+  for (const run of runs) {
+    assert.equal(run.length, 10);
+    assert.equal(new Set(run).size, 10);
+  }
+  const distinct = new Set(runs.map((r) => r.join(',')));
+  assert.equal(distinct.size, runs.length, 'two evenings drew the same ten tracks in the same order');
+  // Still the neighbourhood: over eight draws the nearer half is picked
+  // more often than the farther one.
+  const near = runs.flat().filter((i) => i < 25).length;
+  assert.ok(near > runs.flat().length / 2, `the draw wandered: ${near} of ${runs.flat().length} from the near half`);
+});
+
+test('radio never brings back a song the queue already holds', () => {
+  const live = { id: '1', artist: 'Gorse Beacon', title: 'Signal Fires' };
+  const queued = [live, { id: '2', artist: 'Tern Signal', title: 'Low Water' }];
+  const batch = [
+    // The same recording, in three other files: an album, a bootleg, a live
+    // record. Different ids, one song.
+    { id: '3', artist: 'Gorse Beacon', title: 'Signal Fires' },
+    { id: '4', artist: 'gorse beacon', title: 'SIGNAL FIRES' },
+    { id: '1', artist: 'Gorse Beacon', title: 'Signal Fires' },
+    { id: '5', artist: 'Gorse Beacon', title: 'First Breath' },
+  ];
+  assert.deepEqual(
+    freshForRadio(batch, queued).map((t) => t.id),
+    ['5'],
+  );
+});
+
+test('radio keeps one copy of a song it has not heard, and every untagged file', () => {
+  const batch = [
+    { id: '1', artist: 'Gorse Beacon', title: 'First Breath' },
+    { id: '2', artist: 'Gorse Beacon', title: 'First Breath' },
+    { id: '3' },
+    { id: '4' },
+  ];
+  assert.deepEqual(
+    freshForRadio(batch, []).map((t) => t.id),
+    ['1', '3', '4'],
+  );
 });
