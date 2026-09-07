@@ -498,7 +498,7 @@ Change propagation is the core loop:
   candidate is slotted into only when it beats the last, rather than sorting
   every candidate to keep twenty, and the releases and the performers that
   sound like one are ordered by one generic rule (`nearest`).
-  **One recording is offered once** (`recordingKey`, the performer and the
+  **One recording is offered once** (`RecordingKey`, the performer and the
   title as the tags spell them). A song is in a library many times over —
   measured on this one, nine files of one song across two albums, three live
   records and four bootlegs, all tagged alike — and copies of one recording
@@ -508,7 +508,16 @@ Change propagation is the core loop:
   the **seed itself** is dropped outright, being the nearest thing of all to
   it and the least worth being told about. An untagged file has no key and
   is never folded: its title is unknown, and taking the file name for one
-  would make two different songs called "01" the same recording. `Similar` is "more like this" and radio (`of=similar` on
+  would make two different songs called "01" the same recording.
+  **Every queue the server hands out is folded the same way**
+  (`FoldRecordings`, applied to every `of=` answer in `handleTracks`).
+  Radio was only where it was noticed: a search for a song and "queue all"
+  put nine files of it in the queue, and a performer's discography does the
+  same wherever a live record repeats an album. The first is kept, since the
+  order it arrives in is the order somebody asked for — the listing's own
+  sort, or a discography from the earliest release — and a performance that
+  says it is one ("… [Live]", a different title) survives, which is why the
+  key is the title and not the sound. `Similar` is "more like this" and radio (`of=similar` on
   `/api/tracks`); a release's or a performer's **sound** is the mean of its
   tracks' vectors (`sounds`, cached per version and features generation),
   which is what `near=` on the album and artist listings orders by, the
@@ -592,7 +601,9 @@ Change propagation is the core loop:
   pure and tested): the nearest is as many times likelier than the farthest
   as there are tracks to draw from, so what plays sounds like the seed
   without sounding like it in the same order every evening.
-  **And nothing comes back that has been queued** (`freshForRadio`, tested):
+  **And nothing comes back that has been queued** (`freshForRadio`, tested,
+  and the client's half of this — the server folds one answer, only the page
+  knows what is already in the queue):
   not the same file, and not another copy of the same recording, which is
   the one that bites — each batch is drawn from the neighbourhood the last
   one came from, so the song that has just played returns at once in a

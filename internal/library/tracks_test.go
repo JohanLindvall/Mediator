@@ -101,3 +101,39 @@ func TestTracksOfHandAConfinedCallerOnlyItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// A queue holds one place for one recording, whatever filled it — and folds
+// nothing that is a different song, a different performer's, a distinctly
+// named performance, or untagged.
+func TestFoldRecordings(t *testing.T) {
+	track := func(id, artist, title string) Item {
+		return Item{ID: id, Artist: artist, Title: title}
+	}
+	got := FoldRecordings([]Item{
+		// The album, then the same song on three live records and a
+		// bootleg, tagged alike: one song in five files.
+		track("1", "Gorse Beacon", "Signal Fires"),
+		track("2", "Gorse Beacon", "First Breath"),
+		track("3", "Gorse Beacon", "signal fires"),
+		track("4", "GORSE BEACON", "Signal Fires"),
+		// A performance that says it is one keeps its place.
+		track("5", "Gorse Beacon", "Signal Fires [Live]"),
+		// Another performer's song of the same name is another song.
+		track("6", "Tern Signal", "Signal Fires"),
+		// Nothing tagged is never folded: the title is unknown, and two
+		// files called "01" are not one recording.
+		track("7", "", ""),
+		track("8", "", ""),
+	})
+	want := []string{"1", "2", "5", "6", "7", "8"}
+	ids := make([]string, 0, len(got))
+	for _, it := range got {
+		ids = append(ids, it.ID)
+	}
+	if !slices.Equal(ids, want) {
+		t.Errorf("folded to %v, want %v", ids, want)
+	}
+	if len(FoldRecordings(nil)) != 0 {
+		t.Error("nothing folded to something")
+	}
+}

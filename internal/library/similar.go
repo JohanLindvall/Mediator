@@ -144,7 +144,7 @@ func (l *Library) spokenSet(sv *scaled) func(id string) bool {
 	}
 }
 
-// recordingKey is what makes two files the same recording: the performer and
+// RecordingKey is what makes two files the same recording: the performer and
 // the title, as the tags spell them.
 //
 // A library holds a song on its album, on a compilation and on a live
@@ -156,12 +156,14 @@ func (l *Library) spokenSet(sv *scaled) func(id string) bool {
 // An untagged file has no key and is never folded: its title is unknown, and
 // taking the file name for one would make two different songs called "01"
 // the same recording.
-func recordingKey(it *Item) string {
-	if it.Title == "" {
+func RecordingKey(artist, title string) string {
+	if title == "" {
 		return ""
 	}
-	return strings.ToLower(it.Artist) + "\x00" + strings.ToLower(it.Title)
+	return strings.ToLower(artist) + "\x00" + strings.ToLower(title)
 }
+
+func recordingKey(it *Item) string { return RecordingKey(it.Artist, it.Title) }
 
 // Similar answers the n tracks that sound most like the given one, nearest
 // first: analysed tracks the caller may see, of the seed's own kind — music

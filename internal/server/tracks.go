@@ -93,6 +93,13 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 	if tracks == nil {
 		tracks = []library.Item{} // an empty answer is a list, never null
 	}
+	// One recording, one place in the queue — whatever filled it. A search
+	// for a song, a performer's discography and a radio batch all bring the
+	// same song in several files, since a library holds it on an album, on
+	// live records and on bootlegs, and a queue that plays it nine times
+	// running is nobody's listening. Similar has already done this among
+	// its own answer; here it reaches every other way a queue is filled.
+	tracks = library.FoldRecordings(tracks)
 	// The cut, where the view held more than a queue takes. A similar
 	// answer is bounded by its own cap and is never cut.
 	truncated := len(tracks) > maxQueue

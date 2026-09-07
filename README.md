@@ -368,7 +368,10 @@ Go binary with the TypeScript frontend embedded.
     batch whenever fewer than a handful remain. It draws from a wider field
     than it takes, nearest likeliest, so an evening does not repeat itself;
     and it never brings back a song already in the queue, in that file or in
-    any other copy of the same recording.
+    any other copy of the same recording. Every queue is folded that way, not
+    only radio's: queueing a search or a discography holds one place for each
+    recording, keeping the first, while a performance tagged as its own
+    ("… [Live]") stays.
   - **Similar releases and performers.** A release's sheet offers *Similar*,
     the releases that sound most like it, each saying how alike; a performer,
     once drilled into, offers *Similar artists*. Nearest first, a chip back.

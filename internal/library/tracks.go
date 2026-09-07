@@ -106,3 +106,35 @@ func discography(albums []*Album) []*Album {
 	})
 	return albums
 }
+
+// FoldRecordings keeps the first file of each recording and drops the rest,
+// leaving everything untagged alone.
+//
+// It is applied to what a queue is filled with, whatever filled it: radio,
+// "queue all" over a listing, a performer's discography, a genre. A library
+// holds a song many times over — measured here, nine files of one song
+// across two albums, three live records and four bootlegs, tagged alike —
+// and a queue that plays it nine times is nobody's listening. A version that
+// really is another performance is tagged as one ("… [Live]", a different
+// title) and survives this, which is the point of keying on the title rather
+// than on the sound.
+//
+// The first is kept because the order it arrives in is the order somebody
+// asked for: the listing's own sort, or a discography from the first release
+// onwards, so what is kept is the earliest release of the song rather than
+// whichever bootleg sorted first.
+func FoldRecordings(items []Item) []Item {
+	seen := make(map[string]struct{}, len(items))
+	out := items[:0:0]
+	for _, it := range items {
+		key := RecordingKey(it.Artist, it.Title)
+		if key != "" {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		out = append(out, it)
+	}
+	return out
+}
