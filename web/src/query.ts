@@ -196,3 +196,39 @@ export async function findKind(
   }
   return null;
 }
+
+/** Which source fills the grid: one name per source, not per view. */
+export type ViewSource = 'items' | 'albums' | 'artists' | 'genres' | 'series';
+
+/**
+ * Which source the grid draws a view from.
+ *
+ * One table, because three things ask the question and a disagreement
+ * between any two of them is a view drawn from the wrong data: the chips
+ * (which listing's counts are being shown), the change handler (whether the
+ * listing on screen needs refetching), and the rule that a view arriving
+ * from another one must drop what its source still holds.
+ *
+ * A view that fetches nothing of its own belongs to the source it was
+ * derived from — a show's seasons are read out of the shows list already in
+ * hand, so they are the series source's, and treating them as a view of
+ * their own would blank them for good, nothing ever arriving to fill them.
+ * The audiobook shelf is the album view over the other releases.
+ */
+export function viewSource(s: { mode: string; series?: string; season?: number }): ViewSource {
+  switch (s.mode) {
+    case 'albums':
+    case 'audiobooks':
+      return 'albums';
+    case 'artists':
+      return 'artists';
+    case 'genres':
+      return 'genres';
+    case 'series':
+      // The episodes of an open season are an ordinary item listing; the
+      // shows and one show's seasons are both the series source's.
+      return s.season ? 'items' : 'series';
+    default:
+      return 'items';
+  }
+}

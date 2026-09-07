@@ -52,7 +52,7 @@ import {
   mediaShape,
 } from './format';
 import { watchState } from './playback';
-import { countKey, countsToShow, listFilters, narrowed } from './query';
+import { countKey, countsToShow, listFilters, narrowed, viewSource } from './query';
 import { defaultMode, fallbackMode, modeShown, queueSource, type ViewMode } from './content';
 import { openingSort, sortOptions } from './sorts';
 import { loadThumb, cancelThumb, retryThumbs } from './thumbs';
@@ -1245,22 +1245,42 @@ function queryState(): QueryState {
   };
 }
 
+/**
+ * Which source the grid was drawing before this call, so that entering a
+ * view can tell whether it is arriving from another one.
+ */
+let shownSource: { reset(): void } | null = null;
+
 /** Push current UI state into the data sources and reset the grid. */
 function applyQuery(reset: boolean, push = false): void {
   writeHash(push);
+  // Rows are worth holding while an answer is fetched only while they are
+  // the rows on screen: that is what makes a search read as the listing
+  // settling. A view arriving from a different source holds the answer to a
+  // question nobody has looked at since — the artists list from before a
+  // drill-down, the whole library from before the albums view — and showing
+  // that puts one performer's card, artwork and all, under another's name
+  // until the answer lands. So the incoming source drops what it has, and
+  // the grid draws skeletons for the moment it takes, which is honest.
+  const incoming = collectionOnScreen() ?? libSource;
+  const arriving = incoming !== shownSource;
+  shownSource = incoming;
   switch (state.mode) {
     case 'albums':
     case 'audiobooks':
       // The audiobook shelf is the album view over the other releases.
       grid.setAdapter(albumAdapter);
+      if (arriving) albumsSource.reset();
       albumsSource.load(queryState());
       break;
     case 'artists':
       grid.setAdapter(artistAdapter);
+      if (arriving) artistsSource.reset();
       artistsSource.load(queryState());
       break;
     case 'genres':
       grid.setAdapter(genreAdapter);
+      if (arriving) genresSource.reset();
       genresSource.load(queryState());
       break;
     case 'series':
@@ -1268,22 +1288,24 @@ function applyQuery(reset: boolean, push = false): void {
       // season's episodes. Which is on screen is what the drill-down state
       // says, and only the first of them fetches anything.
       if (state.series && state.season) {
-        if (reset && grid.setAdapter(itemAdapter)) libSource.reset();
+        if (reset) grid.setAdapter(itemAdapter);
+        if (arriving) libSource.reset();
         libSource.setQuery(queryState());
       } else if (state.series) {
+        // Read out of the shows list already in hand: nothing to fetch, and
+        // nothing to drop — dropping it would leave this view empty for
+        // good, since no answer is coming to fill it.
         grid.setAdapter(seasonAdapter);
         grid.refresh();
       } else {
         grid.setAdapter(seriesAdapter);
+        if (arriving) seriesSource.reset();
         seriesSource.load(queryState());
       }
       break;
     default:
-      // Arriving from another view, whatever the source holds is a listing
-      // nobody has been looking at — so it is dropped rather than held over
-      // while the new query is answered. Held over, it was the whole library
-      // standing under a search's chips for as long as the request took.
-      if (reset && grid.setAdapter(itemAdapter)) libSource.reset();
+      if (reset) grid.setAdapter(itemAdapter);
+      if (arriving) libSource.reset();
       libSource.setQuery(queryState());
   }
   // No reset of the grid beyond what setAdapter did: pointing it at the same
@@ -1488,28 +1510,22 @@ function syncStatus(): void {
  * change and the counts on an answer each used to list the modes, and one
  * list had fallen behind the other.
  */
-/**
- * Whether the grid is drawing the item listing rather than one of the
- * grouped views. Derived from the same answer, so the two cannot disagree
- * about which source is on screen — and every view that fetches nothing of
- * its own (a show's seasons) counts as its grouped view's, not the
- * listing's.
- */
+/** Whether the grid is drawing the item listing rather than a grouped view. */
 function itemsOnScreen(): boolean {
-  return collectionOnScreen() === null;
+  return viewSource(state) === 'items';
 }
 
-function collectionOnScreen(): { load(q: QueryState): void } | null {
-  switch (state.mode) {
+/** The grouped source the grid is drawing from, or null for the listing. */
+function collectionOnScreen(): { load(q: QueryState): void; reset(): void } | null {
+  switch (viewSource(state)) {
     case 'albums':
-    case 'audiobooks':
       return albumsSource;
     case 'artists':
       return artistsSource;
     case 'genres':
       return genresSource;
     case 'series':
-      return state.season ? null : seriesSource;
+      return seriesSource;
     default:
       return null;
   }

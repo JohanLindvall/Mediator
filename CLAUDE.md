@@ -1319,21 +1319,36 @@ Frontend (`web/src`, no framework, no runtime deps):
   nothing to hold, and `fetchPage`'s past-the-end guard would refuse the very
   fetch meant to replace it. A total of -1 still means nothing has ever arrived — a first load has no rows to keep and shows skeletons, because
   there the wait is real.
-  **Rows are held over only while they are the rows on screen.** A source
-  the grid has not been drawing holds the answer to a question nobody asked
-  lately, and holding *that* over is not the listing settling but a
-  different listing entirely: coming back to the items from the albums view
-  with a search in the box put **22,415 items** — the whole library, from
-  the last time that source was on screen — under chips that said 27, until
-  the answer landed. So `setAdapter` reports whether the adapter actually
-  changed, and a view arriving from another one calls `reset` rather than
-  holding anything over. Its mirror is that the off-screen source is no
-  longer refetched at all: a library being written to changes every few
-  seconds, and the item source was fetching a page of the whole library
-  behind every one of them for a view nobody could see (`itemsOnScreen`,
-  which is `collectionOnScreen()` answering null, so the two cannot
-  disagree about which source the grid is drawing). What it misses is
-  picked up when the listing is entered, which fetches anyway.
+  **Rows are held over only while they are the rows on screen**, and that
+  is one rule at one door (`applyQuery`, the `arriving` flag) rather than a
+  guard per view. A source the grid has not been drawing holds the answer
+  to a question nobody asked lately, and holding *that* over is not the
+  listing settling but a different listing entirely. It was reported twice
+  in an hour, once per source: coming back to the items from the albums
+  view with a search in the box put **22,415 items** — the whole library,
+  from the last time that source was on screen — under chips that said 27;
+  and leaving a performer's releases for the performers put the *previous*
+  performers list up, so a card carried one band's name over another band's
+  artwork until the answer landed, the picture being the slowest thing on a
+  card to change. So a view arriving from a *different source* drops what
+  that source holds (`reset` on both kinds of source, the generation moving
+  with it so an answer in flight for the older view cannot put the rows
+  back) and draws skeletons for the moment it takes, which is honest. A
+  view arriving from its own source keeps them, which is what makes a
+  search read as the listing settling.
+  Which source a view draws from is **one table** (`viewSource` in
+  `query.ts`, pure and tested), because three things ask it and any two of
+  them disagreeing is a view drawn from the wrong data: this rule, the
+  chips, and whether a change event should refetch the listing at all
+  (`itemsOnScreen`). A view that fetches nothing of its own belongs to the
+  source it was derived from — a show's seasons are read out of the shows
+  list already in hand, and calling them a source of their own would blank
+  them for good, nothing ever arriving to fill them.
+  The mirror of the rule is that an off-screen source is no longer
+  refetched: a library being written to changes every few seconds, and the
+  item source was fetching a page of the whole library behind every one of
+  them for a view nobody could see. What it misses is picked up when the
+  listing is entered, which fetches anyway.
 - **Nothing is refetched behind an open viewer.** A library being written to
   sends a change event every few seconds, and each one had the listing
   fetched again — two hundred items at a time, for a screen covered by a

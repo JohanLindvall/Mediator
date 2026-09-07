@@ -281,6 +281,21 @@ export class CollectionSource<T> {
       });
   }
 
+  /**
+   * Drop what is shown, and say so at once.
+   *
+   * Called when this view is entered from another one: what the source
+   * holds is then the answer to a question nobody has looked at since, and
+   * showing it puts one performer's releases — or one release's artwork —
+   * under another's name until the answer lands. The generation moves with
+   * it, so an answer already in flight for that older view cannot arrive
+   * and put the rows back.
+   */
+  reset(): void {
+    this.gen++;
+    this.clear();
+  }
+
   /** Drop what is shown, and say so at once. */
   protected clear(): void {
     this.items = null;

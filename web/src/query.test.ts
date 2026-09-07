@@ -12,7 +12,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { findKind, listFilters, countKey, countsToShow, narrowed, sameSubject, type ItemSource, type QueryState } from './query.ts';
+import {
+  findKind,
+  listFilters,
+  countKey,
+  countsToShow,
+  narrowed,
+  sameSubject,
+  viewSource,
+  type ItemSource,
+  type QueryState,
+} from './query.ts';
 
 function q(over: Partial<QueryState> = {}): QueryState {
   return { kind: '', q: '', sort: 'mtime', desc: true, ...over };
@@ -170,4 +180,34 @@ test('findKind steps past the other kinds and stops at the ends', async () => {
   // An unknown total (nothing has arrived) walks until the source says undefined.
   const open: ItemSource = { ...src, total: () => -1 };
   assert.deepEqual((await findKind(open, 3, 1, 'video'))?.index, 4);
+});
+
+test('every view names the source that fills it', () => {
+  assert.equal(viewSource({ mode: 'all' }), 'items');
+  assert.equal(viewSource({ mode: 'audio' }), 'items');
+  assert.equal(viewSource({ mode: 'popular' }), 'items');
+  assert.equal(viewSource({ mode: 'artists' }), 'artists');
+  assert.equal(viewSource({ mode: 'genres' }), 'genres');
+  // The audiobook shelf is the album view over the other releases.
+  assert.equal(viewSource({ mode: 'albums' }), 'albums');
+  assert.equal(viewSource({ mode: 'audiobooks' }), 'albums');
+});
+
+test('a show and its seasons are the same source; its episodes are a listing', () => {
+  assert.equal(viewSource({ mode: 'series' }), 'series');
+  // A show's seasons are read out of the shows list already in hand, so
+  // they are that source's — treated as a view of their own, dropping what
+  // nobody was looking at would blank them for good.
+  assert.equal(viewSource({ mode: 'series', series: 'An Episode' }), 'series');
+  assert.equal(viewSource({ mode: 'series', series: 'An Episode', season: 2 }), 'items');
+});
+
+test('leaving a drill-down is a change of source, and narrowing one is not', () => {
+  // What the reported fault was: a performer's releases, then back to the
+  // performers. The two views draw from different sources, so the second
+  // must not open on what the first left behind.
+  assert.notEqual(viewSource({ mode: 'albums' }), viewSource({ mode: 'artists' }));
+  // Whereas searching inside a view keeps its source, which is what lets
+  // the rows stay up while the next answer is fetched.
+  assert.equal(viewSource({ mode: 'albums' }), viewSource({ mode: 'albums' }));
 });
