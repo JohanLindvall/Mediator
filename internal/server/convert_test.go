@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestPlanConversion(t *testing.T) {
 	it := library.Item{ID: "f", Name: "film.mkv", Path: "/m/film.mkv", Kind: library.KindVideo, VCodec: "h264"}
 	log := testLogger()
 
-	full, err := planConversion("ffmpeg", it, 0, false, "", log)
+	full, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,7 @@ func TestPlanConversion(t *testing.T) {
 	// The soundtrack conversion copies the picture, seeks to the keyframe
 	// with the file's own clock kept, and takes the soundtrack it was asked
 	// for.
-	sound, err := planConversion("ffmpeg", it, 61.5, true, "2", log)
+	sound, err := planConversion(context.Background(), "ffmpeg", it, 61.5, true, "2", false, log)
 	if err != nil {
 		t.Fatal(err)
 	}

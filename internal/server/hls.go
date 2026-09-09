@@ -760,7 +760,7 @@ func (h *HLS) forget(s *hlsSession) {
 // run is the conversion itself: the plan both converters share (convert.go)
 // delivered as segments.
 func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) {
-	plan, err := planConversion(h.ffmpeg, it, t, copyVideo, audio, h.log)
+	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, aspects.has(it), h.log)
 	if err != nil {
 		s.fail(err)
 		h.forget(s)
@@ -797,6 +797,19 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
 		h.log.Warn("hls conversion ended", "path", it.Rel, "err", err,
 			"ffmpeg", strings.TrimSpace(errBuf.String()))
+		// What stopped it may be the file's own declaration of what shape
+		// its pixels are, which is not about the bytes: the film is
+		// converted again through the copy that puts that right (aspect.go),
+		// into the same session, whose waiters are still waiting on a first
+		// segment that has not been written. The one thing that must not
+		// happen is judging the session before the second attempt has had
+		// its turn.
+		if aspectRefused(errBuf.String()) && !aspects.has(it) {
+			aspects.note(it)
+			h.log.Info("converting again with the declared aspect put right", "path", it.Rel)
+			h.run(ctx, s, it, t, copyVideo, audio)
+			return
+		}
 		// Only a failure that produced nothing is a failure to the caller;
 		// one that stopped part way leaves a playable prefix behind.
 		s.failIfEmpty(err)

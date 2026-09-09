@@ -3392,8 +3392,8 @@ Serving details worth knowing before "fixing" them:
   is accurate (a sheet on a plain file decodes forward to the moment) and
   whether the read is over loopback (the internal marker and a socket
   timeout).
-  **A file whose bitstream lies about the shape of a pixel gets one more
-  try** (`repairedFrame`). ffmpeg builds its filter graph from what the
+  **A file whose bitstream lies about the shape of a pixel is repaired
+  rather than given up on** (`aspect.go`, `repairedFrame`). ffmpeg builds its filter graph from what the
   stream declares and refuses a pixel aspect it cannot represent *before* a
   single frame is scaled: measured on a film here — one that plays perfectly
   well in a browser — the container says the pixels are square and the
@@ -3407,6 +3407,24 @@ Serving details worth knowing before "fixing" them:
   back out with the bad ratio still on it. Only H.264 and HEVC have such a
   filter (`metadataFilter`); anything else is left as it is rather than
   guessed at, and a copy that fails is not a verdict either.
+  **The conversions need it more than the tile does**, and for the same
+  reason: a browser that cannot decode such a file asks for a conversion,
+  and every conversion builds a filter graph, so the film had nowhere left
+  to go and the player said the format could not be played. Both converters
+  therefore read the repair from a **pipe** (`startRepair`, chosen in
+  `planConversion`) — the copy does the seek, so the conversion asks for
+  none, and closing the pipe kills and reaps the copy. Which files need it
+  is discovered by failing once and remembered for the run (`aspects`, keyed
+  by identity like the reorder verdicts), and **whichever meets the file
+  first tells the others**: a tile made through the repair spares the
+  player, and a conversion that hits it retries itself immediately — the
+  piped one restarts the handler, nothing having been written to the
+  response yet, and the segmented one runs again into the same session,
+  whose waiters are still waiting on a first segment. What ffmpeg was
+  stopped by is read off its own complaint (`aspectRefused`, tested), which
+  names the parameter in every wording; every other way a conversion can
+  die is left alone, or an unreadable file would be copied through a repair
+  for ever.
   Whether a frame came out decides the outcome, not ffmpeg's exit status:
   it exits 0 having written nothing when the seek overran its input, and
   non-zero once the frame is safely out when a piped prefix ends under it.

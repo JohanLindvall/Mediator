@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"strconv"
@@ -45,10 +46,26 @@ func (c *conversion) close() {
 // it could not measure one. A seek already done by byte position (a DVD
 // title, see convertInput) gets no -ss: the stream simply starts where it
 // was put.
-func planConversion(ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, log *slog.Logger) (*conversion, error) {
+func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, repair bool, log *slog.Logger) (*conversion, error) {
 	input, byPosition, err := convertInput(it, t)
 	if err != nil {
 		return nil, err
+	}
+	// A file whose declared pixel aspect ffmpeg refuses is read through the
+	// copy that rewrites it (aspect.go) rather than directly: the graph is
+	// configured from what the stream says, so without this there is no
+	// conversion to be had at all. The copy does the seek, so the conversion
+	// asks for none — it reads a pipe, and a pipe seeks nowhere anyway.
+	if repair && metadataFilter(it.VCodec) != "" && !it.Archived() {
+		pipe, rerr := startRepair(ctx, ffmpeg, it, t)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if input.pipe != nil {
+			_ = input.pipe.Close()
+		}
+		input = convertSource{args: []string{"-i", "pipe:0"}, pipe: pipe}
+		byPosition = true
 	}
 	c := &conversion{stdin: input.pipe}
 

@@ -540,24 +540,6 @@ func (t *Thumbnailer) fromVideo(ctx context.Context, it library.Item, width int)
 	return nil, ErrNoThumb
 }
 
-// metadataFilter is the bitstream filter that rewrites what a stream says
-// about itself, by codec. Only the two that have one: anything else is left
-// as it is rather than guessed at.
-func metadataFilter(vcodec string) string {
-	switch vcodec {
-	case "h264":
-		return "h264_metadata"
-	case "hevc":
-		return "hevc_metadata"
-	}
-	return ""
-}
-
-// repairSeconds is how much of the film is copied to take one frame from.
-// Enough to be sure of a decodable picture after the keyframe the seek
-// lands on, and little enough that the copy is a disk read and nothing more.
-const repairSeconds = 2
-
 // repairedFrame is the last resort for a file whose bitstream lies about
 // the shape of its pixels.
 //
@@ -590,22 +572,23 @@ func (t *Thumbnailer) repairedFrame(ctx context.Context, it library.Item, width 
 
 	cctx, cancel := context.WithTimeout(ctx, plainThumbTimeout)
 	defer cancel()
-	seek := videoSeeks(it.Duration)[0]
-	cmd := exec.CommandContext(cctx, t.ffmpeg,
-		"-nostdin", "-hide_banner", "-loglevel", "error",
-		"-ss", seek, "-i", it.Path,
-		"-map", "0:v:0", "-t", strconv.Itoa(repairSeconds),
-		"-c", "copy", "-bsf:v", bsf+"=sample_aspect_ratio=1/1",
-		"-f", "matroska", "-y", tmp)
+	seek, _ := strconv.ParseFloat(videoSeeks(it.Duration)[0], 64)
+	cmd := exec.CommandContext(cctx, t.ffmpeg, repairArgs(it, seek, repairSeconds, tmp)...)
 	if err := cmd.Run(); err != nil || cctx.Err() != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, nil // the copy is a last resort; its failure is not a verdict
 	}
-	return t.runFrame(ctx, cctx, nil, func(out string) []string {
+	data, err := t.runFrame(ctx, cctx, nil, func(out string) []string {
 		return frameArgs(frameSpec{input: tmp, out: out, seek: "0", width: width, quality: 4})
 	})
+	if len(data) > 0 {
+		// Found out the hard way, so the converters do not have to: this
+		// file's declaration is what stops ffmpeg, not its bytes.
+		aspects.note(it)
+	}
+	return data, err
 }
 
 // plainThumbTimeout bounds one seek into a plain file. A variable so a test

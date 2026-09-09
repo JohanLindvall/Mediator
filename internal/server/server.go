@@ -997,7 +997,7 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 
 	// The same plan the segmented converter runs (convert.go); only the
 	// delivery is this endpoint's own: fragmented MP4 down the response.
-	plan, err := planConversion(ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), s.log)
+	plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), aspects.has(it), s.log)
 	if err != nil {
 		// Known and unopenable, not unknown: the same answer the stream
 		// gives, with the same reason, so the player says what happened
@@ -1031,6 +1031,17 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		// could not so much as open its input used to answer an empty 200,
 		// which in the access log is indistinguishable from success.
 		if out.n == 0 {
+			// Unless what stopped it was the file's own declaration of what
+			// shape its pixels are, which is not about the bytes at all:
+			// that is remembered and the film is converted again through
+			// the copy that puts the declaration right (aspect.go). Safe to
+			// start over because nothing has been written to the response.
+			if aspectRefused(errBuf.String()) && !aspects.has(it) {
+				aspects.note(it)
+				s.log.Info("converting again with the declared aspect put right", "path", it.Rel)
+				s.handleTranscode(w, r)
+				return
+			}
 			http.Error(w, "conversion failed", http.StatusServiceUnavailable)
 		}
 	}

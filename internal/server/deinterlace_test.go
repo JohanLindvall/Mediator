@@ -65,22 +65,3 @@ func TestStillsAreUnsqueezedBeforeScaling(t *testing.T) {
 		t.Errorf("chain %q does not begin with the deinterlacer", chain)
 	}
 }
-
-// A file whose bitstream declares a pixel aspect ffmpeg will not accept
-// gets no picture at all: the filter graph is configured from what the
-// stream says, and is refused before a frame is scaled. The repair copies a
-// couple of seconds through the filter that rewrites that declaration, and
-// only two codecs have one — the rest are left alone rather than guessed at.
-func TestMetadataFilterByCodec(t *testing.T) {
-	if got := metadataFilter("h264"); got != "h264_metadata" {
-		t.Errorf("h264 = %q", got)
-	}
-	if got := metadataFilter("hevc"); got != "hevc_metadata" {
-		t.Errorf("hevc = %q", got)
-	}
-	for _, c := range []string{"", "vp9", "mpeg2video", "av1", "wmv2"} {
-		if got := metadataFilter(c); got != "" {
-			t.Errorf("%s was offered %q, which does not exist", c, got)
-		}
-	}
-}
