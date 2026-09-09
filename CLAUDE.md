@@ -3372,6 +3372,20 @@ Serving details worth knowing before "fixing" them:
   reaches files that change on disk and leaves the rest as they are. Remaking
   every video still in a library is an ffmpeg seek apiece, and the tiles
   already made are not wrong — only older.
+  **A still is un-squeezed before it is scaled** (`square`, tested). A DVD
+  codes a 16:9 picture in a 4:3 grid and says so in a pixel aspect ratio; a
+  browser honours that and so does the player, but a **JPEG has nowhere to
+  record it** — so a frame taken with a plain scale comes out squeezed, and
+  the tile, the hover preview and the scrub bar are all the wrong shape.
+  Measured on a file declaring 720x576 with a pixel aspect of 16:15, a
+  400-wide tile came out 400x320 where the film is 4:3; for a 16:9 disc the
+  error is a third. The frame is widened to what the pixel aspect says it
+  means, scaled as before, and marked square on the way out. On a file with
+  square pixels — nearly all of them — the widening is the same size in and
+  out. `spriteCacheWidth` moved with it, since a sheet made the old way is
+  the wrong shape for the new one; **stored tiles are not remade**, which is
+  the standing rule for a change of recipe — a tile already made is older,
+  not wrong, and this one reaches a file when it next changes on disk.
   Every still — a tile, a scrub-sheet frame, over a path or over loopback —
   is taken by one recipe (`frameArgs`), the four builders that used to spell
   it out being wrappers over it now; what differs is only whether the seek

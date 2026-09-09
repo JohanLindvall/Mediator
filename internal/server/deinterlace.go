@@ -45,6 +45,24 @@ func videoFilter(rest ...string) string {
 	return strings.Join(append([]string{deinterlacer}, rest...), ",")
 }
 
+// square undoes an anamorphic frame before it is scaled into a picture.
+//
+// A DVD codes a 16:9 picture in a 4:3 grid and says so in a pixel aspect
+// ratio; a browser honours that and draws the film correctly, and so does
+// the player here. A JPEG has nowhere to say it — so a still taken with a
+// plain scale comes out squeezed, and the tile, the hover preview and the
+// scrub bar are all a picture of the wrong shape. Measured on a file
+// declaring 720x576 with a pixel aspect of 16:15: a 400-wide tile came out
+// 400x320 where the film is 4:3, and for a 16:9 disc the error is a third.
+//
+// The frame is widened to what the pixel aspect says it means, then scaled
+// as before, and the output is marked square so nothing downstream squeezes
+// it again. On a file with square pixels — which is nearly all of them —
+// the first scale is the same size in and out.
+func square(scale string) string {
+	return strings.Join([]string{"scale='trunc(iw*sar/2)*2':ih", scale, "setsar=1"}, ",")
+}
+
 const (
 	// convertMaxWidth is as wide as a conversion is ever made. A viewer's
 	// screen is not four thousand pixels across, and the bytes have to cross

@@ -77,8 +77,9 @@ const (
 	// a width but a slot, and it changes whenever the sheet's own shape or
 	// recipe does — a stored sheet from the old one would otherwise be
 	// served under the new convention, at half the resolution the client
-	// now expects.
-	spriteCacheWidth = -1
+	// now expects. It moved to -2 when the frames stopped being squeezed
+	// (see square): an anamorphic film's old sheet is the wrong shape.
+	spriteCacheWidth = -2
 	// spriteFrameTimeout bounds one frame. Ten seeks, each landing in a
 	// different part of the file, and any one of them can be the one that
 	// waits on a disk doing something else.
@@ -723,7 +724,7 @@ func frameArgs(f frameSpec) []string {
 		"-ss", f.seek,
 		"-i", f.input,
 		"-map", "0:v:0", "-an", "-sn", "-dn",
-		"-frames:v", "1", "-vf", videoFilter(fmt.Sprintf("scale=%d:-2", f.width)),
+		"-frames:v", "1", "-vf", videoFilter(square(fmt.Sprintf("scale=%d:-2", f.width))),
 		"-q:v", strconv.Itoa(f.quality), "-y", f.out)
 }
 
@@ -775,8 +776,8 @@ func archivePipeArgs(out string, width int) []string {
 		"-skip_frame", "nokey",
 		"-t", strconv.Itoa(archivePipeWindowSec), "-i", "pipe:0",
 		"-map", "0:v:0", "-an", "-sn", "-dn",
-		"-vf", deinterlacer + "," + fmt.Sprintf("fps=1/%d,scale=%d:-2,thumbnail=%d",
-			archivePipeSampleSec, width, archiveThumbFrames),
+		"-vf", videoFilter(square(fmt.Sprintf("fps=1/%d,scale=%d:-2,thumbnail=%d",
+			archivePipeSampleSec, width, archiveThumbFrames))),
 		"-frames:v", "1", "-q:v", "4", "-y", out,
 	}
 }
@@ -789,7 +790,7 @@ func archiveFirstFrameArgs(out string, width int) []string {
 		"-hide_banner", "-loglevel", "error",
 		"-i", "pipe:0",
 		"-map", "0:v:0", "-an", "-sn", "-dn",
-		"-vf", videoFilter(fmt.Sprintf("scale=%d:-2", width)),
+		"-vf", videoFilter(square(fmt.Sprintf("scale=%d:-2", width))),
 		"-frames:v", "1", "-q:v", "4", "-y", out,
 	}
 }

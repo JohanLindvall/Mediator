@@ -34,3 +34,34 @@ func TestVideoFilterWithNothingElse(t *testing.T) {
 		t.Errorf("got %q, want the deinterlacer alone", got)
 	}
 }
+
+// A still is a picture with nowhere to record a pixel aspect ratio, so the
+// frame has to be un-squeezed before it is scaled. Measured on a file
+// declaring 720x576 with a pixel aspect of 16:15: a 400-wide tile came out
+// 400x320 where the film is 4:3, and for a 16:9 disc the error is a third.
+func TestStillsAreUnsqueezedBeforeScaling(t *testing.T) {
+	got := square("scale=320:-2")
+	parts := strings.Split(got, ",")
+	if len(parts) != 3 {
+		t.Fatalf("filter chain %q, want the widening, the scale and the mark", got)
+	}
+	// The widening comes first: scaling an anamorphic frame to a width and
+	// then widening it would have thrown the height away already.
+	if !strings.Contains(parts[0], "iw*sar") {
+		t.Errorf("the frame is not widened by its pixel aspect first: %q", parts[0])
+	}
+	if parts[1] != "scale=320:-2" {
+		t.Errorf("the caller's own scale was lost: %q", parts[1])
+	}
+	// And the picture that comes out says its pixels are square, so nothing
+	// downstream squeezes it a second time.
+	if parts[2] != "setsar=1" {
+		t.Errorf("the output is not marked square: %q", parts[2])
+	}
+	// It sits under the deinterlacer like everything else: fields first,
+	// always, or the combing is scaled into a smear nothing can undo.
+	chain := videoFilter(square("scale=320:-2"))
+	if !strings.HasPrefix(chain, deinterlacer+",") {
+		t.Errorf("chain %q does not begin with the deinterlacer", chain)
+	}
+}
