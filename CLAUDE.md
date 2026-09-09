@@ -906,6 +906,24 @@ Change propagation is the core loop:
   which is the least useful thing to be shown first; a mixed library has no
   one shelf to open on, and a face of films has no grouping to open into. It
   is only the default — a link that names a view still opens that view.
+- **A collection is drawn with a sleeve that exists** (`betterCover`,
+  `Album.hasArt`). A performer, a genre and a shelf each take their picture
+  from one of the releases under them, and the rule was "the most recent" —
+  so a performer whose latest record keeps no picture was drawn with the
+  fallback microphone while a dozen of their others had one. Measured on the
+  performer this was reported for: sixteen releases, twelve with a sleeve,
+  and the four without were the newest. The rule is now "the most recent
+  release that has one", falling back to the most recent where none of them
+  has anything to show.
+  What "has one" means is read off the **index**, not the disk: a picture
+  indexed in the same directory as the release's first track. Releases keep
+  their sleeve as a file far more often than in their tags — over those
+  sixteen, every one of the twelve keeps it as a file and none embeds one —
+  and the album build already walks every item, so it costs nothing. It is
+  deliberately a weaker question than the thumbnailer's, which also looks in
+  an art subdirectory and inside the tags: this says "certainly has one"
+  rather than "the only ones that have one", which is all a preference
+  needs, and a library that embeds its artwork simply keeps the old rule.
 - **A card says what is known about the thing on it.** A release shows its
   performer, year and genre; a performer shows their tracks, running time,
   the span their dated releases cover and what most of them are filed under

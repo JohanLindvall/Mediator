@@ -43,6 +43,30 @@ type Artist struct {
 	// genres counts what their releases are tagged as while the artist is
 	// being built, and is dropped once the commonest is known.
 	genres map[string]int
+	// What the chosen cover came from: whether that release has a sleeve,
+	// and when it was modified. Both are needed while the grouping runs,
+	// since the choice is "the most recent release that has one".
+	coverArt  bool
+	coverTime int64
+}
+
+// betterCover says whether this release should represent a collection
+// rather than the one already chosen: a release with a sleeve beats one
+// without, and between two alike the more recent wins.
+//
+// A collection used to take its cover from its most recent release outright,
+// so a performer whose latest record keeps no picture beside it was drawn
+// with the fallback icon while a dozen of their others had one. Measured on
+// one performer here: sixteen releases, twelve with a sleeve, and the four
+// without were the newest.
+func betterCover(a *Album, haveArt bool, haveTime int64) bool {
+	if a.CoverID == "" {
+		return false
+	}
+	if a.hasArt != haveArt {
+		return a.hasArt
+	}
+	return a.ModTime > haveTime
 }
 
 // Artists returns every artist in the library, cached per library version.
@@ -89,7 +113,15 @@ func artistsFrom(albums []*Album) []*Artist {
 		}
 		if a.ModTime > ar.ModTime {
 			ar.ModTime = a.ModTime
-			ar.CoverID = a.CoverID // artwork of their most recent release
+		}
+		// The most recent release that has a sleeve, rather than the most
+		// recent of all: a performer whose latest release keeps no picture
+		// was drawn with the fallback icon while a dozen of their records
+		// beside it had one. A release with a sleeve always beats one
+		// without, so the fallback is only reached where none of them has
+		// anything to show. See Album.hasArt.
+		if betterCover(a, ar.coverArt, ar.coverTime) {
+			ar.CoverID, ar.coverArt, ar.coverTime = a.CoverID, a.hasArt, a.ModTime
 		}
 		if a.Genre != "" {
 			if ar.genres == nil {

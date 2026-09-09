@@ -42,6 +42,9 @@ type Genre struct {
 
 	lower    string // tokenized search text
 	sortName string // lowercased name, for ordering
+	// What the chosen cover came from; see betterCover.
+	coverArt  bool
+	coverTime int64
 
 	// performers, while the genre is being built: the count comes from it and
 	// so does the search text, and it is dropped once both are taken.
@@ -94,7 +97,10 @@ func genresFrom(albums []*Album) []*Genre {
 			}
 			if a.ModTime > g.ModTime {
 				g.ModTime = a.ModTime
-				g.CoverID = a.CoverID // artwork of the most recent release in it
+			}
+			// The most recent release that has a sleeve; see betterCover.
+			if betterCover(a, g.coverArt, g.coverTime) {
+				g.CoverID, g.coverArt, g.coverTime = a.CoverID, a.hasArt, a.ModTime
 			}
 			if a.Year > 0 {
 				if g.FromYear == 0 || a.Year < g.FromYear {

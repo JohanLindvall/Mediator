@@ -514,3 +514,54 @@ func TestLoneDiscFolderIsLeftAlone(t *testing.T) {
 		t.Fatalf("built %d albums (%v), want the three that are there", len(albums), names)
 	}
 }
+
+// A performer is drawn with the sleeve of their most recent release that
+// has one, not of their most recent release. Measured on one performer
+// here: sixteen releases, twelve with a picture beside the tracks, and the
+// four without were the newest — so the card showed the fallback icon while
+// a dozen of their records had artwork.
+func TestCoverPrefersAReleaseThatHasOne(t *testing.T) {
+	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	add := func(dir string, year int, picture bool) {
+		path := fmt.Sprintf("/library/Gorse Beacon/%s/01 track.mp3", dir)
+		// Later releases are more recently modified, as they are on a disk
+		// filled over time.
+		l.upsert(path, KindAudio, 1000, time.Unix(int64(year), 0), fileKey{}, false)
+		l.setMeta(PathID(path), tagMeta{artist: "Gorse Beacon", album: dir, year: year}, 1000)
+		if picture {
+			l.upsert(fmt.Sprintf("/library/Gorse Beacon/%s/cover.jpg", dir),
+				KindImage, 500, time.Unix(int64(year), 0), fileKey{}, false)
+		}
+	}
+	add("Signal Fires", 1993, true)
+	add("Low Water", 1995, true)
+	add("Live In The Hall", 2003, false) // the newest, and no sleeve
+
+	withArt := PathID("/library/Gorse Beacon/Low Water/01 track.mp3")
+	artists := l.Artists()
+	if len(artists) != 1 {
+		t.Fatalf("performers = %d, want 1", len(artists))
+	}
+	if got := artists[0].CoverID; got != withArt {
+		t.Errorf("the performer's cover is %q, want the newest release that has one", got)
+	}
+	genres := l.Genres()
+	for _, g := range genres {
+		if g.CoverID != withArt {
+			t.Errorf("genre %q took its cover from a release with no sleeve", g.Name)
+		}
+	}
+
+	// Where none of them has a picture, the rule is the old one: the most
+	// recent release, rather than nothing at all.
+	l2 := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, y := range []int{1993, 2003} {
+		path := fmt.Sprintf("/library/Tern Signal/%d/01 track.mp3", y)
+		l2.upsert(path, KindAudio, 1000, time.Unix(int64(y), 0), fileKey{}, false)
+		l2.setMeta(PathID(path), tagMeta{artist: "Tern Signal", album: fmt.Sprint(y)}, 1000)
+	}
+	got := l2.Artists()
+	if len(got) != 1 || got[0].CoverID != PathID("/library/Tern Signal/2003/01 track.mp3") {
+		t.Errorf("with no sleeves anywhere the cover is %v, want the most recent release", got)
+	}
+}

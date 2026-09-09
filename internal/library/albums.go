@@ -44,6 +44,9 @@ type Album struct {
 
 	lower    string // tokenized search text (name, artist, genre, year, path)
 	sortName string // lowercased name, for ordering
+	// hasArt says a picture sits beside this release's tracks, so a
+	// collection choosing a cover can prefer it. See buildAlbums.
+	hasArt bool
 }
 
 // Albums returns all albums, cached per library version.
@@ -265,8 +268,18 @@ func (l *Library) buildAlbums() []*Album {
 	// tags at all can then be filed under the performer its directory names,
 	// where that is somebody this library already knows (artistFromParent).
 	spellings := map[string]map[string]int{}
+	// Where a picture sits beside the music. A release keeps its sleeve as a
+	// file far more often than inside the tags — measured over one
+	// performer's sixteen releases here, every one of the twelve that has a
+	// sleeve keeps it as a file and none embeds one — and the collections
+	// choose which release represents them, so they should choose one that
+	// can actually show something. The pictures are in the index already, so
+	// this costs nothing but the walk that was happening anyway.
+	pictures := map[string]bool{}
 	for _, it := range l.items {
 		switch it.Kind {
+		case KindImage:
+			pictures[filepath.Dir(it.Path)] = true
 		case KindAudio:
 			dir := filepath.Dir(it.Path)
 			byDir[dir] = append(byDir[dir], it)
@@ -303,6 +316,16 @@ func (l *Library) buildAlbums() []*Album {
 	// it is: the tags, the verdicts, the reading.
 	finish := func(a *Album, path string, tracks []*Item) {
 		fillAlbum(a, path, tracks, plays, known)
+		// Whether this release has a sleeve to show, asked of the track the
+		// cover is taken from — the tracks in hand, not the index, which is
+		// no longer under the lock here. Read off the index rather than the
+		// disk: the thumbnailer looks in the track's own directory and in an
+		// art subdirectory, which this does not see, so the answer is
+		// "certainly has one" rather than "the only ones that have one",
+		// which is all a preference needs.
+		if len(tracks) > 0 {
+			a.hasArt = pictures[filepath.Dir(tracks[0].Path)]
+		}
 		a.Likes = sumLikes(tracks, likes)
 		markSpoken(a, tracks, spoken)
 		albums = append(albums, a)
