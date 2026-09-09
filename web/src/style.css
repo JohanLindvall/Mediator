@@ -1977,13 +1977,18 @@ body.has-audio #toasts {
   unicode-bidi: isolate;
 }
 /*
- * The performer's name under a release, which is a way to the rest of their
- * work rather than decoration. It has to look like the line it replaced
- * until it is pointed at, or the card grows a button in the middle of its
- * caption; the hit area is the name itself, so the rest of the caption still
- * opens the release.
+ * A name on a card that is also the way to what it names: the performer,
+ * the genre, the release a song is on. Each has to look like the line it
+ * replaced until it is pointed at, or the card grows buttons in the middle
+ * of its caption; the hit area is the name itself, so the rest of the
+ * caption still opens what the card is. One rule for the three of them —
+ * they were two, and the second had drifted into being the first without
+ * its truncation, so a long name overflowed its card rather than ending in
+ * an ellipsis.
  */
-.link-artist {
+.link-artist,
+.link-genre,
+.link-album {
   padding: 0;
   border: 0;
   background: none;
@@ -1996,7 +2001,11 @@ body.has-audio #toasts {
   white-space: nowrap;
 }
 .link-artist:hover,
-.link-artist:focus-visible {
+.link-artist:focus-visible,
+.link-genre:hover,
+.link-genre:focus-visible,
+.link-album:hover,
+.link-album:focus-visible {
   color: var(--text);
   text-decoration: underline;
 }
@@ -2133,20 +2142,6 @@ body.has-audio #toasts {
    the rest of their work. Both look like the caption they replaced until they
    are pointed at — a card whose every fact is a visible button is a card
    nobody can read. */
-.link-genre {
-  padding: 0;
-  border: 0;
-  background: none;
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-.link-genre:hover,
-.link-genre:focus-visible {
-  color: var(--text);
-  text-decoration: underline;
-}
-
 /*
  * What is running, at the foot of the preferences.
  *

@@ -287,6 +287,7 @@ function renderItemCell(el: HTMLElement, item: Item | undefined): void {
     item.kind === 'audio' && item.artist
       ? subFacts(
           link('artist', item.artist, `Everything by ${item.artist}`),
+          albumLink(item),
           item.year,
           item.genre ? link('genre', item.genre, `Everything filed under ${item.genre}`) : '',
         )
@@ -483,12 +484,14 @@ function viaPlayBadge(ev: Event): boolean {
  * not check for falls through to the card — which for a track once meant
  * queueing the whole library.
  */
-function viaLink(ev: Event): { kind: 'artist' | 'genre'; value: string } | null {
+function viaLink(ev: Event): { kind: 'artist' | 'genre' | 'album'; value: string } | null {
   const target = ev.target as HTMLElement;
   const artist = target.closest<HTMLElement>('.link-artist[data-artist]');
   if (artist) return { kind: 'artist', value: artist.dataset.artist ?? '' };
   const genre = target.closest<HTMLElement>('.link-genre[data-genre]');
   if (genre) return { kind: 'genre', value: genre.dataset.genre ?? '' };
+  const album = target.closest<HTMLElement>('.link-album[data-album]');
+  if (album) return { kind: 'album', value: album.dataset.album ?? '' };
   return null;
 }
 
@@ -497,7 +500,11 @@ function followLink(ev: Event): boolean {
   const link = viaLink(ev);
   if (!link) return false;
   if (link.kind === 'artist') showArtist(link.value);
-  else showGenre(link.value);
+  else if (link.kind === 'genre') showGenre(link.value);
+  // The value there is the track's own id: a release is identified by a
+  // hash of its directory, which this side never sees, so the server is
+  // asked for the release a track is on.
+  else openAlbumPanel(link.value, panelOpts);
   return true;
 }
 
@@ -512,6 +519,20 @@ function followLink(ev: Event): boolean {
  */
 function link(kind: 'artist' | 'genre', value: string, title: string): string {
   return `<button type="button" class="link-${kind}" data-${kind}="${esc(value)}" title="${esc(title)}">${esc(value)}</button>`;
+}
+
+/**
+ * The release a song is on, as something to press.
+ *
+ * The same idea as the performer and the genre beside it — a fact on the
+ * card that is also the way to what it names — with one difference: what is
+ * pressed is not what is shown. A release is identified by a hash of the
+ * directory it lives in, which this side never sees, so the tag's spelling
+ * is the label and the track's own id is what the sheet is opened with.
+ */
+function albumLink(item: Item): string {
+  if (!item.album) return '';
+  return `<button type="button" class="link-album" data-album="${esc(item.id)}" title="${esc(`The release ${item.album}`)}">${esc(item.album)}</button>`;
 }
 
 const panelOpts: AlbumPanelOpts = {

@@ -137,3 +137,35 @@ func TestFoldRecordings(t *testing.T) {
 		t.Error("nothing folded to something")
 	}
 }
+
+// A release answers to one of its tracks as well as to its own id: that is
+// what lets a song's tile link to the album it is on, the client having no
+// way to work out an id hashed from a directory it never sees.
+func TestAlbumByIDAnswersToATrack(t *testing.T) {
+	l := libForQueue(t)
+	albums := l.SearchAlbums(AlbumQuery{Sort: "name", Desc: false})
+	if len(albums) == 0 {
+		t.Fatal("no releases were grouped")
+	}
+	want := albums[0]
+	if len(want.TrackIDs) == 0 {
+		t.Fatalf("release %q has no tracks", want.Name)
+	}
+	got, tracks, ok := l.AlbumByID(want.TrackIDs[len(want.TrackIDs)-1])
+	if !ok {
+		t.Fatal("a track's id found no release")
+	}
+	if got.ID != want.ID {
+		t.Errorf("track answered with release %q, want %q", got.Name, want.Name)
+	}
+	if len(tracks) != len(want.TrackIDs) {
+		t.Errorf("release came back with %d tracks, want %d", len(tracks), len(want.TrackIDs))
+	}
+	// Its own id still answers, and nothing else does.
+	if _, _, ok := l.AlbumByID(want.ID); !ok {
+		t.Error("a release no longer answers to its own id")
+	}
+	if _, _, ok := l.AlbumByID("feedfacedeadbeef"); ok {
+		t.Error("an id belonging to nothing found a release")
+	}
+}

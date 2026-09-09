@@ -378,6 +378,9 @@ Go binary with the TypeScript frontend embedded.
   - **Similar releases and performers.** A release's sheet offers *Similar*,
     the releases that sound most like it, each saying how alike; a performer,
     once drilled into, offers *Similar artists*. Nearest first, a chip back.
+  - **A song says which release it is on.** The album under a track's name is
+    a link to that release's sheet, beside the performer and the genre that
+    already were.
   - **A verdict reaches what sounds like it.** A track that sounds like one
     you liked is lifted in the popular orders, above anything merely played,
     and one that sounds like a dislike is sunk. Your own verdicts still

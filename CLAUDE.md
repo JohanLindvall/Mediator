@@ -840,11 +840,22 @@ Change propagation is the core loop:
   becomes a second artist of its own; normalising at the single point where
   metadata enters the index cleans up cached values too.
 - **A name on a card is a way to everything else like it.** The performer
-  under a release and the genre beside it are both the answer to a question
-  the card raises — what else is theirs, what else is like this — so both are
-  click targets wherever either appears: on a release, on a track, on a
-  performer's card, and in the album sheet, which closes onto the result
-  because a drill-down behind an open sheet is a change nobody can see. They
+  under a release, the genre beside it and **the release a song is on** are
+  each the answer to a question the card raises — what else is theirs, what
+  else is like this, what else is on this — so all three are click targets
+  wherever they appear: on a release, on a track, on a performer's card, and
+  in the album sheet, which closes onto the result because a drill-down
+  behind an open sheet is a change nobody can see.
+  The release is the odd one of the three, in that **what is pressed is not
+  what is shown**: a release is identified by a hash of the directory it
+  lives in, which the client never sees and cannot work out, so the tag's
+  spelling is the label and the **track's own id** is what the sheet is
+  opened with. `AlbumByID` therefore answers to a track as well as to a
+  release — a second pass, so a release opened by its own id never pays for
+  the track scan, and the two kinds of id cannot collide in any case, a
+  release's carrying a letter in front of it. A track with no album tag has
+  no label and so no link; the file listing and the sheet are still the way
+  to it. They
   look like the caption they replaced until they are pointed at; a card whose
   every fact is a visible button is a card nobody can read. `viaArtistLink`
   and `viaGenreLink` match on the link class as well as the attribute,

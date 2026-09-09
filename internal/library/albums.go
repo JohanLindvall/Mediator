@@ -53,18 +53,37 @@ func (l *Library) Albums() []*Album {
 
 // AlbumByID resolves one album plus its tracks in playback order.
 func (l *Library) AlbumByID(id string) (*Album, []Item, bool) {
-	for _, a := range l.Albums() {
+	albums := l.Albums()
+	for _, a := range albums {
 		if a.ID == id {
-			tracks := make([]Item, 0, len(a.TrackIDs))
-			for _, tid := range a.TrackIDs {
-				if it, ok := l.Get(tid); ok {
-					tracks = append(tracks, it)
-				}
-			}
-			return a, tracks, true
+			return a, l.tracksOfAlbum(a), true
+		}
+	}
+	// Not a release's id, so take it for a track's and answer with the
+	// release that track is on. That is what lets a song link to its album:
+	// a release is identified by a hash of the directory it lives in, which
+	// the client never sees and cannot work out, so the resolving has to
+	// happen here. A second pass rather than one, so a release opened by its
+	// own id never pays for the track scan; the two kinds of id cannot
+	// collide in any case, a release's carrying a letter in front.
+	for _, a := range albums {
+		if slices.Contains(a.TrackIDs, id) {
+			return a, l.tracksOfAlbum(a), true
 		}
 	}
 	return nil, nil, false
+}
+
+// tracksOfAlbum is the release's tracks as the caller sees them, in its own
+// running order.
+func (l *Library) tracksOfAlbum(a *Album) []Item {
+	tracks := make([]Item, 0, len(a.TrackIDs))
+	for _, tid := range a.TrackIDs {
+		if it, ok := l.Get(tid); ok {
+			tracks = append(tracks, it)
+		}
+	}
+	return tracks
 }
 
 // AlbumQuery selects and orders releases. Artist and Genre are the two
