@@ -3392,6 +3392,21 @@ Serving details worth knowing before "fixing" them:
   is accurate (a sheet on a plain file decodes forward to the moment) and
   whether the read is over loopback (the internal marker and a socket
   timeout).
+  **A file whose bitstream lies about the shape of a pixel gets one more
+  try** (`repairedFrame`). ffmpeg builds its filter graph from what the
+  stream declares and refuses a pixel aspect it cannot represent *before* a
+  single frame is scaled: measured on a film here — one that plays perfectly
+  well in a browser — the container says the pixels are square and the
+  bitstream says the ratio is **-35:3**, so every still ended in "Value
+  -11.666667 for parameter 'pixel_aspect' out of range" and the tile stayed
+  an icon for good, hover preview and scrub bar with it. So when every
+  offset has come back empty, a couple of seconds are copied through the
+  bitstream filter that rewrites that declaration and the frame is taken
+  from the copy: nothing decoded, nothing re-encoded, 0.12 s for the copy.
+  Matroska rather than MP4 deliberately — the same copy into an MP4 came
+  back out with the bad ratio still on it. Only H.264 and HEVC have such a
+  filter (`metadataFilter`); anything else is left as it is rather than
+  guessed at, and a copy that fails is not a verdict either.
   Whether a frame came out decides the outcome, not ffmpeg's exit status:
   it exits 0 having written nothing when the seek overran its input, and
   non-zero once the frame is safely out when a piped prefix ends under it.

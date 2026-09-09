@@ -527,7 +527,85 @@ func (t *Thumbnailer) fromVideo(ctx context.Context, it library.Item, width int)
 			return data, nil
 		}
 	}
+	// Nothing came out at any offset. Before writing the item off, try it
+	// once more with what its own bitstream says about the shape of a pixel
+	// taken out of the way; see repairedFrame.
+	data, err := t.repairedFrame(ctx, it, width)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 0 {
+		return data, nil
+	}
 	return nil, ErrNoThumb
+}
+
+// metadataFilter is the bitstream filter that rewrites what a stream says
+// about itself, by codec. Only the two that have one: anything else is left
+// as it is rather than guessed at.
+func metadataFilter(vcodec string) string {
+	switch vcodec {
+	case "h264":
+		return "h264_metadata"
+	case "hevc":
+		return "hevc_metadata"
+	}
+	return ""
+}
+
+// repairSeconds is how much of the film is copied to take one frame from.
+// Enough to be sure of a decodable picture after the keyframe the seek
+// lands on, and little enough that the copy is a disk read and nothing more.
+const repairSeconds = 2
+
+// repairedFrame is the last resort for a file whose bitstream lies about
+// the shape of its pixels.
+//
+// ffmpeg builds its filter graph from what the stream declares, and refuses
+// a pixel aspect it cannot represent before a single frame is scaled.
+// Measured on a film here — one that plays perfectly well in a browser — the
+// container says the pixels are square and the bitstream says the ratio is
+// -35:3, so every still this server tried to take of it ended in "Value
+// -11.666667 for parameter 'pixel_aspect' out of range" and the tile stayed
+// an icon forever.
+//
+// Nothing is decoded or re-encoded to fix that: a couple of seconds are
+// copied through the bitstream filter that rewrites the declaration, and the
+// frame is taken from the copy. Measured at 0.12 s for the copy. Matroska
+// rather than MP4 deliberately — the same copy into an MP4 came back out
+// with the bad ratio still on it, the declaration living in the container's
+// own codec record there as well.
+func (t *Thumbnailer) repairedFrame(ctx context.Context, it library.Item, width int) ([]byte, error) {
+	bsf := metadataFilter(it.VCodec)
+	if t.ffmpeg == "" || bsf == "" || it.Archived() {
+		return nil, nil
+	}
+	tmpf, err := os.CreateTemp("", "media-repair-*.mkv")
+	if err != nil {
+		return nil, err
+	}
+	tmp := tmpf.Name()
+	tmpf.Close()
+	defer os.Remove(tmp)
+
+	cctx, cancel := context.WithTimeout(ctx, plainThumbTimeout)
+	defer cancel()
+	seek := videoSeeks(it.Duration)[0]
+	cmd := exec.CommandContext(cctx, t.ffmpeg,
+		"-nostdin", "-hide_banner", "-loglevel", "error",
+		"-ss", seek, "-i", it.Path,
+		"-map", "0:v:0", "-t", strconv.Itoa(repairSeconds),
+		"-c", "copy", "-bsf:v", bsf+"=sample_aspect_ratio=1/1",
+		"-f", "matroska", "-y", tmp)
+	if err := cmd.Run(); err != nil || cctx.Err() != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, nil // the copy is a last resort; its failure is not a verdict
+	}
+	return t.runFrame(ctx, cctx, nil, func(out string) []string {
+		return frameArgs(frameSpec{input: tmp, out: out, seek: "0", width: width, quality: 4})
+	})
 }
 
 // plainThumbTimeout bounds one seek into a plain file. A variable so a test
