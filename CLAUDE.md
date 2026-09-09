@@ -1420,9 +1420,12 @@ Frontend (`web/src`, no framework, no runtime deps):
   window holds (`windowRows`), whether play would continue rather than
   restart (`resumable`) — live in `queue.ts` with tests. Below 720 px the
   spectrum, radio and link fold into one "⋯" menu so the title keeps its
-  room, and the sheet keeps Download and Link under a "⋯" of its own; the
-  queue panel holds the listener's scroll unless the current row leaves
-  view, and repaints its window on a frame rather than per scroll event.
+  room, and the sheet keeps Download and Link under a "⋯" of its own; the queue panel holds the listener's scroll unless the current row leaves
+  view, and repaints its window on a frame rather than per scroll event. Its
+  rows say how long each track is, which is the figure somebody scanning a
+  queue is adding up; it is the one column that never gives way, the title
+  yielding first, and it is absent rather than zero until the library has
+  measured the file.
   **A release can be put after everything already queued** (`enqueue`,
   the sheet's "Add to queue"). The arithmetic is `appendToOrder` in
   `queue.ts`, pure and tested, because "at the end" is the whole promise of

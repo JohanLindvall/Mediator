@@ -1712,6 +1712,16 @@ input[type='range']::-moz-range-thumb {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* How long the track is: the one column that must not be squeezed or
+   wrapped, since a queue is read down it — so it keeps its width and the
+   title gives way first. Empty until the library has measured the file,
+   and then it takes no room at all. */
+.q-time {
+  flex: none;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- toasts ---------- */
 #toasts {

@@ -1550,6 +1550,7 @@ export class AudioPlayer {
           <span class="q-num">${current ? icons.volume : oi + 1}</span>
           <span class="q-title">${esc(it.title || it.name)}</span>
           <span class="q-artist">${esc(it.artist ?? '')}</span>
+          <span class="q-time">${it.duration ? formatDuration(it.duration / 1000) : ''}</span>
         </button>`;
     }
     space.innerHTML = rows;
