@@ -112,7 +112,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	l.ensureFlags()
 
 	l.mu.RLock()
-	version := l.version
+	version := l.groupVersion
 	l.mu.RUnlock()
 	key := countsKey{version, l.watchVersion(), q}
 

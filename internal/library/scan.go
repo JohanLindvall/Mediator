@@ -183,7 +183,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				return nil
 			}
 			key, _ := fileID(info)
-			ch, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
+			ch, _, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
 			if dup {
 				// Another path already represents this file; leaving it out
 				// of seen also drops it if it used to be the indexed one.
@@ -593,7 +593,7 @@ func (l *Library) AddFile(path string) {
 		symlink = li.Mode()&fs.ModeSymlink != 0
 	}
 	key, _ := fileID(info)
-	changed, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
+	changed, bytesOnly, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
 	if dup {
 		return // already in the library under another path
 	}
@@ -607,7 +607,13 @@ func (l *Library) AddFile(path string) {
 			// enrichAfterQuiet).
 			l.enrichAfterQuiet(PathID(path))
 		}
-		l.notify()
+		// A file being written says this many times a second, and none of
+		// it changes what the library holds; see notifyBytes.
+		if bytesOnly {
+			l.notifyBytes()
+		} else {
+			l.notify()
+		}
 	}
 }
 

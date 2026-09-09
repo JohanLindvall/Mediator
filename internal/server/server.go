@@ -422,11 +422,16 @@ func (s *Server) probed(ctx context.Context, it library.Item) library.Item {
 }
 
 // versionTag lets the browser revalidate the album/artist lists for free:
-// their bodies depend only on the library version and the request URL, so
+// their bodies depend only on what the library holds and the request URL, so
 // an unchanged version means an unchanged body and a 304 replaces shipping
 // hundreds of kilobytes of JSON that the client already has.
+//
+// It is the group version, which is what those lists are built from: the
+// plain one moves every time a byte of a download lands, and using it would
+// have every client fetch an identical list of releases many times a second
+// for as long as anything is being written.
 func (s *Server) versionTag(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	version := s.lib.Version()
+	version := s.lib.GroupVersion()
 	// The restriction is part of the tag, and the tag is what a browser
 	// revalidates against. Two faces of one library are at the same version
 	// and hold different answers, so a version alone would let a client that

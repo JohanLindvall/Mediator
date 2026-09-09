@@ -81,7 +81,7 @@ func TestUpsertFollowsAChangeOfKind(t *testing.T) {
 	if c := l.Counts(); c.Audio != 1 || c.Video != 0 {
 		t.Fatalf("counts after the first sighting = %+v", c)
 	}
-	changed, _ := l.upsert("/m/nameless", KindVideo, 10, time.Unix(1, 0), fileKey{}, false)
+	changed, _, _ := l.upsert("/m/nameless", KindVideo, 10, time.Unix(1, 0), fileKey{}, false)
 	if !changed {
 		t.Error("a change of kind was not reported as a change")
 	}
@@ -165,5 +165,52 @@ func TestSetRootsCleansTheList(t *testing.T) {
 	got := l.Roots()
 	if len(got) != 1 || got[0] != filepath.Clean(dir) {
 		t.Errorf("roots = %q, want the one directory, absolute", got)
+	}
+}
+
+// A download growing does not change what the library holds, and the whole
+// derived half of this app is cached against what it holds: the albums, the
+// artists, the genres, the shows, the narrowed counts, and through the
+// release verdicts those builds produce, the affinity ranking a listing
+// stamps on every item. Measured with a torrent running, the plain version
+// moved 45 times a second, and every request rebuilt all of it.
+func TestBytesDoNotChangeWhatTheLibraryHolds(t *testing.T) {
+	l := libForQueue(t)
+	l.Albums() // build once, so the caches have something to keep
+	v0, g0 := l.Version(), l.GroupVersion()
+
+	path := "/library/Gorse Beacon/Signal Fires/01 track.mp3"
+	// The file grows, as a download does, again and again.
+	for i := 1; i <= 3; i++ {
+		changed, bytesOnly, dup := l.upsert(path, KindAudio, int64(1000+i), time.Unix(int64(i), 0), fileKey{}, false)
+		if !changed || dup {
+			t.Fatalf("a grown file: changed=%v dup=%v", changed, dup)
+		}
+		if !bytesOnly {
+			t.Error("a file that only grew was reported as a change to what the library holds")
+		}
+		l.notifyBytes()
+	}
+	if l.Version() == v0 {
+		t.Error("the version did not move for a file that grew: the tile shows its size")
+	}
+	if l.GroupVersion() != g0 {
+		t.Error("bytes arriving moved the version the grouped views are cached against")
+	}
+
+	// A new file, a tag read and a removal are all changes to what it holds.
+	if _, bytesOnly, _ := l.upsert("/library/Gorse Beacon/Signal Fires/03 track.mp3",
+		KindAudio, 1000, time.Unix(1, 0), fileKey{}, false); bytesOnly {
+		t.Error("a file the library had never seen was reported as bytes only")
+	}
+	l.notify()
+	if l.GroupVersion() == g0 {
+		t.Fatal("a new file left the grouped views cached against the old answer")
+	}
+	g1 := l.GroupVersion()
+	l.setMeta(PathID(path), tagMeta{artist: "Gorse Beacon", album: "Signal Fires", title: "Tide Song"}, 1003)
+	l.notify()
+	if l.GroupVersion() == g1 {
+		t.Error("tags read from a file left the grouped views cached against the old answer")
 	}
 }

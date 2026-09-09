@@ -292,7 +292,7 @@ type Season struct {
 
 // Series returns the grouped shows, rebuilt when the library has changed.
 func (l *Library) Series() []*Series {
-	return l.series.get(l.Version(), func() []*Series { return l.buildSeries(nil) })
+	return l.series.get(l.GroupVersion(), func() []*Series { return l.buildSeries(nil) })
 }
 
 // AllowedSeries groups the shows a caller restricted to part of the library

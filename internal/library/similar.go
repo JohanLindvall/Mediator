@@ -22,7 +22,6 @@ package library
 import (
 	"cmp"
 	"math"
-	"reflect"
 	"slices"
 	"strings"
 )
@@ -269,8 +268,24 @@ type affinity struct {
 }
 
 // sameMap says whether two maps are the same map, not merely equal.
+// sameMap compares the release verdicts by content rather than by identity.
+//
+// The album build makes a fresh map every time it runs, so an identity test
+// said "changed" whenever anything at all had rebuilt the albums — and the
+// affinity, which is measured against every verdict over every analysed
+// track, was rebuilt on the request path for a map that said exactly what
+// the last one did. Walking twenty thousand entries is about a millisecond;
+// the rebuild it saves is closer to half a second.
 func sameMap(a, b map[string]bool) bool {
-	return reflect.ValueOf(a).Pointer() == reflect.ValueOf(b).Pointer()
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if w, ok := b[k]; !ok || w != v {
+			return false
+		}
+	}
+	return true
 }
 
 // affinities answers the current affinity, rebuilding it when a verdict or
@@ -414,7 +429,7 @@ type sounds struct {
 }
 
 func (l *Library) sounds() *sounds {
-	version := l.Version()
+	version := l.GroupVersion()
 	sv := l.scaledVectors()
 	l.featMu.RLock()
 	cur := l.soundsCache

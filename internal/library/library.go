@@ -353,6 +353,9 @@ type Library struct {
 	// work (thumbnail generation, tag enrichment) throttles itself while
 	// playback is active so it never competes with it for disk and CPU.
 	streams atomic.Int64
+	// groupVersion counts changes to what the library holds, where version
+	// counts every change at all. See notifyBytes.
+	groupVersion int64
 	// usedAt is when the interface was last asked for something, in unix
 	// milliseconds. The lowest tier of background work waits on it; see
 	// Used.
@@ -552,7 +555,10 @@ func (l *Library) rel(path string) string {
 // upsert adds or updates a file in the index. changed reports whether the
 // index was modified; dup reports that another path already represents this
 // exact file (a hard link or a symlink), in which case nothing is indexed.
-func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, key fileKey, symlink bool) (changed, dup bool) {
+// bytesOnly says the change was nothing but a file's size and time — a
+// download growing — which leaves what the library *holds* untouched. See
+// notifyBytes for why that distinction is worth carrying out of here.
+func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, key fileKey, symlink bool) (changed, bytesOnly, dup bool) {
 	id := PathID(path)
 	// Decoded for showing and for searching; the path itself, and the id
 	// hashed from it, stay the bytes the filesystem gave us (see name.go).
@@ -563,7 +569,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if !l.claim(key, path, symlink) {
-		return false, true
+		return false, false, true
 	}
 	if it, ok := l.items[id]; ok {
 		if it.ino != key { // the path now resolves to a different file
@@ -608,13 +614,16 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 			repaired = true
 		}
 		if it.Size == size && it.ModTime == mt {
-			return repaired, false
+			return repaired, false, false
 		}
 		it.Size = size
 		it.ModTime = mt
 		it.forgetContent()
 		l.markDirty(id)
-		return true, false
+		// Only the bytes moved, unless something above already changed what
+		// the library holds. A file being written says this many times a
+		// second; see notifyBytes.
+		return true, !repaired, false
 	}
 	// Only here, on creation: an existing item that changed on disk is still
 	// the same addition to the library.
@@ -631,7 +640,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 	}
 	l.countKind(kind, 1)
 	l.markDirty(id)
-	return true, false
+	return true, false, false
 }
 
 // forgetContent drops everything that was read from the file's bytes, the
@@ -963,9 +972,38 @@ func (it *Item) declaresDuration() bool {
 }
 
 // notify bumps the version and signals the broadcast loop.
-func (l *Library) notify() {
+func (l *Library) notify() { l.bump(true) }
+
+// notifyBytes announces a change that is only a file's size and time.
+//
+// A download in progress is rewritten constantly — measured on this library
+// with a torrent running, the version moved **45 times a second** — and
+// every derived view is cached against the version: the albums, the
+// artists, the genres, the shows, the narrowed counts and, through the
+// release verdicts those builds produce, the affinity ranking that a
+// listing stamps on every item it hands out. So each request during a
+// download rebuilt all of it, and several requests in flight rebuilt it
+// several times over: measured, 11 CPU-seconds burned inside one 8-second
+// listing, and searches that answer in 270 ms taking 10 to 50.
+//
+// None of those depend on how many bytes of a file have arrived. They
+// depend on what the library *holds* — which files, under which tags — so
+// that is counted separately (groupVersion) and a byte change leaves it
+// alone. The version itself still moves, since the listing shows the size
+// and the tile is keyed by it.
+//
+// What it costs: a release's total size and modified time, which are summed
+// from its tracks, lag while a file grows. They settle when the writer goes
+// quiet and the tags are read, which moves the group version like any other
+// change to what the library holds.
+func (l *Library) notifyBytes() { l.bump(false) }
+
+func (l *Library) bump(shape bool) {
 	l.mu.Lock()
 	l.version++
+	if shape {
+		l.groupVersion++
+	}
 	l.mu.Unlock()
 	select {
 	case l.changed <- struct{}{}:
@@ -973,11 +1011,22 @@ func (l *Library) notify() {
 	}
 }
 
-// Version returns the current library version.
+// Version returns the current library version: anything at all that changed,
+// a growing download included.
 func (l *Library) Version() int64 {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	return l.version
+}
+
+// GroupVersion returns the version of what the library *holds* — which
+// files, under which tags — as against how many bytes of them have arrived.
+// It is what every grouped view and every counted answer is cached against;
+// see notifyBytes for what that is worth.
+func (l *Library) GroupVersion() int64 {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.groupVersion
 }
 
 // Subscribe registers a change listener. Call the returned func to unsubscribe.

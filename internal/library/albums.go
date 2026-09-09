@@ -48,7 +48,7 @@ type Album struct {
 
 // Albums returns all albums, cached per library version.
 func (l *Library) Albums() []*Album {
-	return l.albums.get(l.Version(), l.buildAlbums)
+	return l.albums.get(l.GroupVersion(), l.buildAlbums)
 }
 
 // AlbumByID resolves one album plus its tracks in playback order.

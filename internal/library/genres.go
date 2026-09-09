@@ -52,7 +52,7 @@ type Genre struct {
 // changed. Cached per version like albums and artists; the build asks the
 // album cache beneath it, which is the lock order every grouped view keeps.
 func (l *Library) Genres() []*Genre {
-	return l.genres.get(l.Version(), l.buildGenres)
+	return l.genres.get(l.GroupVersion(), l.buildGenres)
 }
 
 func (l *Library) buildGenres() []*Genre { return genresFrom(l.Albums()) }

@@ -47,7 +47,7 @@ type Artist struct {
 
 // Artists returns every artist in the library, cached per library version.
 func (l *Library) Artists() []*Artist {
-	return l.artists.get(l.Version(), l.buildArtists)
+	return l.artists.get(l.GroupVersion(), l.buildArtists)
 }
 
 func (l *Library) buildArtists() []*Artist { return artistsFrom(l.Albums()) }
