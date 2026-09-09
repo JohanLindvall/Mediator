@@ -1511,17 +1511,13 @@ input[type='range']::-moz-range-thumb {
   width: 92px;
 }
 
-/* queue panel */
 /*
- * The spectrum sits where the queue does, and behaves the same way: anchored
- * above the bar, out of the grid's way, and gone when the player closes.
+ * The spectrum's box. Where it sits is the caller's: in the bar it is one of
+ * the panels stacked above it (.ab-panels), in the player it travels with
+ * the controls (.vo-viz). It used to anchor itself to the window exactly as
+ * the queue panel does, which is why opening both showed only one.
  */
 .viz-panel {
-  position: fixed;
-  right: 14px;
-  bottom: calc(var(--audiobar-h) + 8px + env(safe-area-inset-bottom));
-  z-index: 70;
-  width: min(400px, calc(100vw - 28px));
   background: var(--bg-elev);
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -1560,6 +1556,9 @@ input[type='range']::-moz-range-thumb {
  * Static, so it takes its place in the controls' own flex column instead of
  * being positioned against anything, and pushed to the right-hand end.
  */
+.bar-viz {
+  flex: none;
+}
 .vo-viz {
   position: static;
   align-self: flex-end;
@@ -1623,13 +1622,34 @@ input[type='range']::-moz-range-thumb {
 .viz-note:empty {
   display: none;
 }
-.queue-panel {
+/*
+ * The panels the bar puts above itself: the queue, and the spectrum beneath
+ * it, nearest the bar. The stack owns the anchoring so the two cannot land
+ * on top of each other, and it grows upward — a queue opening pushes nothing
+ * about the spectrum around, which is why the spectrum is the lower of the
+ * two. The container is transparent to the pointer, or the gap between the
+ * panels would swallow presses meant for the listing behind it.
+ */
+.ab-panels {
   position: fixed;
   right: 14px;
   bottom: calc(var(--audiobar-h) + 8px + env(safe-area-inset-bottom));
   z-index: 70;
   width: min(400px, calc(100vw - 28px));
+  max-height: calc(100dvh - var(--audiobar-h) - 24px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.ab-panels > * {
+  pointer-events: auto;
+  min-height: 0;
+}
+.queue-panel {
   max-height: 46vh;
+  /* Gives way before the spectrum where the window is too short for both. */
+  flex: 0 1 auto;
   background: var(--bg-elev);
   border: 1px solid var(--line);
   border-radius: 14px;

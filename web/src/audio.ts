@@ -229,6 +229,8 @@ export class AudioPlayer {
   private queuePainted = { first: -1, last: -1, cur: -1 };
 
   private root: HTMLElement;
+  /** The stack above the bar: the queue, and the spectrum under it. */
+  private panels: HTMLElement;
   private queuePanel: HTMLElement;
   private spectrum: SpectrumPanel;
   private els!: {
@@ -302,13 +304,21 @@ export class AudioPlayer {
         </div>
       </div>`;
 
-    this.spectrum = new SpectrumPanel(this.root.querySelector('[data-viz]') as HTMLElement);
-    document.body.appendChild(this.spectrum.el);
+    this.spectrum = new SpectrumPanel(this.root.querySelector('[data-viz]') as HTMLElement, 'bar-viz');
+    // One stack above the bar holds both panels, so opening both shows both.
+    // The spectrum goes nearest the bar and the queue above it: the spectrum
+    // is a strip of fixed height belonging to the sound coming out now, and
+    // keeping it against the bar means it does not move when the queue is
+    // opened, closed or scrolled — where the other order would shove it up
+    // the screen every time the list appeared.
+    this.panels = document.createElement('div');
+    this.panels.className = 'ab-panels';
+    document.body.appendChild(this.panels);
 
     this.queuePanel = document.createElement('div');
     this.queuePanel.className = 'queue-panel';
     this.queuePanel.hidden = true;
-    document.body.appendChild(this.queuePanel);
+    this.panels.append(this.queuePanel, this.spectrum.el);
 
     this.els = {
       cover: this.q<HTMLImageElement>('.ab-cover'),

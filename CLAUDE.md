@@ -1426,6 +1426,18 @@ Frontend (`web/src`, no framework, no runtime deps):
   queue is adding up; it is the one column that never gives way, the title
   yielding first, and it is absent rather than zero until the library has
   measured the file.
+  **The queue and the spectrum stack** (`.ab-panels`): both used to anchor
+  themselves above the bar at the same place, so opening both showed
+  whichever was drawn last. One container owns the anchoring now and lays
+  them out, which is what makes them impossible to overlap. The **spectrum
+  is the lower of the two**, against the bar: it is a strip of fixed height
+  belonging to the sound coming out now, and keeping it there means it does
+  not move when the queue is opened, closed or filled, where the other order
+  would shove it up the screen every time the list appeared. The stack grows
+  upward, is bounded by the window, and the queue is the one that gives way
+  where both will not fit. It is transparent to the pointer, or the gap
+  between the two panels would swallow presses meant for the listing
+  behind.
   **A release can be put after everything already queued** (`enqueue`,
   the sheet's "Add to queue"). The arithmetic is `appendToOrder` in
   `queue.ts`, pure and tested, because "at the end" is the whole promise of
