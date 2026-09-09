@@ -358,8 +358,10 @@ Go binary with the TypeScript frontend embedded.
   library goes into the queue and is shuffled there, the queue panel drawing
   a window of it rather than every row.
 - **How the music sounds** — in the background, below everything else the
-  server does, each track is decoded once (three twenty-second windows from
-  the middle of it) and described by fifty-six numbers: timbre, brightness,
+  server does and below you: it stands down for a few seconds whenever
+  anybody asks this server for anything, so a page you are looking at is
+  never waiting behind it. Each track is decoded once (three twenty-second
+  windows from the middle of it) and described by fifty-six numbers: timbre, brightness,
   harmony, loudness and dynamics, tempo, pauses. Written down beside the
   thumbnails, read again only when the file changes, about a second of one
   core per track. Three things are read off it:

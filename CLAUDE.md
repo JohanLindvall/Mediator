@@ -120,8 +120,8 @@ Scale invariants (measured at 150k files; keep them true):
   out and the fifth forgot a step — and the album, artist, genre and show
   totals ride on their caches, fed by the builds. `CountsFor` (`counts.go`) is
   the one that cannot be: "how many albums match this?" is not a running
-  total, so a narrowed view costs one pass over the index — cached per (search,
-  flags, version) exactly like the sorted listing beside it, so paging
+  total, so a narrowed view costs one pass over the index — cached per
+  (search, flags, group version) beside the sorted listing's own cache, so paging
   through results or moving between views pays nothing more. The last eight
   answers are kept, not one: a faced or confined caller's listing asks two
   questions per page — its own totals and the search's — and a single slot
@@ -190,7 +190,7 @@ Scale invariants (measured at 150k files; keep them true):
   the way the background sweep does — this probe is what tells the player
   whether the browser can decode what it is already playing. Nothing is
   written down when the context expires: interrupted is not answered.
-- The album/artist endpoints send `ETag: W/"v<version>"` +
+- The album/artist endpoints send `ETag: W/"v<group version>"` +
   `Cache-Control: no-cache`, so browsers revalidate for free; `writeJSON`
   only defaults to no-store when the handler set no policy. The frontend
   additionally throttles those full-list reloads to one per 2 s during
@@ -290,7 +290,28 @@ Change propagation is the core loop:
 - Every mutation calls `notify()` → version bump → `BroadcastLoop` coalesces
   bursts (400 ms) → subscribers get an `Event` → `/api/events` SSE →
   the frontend drops its page cache and refetches the visible window. Version
-  numbers let clients skip no-op refreshes; the grouped views — albums,
+  numbers let clients skip no-op refreshes;
+  **There are two versions, and the second one is what keeps this app usable
+  while a disk is being written to.** `version` counts every change at all;
+  `groupVersion` counts changes to what the library *holds* — which files,
+  under which tags — and a file that merely grew does not move it
+  (`notifyBytes`, told apart by `upsert`, which alone knows the change was
+  a size and a time and nothing else).
+  Measured with a torrent running: the plain version moved **45 times a
+  second**, and every derived view is cached against a version — the albums,
+  the artists, the genres, the shows, the narrowed counts, and through the
+  release verdicts those builds produce, the affinity ranking a listing
+  stamps on every item it hands out. So every request rebuilt all of it, and
+  several requests in flight rebuilt it several times over: searches that
+  answer in 270 ms took **10 to 50 seconds**, a third of all listings were
+  over three, and one 8-second request burned **11 CPU-seconds**. After:
+  0.24 s and 0.26 CPU-seconds, with the same download running.
+  What it costs is that a release's total size and modified time, summed
+  from its tracks, lag while a file grows; they settle when the writer goes
+  quiet and the tags are read, which moves the group version like anything
+  else that changes what the library holds. The **listing** keeps the plain
+  version, because a listing shows the size and orders by it, and its
+  rebuild is a filter and a sort rather than a rebuild of the world. the grouped views — albums,
   artists, genres, shows — are each recomputed lazily and cached per version
   through one arrangement (`perVersion` in `cache.go`), which also carries the
   total the chips read. They sort through one rule too (`orderBy`): a thing
@@ -537,8 +558,16 @@ Change propagation is the core loop:
   no mark at all, so the resemblance ranks and the tile shows only real
   verdicts. The fields stay on the wire for a view that can say it better. `trackPopularity` is verdict, then affinity, then
   plays; the collections have no affinity and keep `popularity`. Rebuilt
-  only when a verdict or a vector changes (`likesGen`, `featuresGen`). And when the album build's release verdicts change, since those decide
-  which tracks are speech and the affinity keeps speech and music apart.
+  only when a verdict or a vector changes (`likesGen`, `featuresGen`) — and
+  the vectors are published on the analysis's own beat rather than per
+  track, since this is rebuilt by the next request that needs it and a
+  generation moving once a second had every request z-scoring the library
+  again for one new song. And when the album build's release verdicts change, since those decide
+  which tracks are speech and the affinity keeps speech and music apart —
+  compared by **content** (`sameMap`), not by identity: the build makes a
+  fresh map every run, so an identity test rebuilt the whole affinity for a
+  map that said exactly what the last one did. Walking twenty thousand
+  entries is a millisecond against the half second it saves.
   A listing page is stamped from one `stamper` — the counts, the verdicts,
   the resemblances and the release verdicts snapshotted once — rather than
   seven locks per item, and so are the similar tracks and the queue.
