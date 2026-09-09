@@ -353,6 +353,10 @@ type Library struct {
 	// work (thumbnail generation, tag enrichment) throttles itself while
 	// playback is active so it never competes with it for disk and CPU.
 	streams atomic.Int64
+	// usedAt is when the interface was last asked for something, in unix
+	// milliseconds. The lowest tier of background work waits on it; see
+	// Used.
+	usedAt atomic.Int64
 
 	metaDB   *blob.DB      // optional persistent cache for enrichment results
 	prioGate chan struct{} // one background priority pass at a time
@@ -420,6 +424,29 @@ func (l *Library) StartStream() func() {
 
 // Streaming reports whether any media stream is being served right now.
 func (l *Library) Streaming() bool { return l.streams.Load() > 0 }
+
+// Used marks the moment somebody asked this server for something.
+//
+// It is the fourth tier's own gate. Playback, thumbnails and tag reading all
+// announce themselves through busy(), but a listing, a search or an album
+// sheet announced nothing at all — so the analysis went on decoding a track
+// a second while the viewer waited for the page in front of them. On a
+// machine with other work on it that is the difference between a listing
+// answering in a quarter second and in ten.
+//
+// A timestamp rather than a counter: a request is over in milliseconds and
+// the thing worth avoiding is starting a second of ffmpeg *just* as somebody
+// begins to browse. What it costs is that a page left open on a library that
+// is being written to holds the analysis off for as long as that lasts,
+// which is the priority order this app is built on and is why the pass rests
+// and looks again rather than giving up.
+func (l *Library) Used() { l.usedAt.Store(time.Now().UnixMilli()) }
+
+// UsedWithin says whether the interface has been used in the last d.
+func (l *Library) UsedWithin(d time.Duration) bool {
+	ms := l.usedAt.Load()
+	return ms != 0 && time.Since(time.UnixMilli(ms)) < d
+}
 
 // New creates a library for the given root directories (absolute paths).
 func New(roots []string, log *slog.Logger) *Library {

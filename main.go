@@ -57,6 +57,12 @@ type stringList []string
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
 func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 
+// uiQuiet is how long after a request the analysis waits before reading
+// another track. Short, because it is only meant to keep a second of ffmpeg
+// from starting under somebody's fingers: a page that is being used asks for
+// something every few seconds, and one that is merely open asks for nothing.
+const uiQuiet = 5 * time.Second
+
 func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address (port 0 picks a free one)")
 	dataDir := flag.String("data", "data", "directory for playback state and the default blob database")
@@ -279,11 +285,16 @@ func run(cfg config, log *slog.Logger) error {
 		// safe to throw away what the database holds for everything else.
 		pruneAll()
 		// Playback outranks thumbnailing, which outranks metadata reading.
+		// What the background tiers stand down for. The analysis adds the
+		// interface itself to that list (uiQuiet): it is the lowest tier and
+		// the only one that runs for minutes at a time, and a viewer waiting
+		// for a listing should not be waiting behind it.
 		busy := func() bool { return lib.Streaming() || thumbs.Generating() }
+		analysisBusy := func() bool { return busy() || lib.UsedWithin(uiQuiet) }
 		lib.EnrichMeta(ctx, busy)
 		// And reading how the music sounds comes after all of them.
 		if cfg.analyze {
-			go lib.AnalyzeLoop(ctx, db, busy)
+			go lib.AnalyzeLoop(ctx, db, analysisBusy)
 		}
 	}()
 

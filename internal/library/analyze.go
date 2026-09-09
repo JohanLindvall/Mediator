@@ -67,11 +67,37 @@ func FFmpegPath() string {
 // SetFeatures records a track's vector, replacing what was there. Used by
 // the analysis, by the loader, and by tests that seed a library.
 func (l *Library) SetFeatures(id string, mtime, size int64, vec []float32) {
+	l.putFeatures(id, mtime, size, vec)
+	l.bumpFeatures()
+}
+
+// putFeatures writes a vector without publishing it.
+//
+// The generation is what the scaled vectors and the affinity ranking are
+// cached against, and both are rebuilt on the request path — a listing
+// stamps every item it hands out with them. Moving it per track meant that
+// during a pass, which writes one a second for hours, **every request
+// rebuilt both**: the whole library z-scored again and every analysed track
+// measured against every verdict, for one new song. Measured on the live
+// library while a pass ran: a listing that answers in 270 ms was taking 10
+// to 50 seconds.
+//
+// So the pass writes with this and publishes on the same beat it moves the
+// version (see analyzeAll) — the same reasoning one layer down, which is
+// where it had been left out.
+func (l *Library) putFeatures(id string, mtime, size int64, vec []float32) {
 	l.featMu.Lock()
 	if l.features == nil {
 		l.features = map[string]featureRec{}
 	}
 	l.features[id] = featureRec{mtime: mtime, size: size, vec: vec}
+	l.featMu.Unlock()
+}
+
+// bumpFeatures publishes what has been written: the next reading rebuilds
+// the scaled vectors, the resemblances and the affinity ranking.
+func (l *Library) bumpFeatures() {
+	l.featMu.Lock()
 	l.featuresGen++
 	l.featMu.Unlock()
 }
@@ -104,10 +130,11 @@ func (l *Library) LoadFeatures(db *blob.DB) int {
 		if version != featuresVersion || (len(vec) != featureDims && len(vec) != 0) {
 			return
 		}
-		l.SetFeatures(id, mtime, size, vec)
+		l.putFeatures(id, mtime, size, vec)
 		n++
 	})
 	if n > 0 {
+		l.bumpFeatures()
 		l.log.Info("audio features restored", "tracks", n)
 	}
 	return n
@@ -196,13 +223,13 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 			// per version, so the version moves now and then rather than
 			// only at the end of a pass that takes the better part of a
 			// day. Every track would be a rebuild a second.
-			l.Touch()
+			l.publishAnalysis()
 		}
 	}
 	l.log.Info("audio analysis pass complete", "done", done, "failed", failed,
 		"took", time.Since(start).Round(time.Second))
 	if done > 0 {
-		l.Touch()
+		l.publishAnalysis()
 	}
 }
 
@@ -211,6 +238,17 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 // seeds vectors is in the same position. The version moves and everything
 // cached per version is rebuilt on its next reading.
 func (l *Library) Touch() { l.notify() }
+
+// publishAnalysis makes a batch of freshly read vectors visible: the
+// resemblances, the affinity ranking and the shelves are all cached against
+// the features generation or the version, and this moves both. It is the
+// pass's own beat — every few hundred tracks and at the end — because each
+// of those caches is rebuilt by the next request that needs it, and a
+// generation that moved once a second made every request pay for it.
+func (l *Library) publishAnalysis() {
+	l.bumpFeatures()
+	l.notify()
+}
 
 // analysisOffsets is where the windows start, in seconds: a quarter, a half
 // and three quarters of the way through, the front matter and the fade left
@@ -277,7 +315,7 @@ func (l *Library) analyzeOne(ctx context.Context, db *blob.DB, it Item) error {
 			return err
 		}
 	}
-	l.SetFeatures(it.ID, it.ModTime, it.Size, vec)
+	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
 	return nil
 }
 

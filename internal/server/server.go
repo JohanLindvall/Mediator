@@ -153,10 +153,25 @@ func (s *Server) AllowRootChanges(fn SetRootsFunc, persisted bool) {
 
 // Handler returns the root handler.
 func (s *Server) Handler() http.Handler {
+	h := s.used(s.mux)
 	if s.access {
-		return logged(s.mux, s.log)
+		return logged(h, s.log)
 	}
-	return s.mux
+	return h
+}
+
+// used marks every request somebody is waiting on, which is what the lowest
+// tier of background work stands down for (library.Used). Our own reads are
+// not somebody waiting: a thumbnail fetching an archived member over the
+// loopback address carries the internal marker, and counting it would have
+// the analysis stand down for work it is already standing down for.
+func (s *Server) used(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(library.InternalHeader) != library.InternalToken() {
+			s.lib.Used()
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // LogRequests records every request and what it was answered with, at debug

@@ -583,10 +583,21 @@ Change propagation is the core loop:
   so the two add up), it leaves the Albums, Artists and Genres views and the
   queue-all groupings — a narrator is not a performer — it is found by the
   word "audiobook", and `Similar` answers a song with music and a chapter
-  with readings only. The analysis bumps the version every `analysisReport`
-  tracks and at the end of a pass (`Touch`), since the collections are
-  cached per version and a shelf that filled only at the end of a six-hour
-  pass would look broken; every track would be a rebuild a second.
+  with readings only. The analysis publishes on a beat — every `analysisReport` tracks and at
+  the end of a pass (`publishAnalysis`) — rather than per track, and it
+  publishes **two** things: the version, since the collections are cached
+  against it and a shelf that filled only at the end of a six-hour pass
+  would look broken, and the **features generation**, which is what the
+  scaled vectors, the resemblances and the affinity ranking are cached
+  against. The second was left out for a while and cost far more than the
+  first, because those caches are rebuilt **on the request path**: a listing
+  stamps every item it hands out with the affinity, so a generation that
+  moved once a second had every request z-scoring the whole library again
+  and measuring every analysed track against every verdict, for one new
+  song. Measured on the live library during a pass: listings that answer in
+  270 ms were taking 10 to 50 seconds, a third of them over three. The pass
+  therefore writes with `putFeatures`, which publishes nothing, where
+  `SetFeatures` — the loader's door and the tests' — still does.
   **Radio** (`audio.ts`): the bar's toggle, remembered, tops the queue up
   with a batch of similar tracks whenever fewer than `RADIO_AHEAD` follow the
   one playing — on every track change and when the queue runs out, where
@@ -1329,7 +1340,12 @@ Frontend (`web/src`, no framework, no runtime deps):
   total not held is 0: it means the last query matched nothing, so there is
   nothing to hold, and `fetchPage`'s past-the-end guard would refuse the very
   fetch meant to replace it. A total of -1 still means nothing has ever arrived — a first load has no rows to keep and shows skeletons, because
-  there the wait is real.
+  there the wait is real. **The skeletons are the grid's**: a count below
+  zero is a source that has not answered, and the grid fills the screen with
+  placeholder cells for as long as that lasts, asking the source for
+  nothing. It drew nothing at all before, so a listing that took a moment —
+  a cold search over a large library, a busy disk — was a black screen with
+  no sign that anything had been asked for.
   **Rows are held over only while they are the rows on screen**, and that
   is one rule at one door (`applyQuery`, the `arriving` flag) rather than a
   guard per view. A source the grid has not been drawing holds the answer
@@ -2483,8 +2499,18 @@ set that has gone away should be given up on in seconds, and no more than
 - The queue panel renders only while it is visible, so it must be unhidden
   *before* it is filled — filling it first left an empty box on screen.
 
-Background work is priority-ordered: **playback > thumbnails > tag
-enrichment**. `handleStream` marks active media responses
+Background work is priority-ordered: **the interface > playback >
+thumbnails > tag enrichment > reading how the music sounds**. The interface
+is at the top and used to be nowhere: playback, thumbnails and tag reading
+all announced themselves through `busy()`, but a listing, a search or an
+album sheet announced nothing, so the analysis went on decoding a track a
+second while the viewer waited for the page in front of them. Every request
+somebody waits on marks the library (`Library.Used`, from one wrapper in
+`Handler`, skipping this process's own loopback reads), and the analysis
+stands down for `uiQuiet` (5 s) afterwards. What it costs is that a page
+left open on a library being written to holds the pass off for as long as
+that lasts, which is the priority order this app is built on; the pass rests
+and looks again rather than giving up. The rest of the order is unchanged: `handleStream` marks active media responses
 (`Library.StartStream`/`Streaming`) — except its own process's internal
 reads, which carry `library.InternalHeader`; while one is live, thumbnail generation
 collapses to a single job (`bgSem` in `thumbs.go`) and `EnrichMeta` pauses

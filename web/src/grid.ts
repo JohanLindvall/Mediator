@@ -184,9 +184,25 @@ export class VirtualGrid<T> {
     if (update) this.update(true);
   }
 
+  /** Enough cells to cover the viewport: what is drawn while waiting. */
+  private screenful(): number {
+    const pitch = this.rowH + this.gap;
+    const rows = pitch > 0 ? Math.ceil(this.scroller.clientHeight / pitch) + 1 : 1;
+    return Math.max(this.cols, rows * this.cols);
+  }
+
   update(force = false): void {
     if (this.cols < 1) return; // geometry not computed yet (hidden container)
-    const count = Math.max(0, this.adapter.count());
+    // A count below zero is a source that has not answered yet, and the grid
+    // fills the screen with skeleton cells for as long as that lasts. It used
+    // to draw nothing at all: a listing that takes a moment — a cold search
+    // over a large library, a busy disk — was a black screen with no sign
+    // that anything had been asked for, and the emptier it looked the longer
+    // the wait felt. The renderers already draw a skeleton for a cell whose
+    // item is not there, which is what a page beyond the loaded ones shows.
+    const known = this.adapter.count();
+    const loading = known < 0;
+    const count = loading ? this.screenful() : known;
     const rows = Math.ceil(count / this.cols);
     const totalH = rows > 0 ? rows * this.rowH + (rows - 1) * this.gap : 0;
     this.plane.style.height = `${totalH}px`;
@@ -203,7 +219,10 @@ export class VirtualGrid<T> {
     if (!force && a === this.lastRange[0] && b === this.lastRange[1]) return;
     this.lastRange = [a, b];
 
-    if (count > 0 && b >= a) {
+    // Nothing is asked for while the count is unknown: the source is already
+    // fetching the first page, and a screenful of skeletons is not a range
+    // anybody has scrolled to.
+    if (!loading && count > 0 && b >= a) {
       this.adapter.need(a, Math.min(count - 1, b + this.cols * OVERSCAN_ROWS));
     }
 

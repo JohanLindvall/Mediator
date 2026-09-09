@@ -2,6 +2,8 @@ package library
 
 import (
 	"fmt"
+	"io"
+	"log/slog"
 	"slices"
 	"testing"
 	"time"
@@ -497,5 +499,56 @@ func TestOneRecordingIsOfferedOnce(t *testing.T) {
 	}
 	if untitled < 2 {
 		t.Errorf("untitled tracks offered: %d, want them all", untitled)
+	}
+}
+
+// What a listing pays for is cached against the features generation — the
+// scaled vectors, the resemblances, the affinity ranking — and all of it is
+// rebuilt on the request path. So the pass writes its vectors without
+// publishing them and publishes on its own beat: a generation that moved
+// once a second had every request rebuilding the whole library's scaled
+// vectors for one new song.
+func TestAnalysisPublishesInBatches(t *testing.T) {
+	l := libWithSounds(t)
+	before := l.scaledVectors()
+	if before == nil {
+		t.Fatal("no scaled vectors")
+	}
+	// A track read by the pass: written, not published.
+	l.putFeatures("newtrack", 1, 1, shapedVector(0.5, false))
+	if got := l.scaledVectors(); got != before {
+		t.Error("a track written by the pass rebuilt the scaled vectors")
+	}
+	// The pass's own beat publishes the batch.
+	l.bumpFeatures()
+	after := l.scaledVectors()
+	if after == before {
+		t.Fatal("publishing did not rebuild the scaled vectors")
+	}
+	if _, ok := after.vecs["newtrack"]; !ok {
+		t.Error("the published batch left the track out")
+	}
+	// And the door tests and the loader come through still publishes.
+	l.SetFeatures("another", 1, 1, shapedVector(0.6, false))
+	if l.scaledVectors() == after {
+		t.Error("SetFeatures no longer publishes what it wrote")
+	}
+}
+
+// The lowest tier of background work stands down while somebody is using the
+// interface. Nothing else announced a listing or a search — only playback,
+// thumbnails and tag reading did — so the analysis went on decoding a track
+// a second while the viewer waited for the page in front of them.
+func TestUsedMarksTheInterface(t *testing.T) {
+	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if l.UsedWithin(time.Minute) {
+		t.Error("a library nobody has asked anything reports use")
+	}
+	l.Used()
+	if !l.UsedWithin(time.Minute) {
+		t.Error("a request went unnoticed")
+	}
+	if l.UsedWithin(0) {
+		t.Error("use with no window at all counted")
 	}
 }
