@@ -1420,9 +1420,13 @@ Frontend (`web/src`, no framework, no runtime deps):
   card to change. So a view arriving from a *different source* drops what
   that source holds (`reset` on both kinds of source, the generation moving
   with it so an answer in flight for the older view cannot put the rows
-  back) and draws skeletons for the moment it takes, which is honest. A
-  view arriving from its own source keeps them, which is what makes a
-  search read as the listing settling.
+  back) and draws skeletons for the moment it takes, which is honest. A view arriving from its own source keeps them, which is what makes a
+  search read as the listing settling. **An address that changed under the
+  page keeps nothing**, whatever view it names: a link followed, a shortlink
+  opened, the Back gesture. That is a jump to somewhere else rather than a
+  listing settling, and holding the rows over rewound the grid to the top of
+  wherever it had been and showed a screenful of it — thumbnails and all —
+  until the linked view answered.
   Which source a view draws from is **one table** (`viewSource` in
   `query.ts`, pure and tested), because three things ask it and any two of
   them disagreeing is a view drawn from the wrong data: this rule, the
@@ -3607,7 +3611,13 @@ Serving details worth knowing before "fixing" them:
   database means new URLs and a refetch; the same database means the cache
   still stands, which is what keeps thumbnail loads off the connections
   playback needs. `main.ts` awaits `/api/info` before the first listing,
-  because a URL built a moment too early is the old URL.
+  because a URL built a moment too early is the old URL. **The live stream
+  opens before that** — it is wanted from the first moment — and its first
+  event arrives in milliseconds, so the change handler waits for the first
+  draw (`booted`) before refetching anything: the source is born holding the
+  default query, and a refresh in that window fetched *the whole library*
+  under a link that named a search. Nothing is lost by waiting, the first
+  draw fetching anyway.
 
 Docker: multi-stage (go gen → node → go → alpine, see Commands above). The Go
 stage outputs to `/out/mediator` because Alpine already has a `/media`

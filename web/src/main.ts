@@ -1730,11 +1730,23 @@ function refreshLibrary(): void {
   reloadGroupedView();
 }
 
+/**
+ * Whether the address has been read and drawn yet.
+ *
+ * The live stream opens before that — it is wanted from the first moment —
+ * and its first event arrives in milliseconds, where the first draw waits on
+ * /api/info. A refresh in between would fetch the query the source was
+ * *born* with, which is the whole library: a link into a search would show a
+ * screenful of everything, thumbnails and all, before the search answered.
+ * Nothing is lost by waiting, since the first draw fetches anyway.
+ */
+let booted = false;
+
 subscribeEvents(
   (version, counts) => {
     lastCounts = counts;
     renderChips();
-    if (version === libSource.version) return;
+    if (!booted || version === libSource.version) return;
     if (viewerOpen()) {
       // Caught up when it closes; see viewerOpen.
       missedChange = true;
@@ -1782,6 +1794,7 @@ void (async () => {
   prefsBtn.hidden = serverAbout()?.confined === true;
 
   applyHash(false);
+  booted = true;
 
   getPositions()
     .then((res) => {
@@ -1798,6 +1811,12 @@ void (async () => {
  */
 function applyHash(reset: boolean): void {
   readHash();
+  // An address that changed under the page is a jump to somewhere else, not
+  // a listing settling under a search — so what is on screen goes rather
+  // than being held over. Following a link into the library otherwise
+  // rewound the grid to the top of wherever it had been and showed a
+  // screenful of it, thumbnails and all, until the linked view answered.
+  if (reset) (collectionOnScreen() ?? libSource).reset();
   searchInput.value = state.q;
   searchClear.hidden = state.q === '';
   renderSortOptions();
