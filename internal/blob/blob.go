@@ -407,6 +407,16 @@ type Item struct {
 	// would restore every one of those items as finished and never read one
 	// again.
 	Shape int `json:"shape,omitempty"`
+	// And what was read: the picture's size and rate. The marker used to be
+	// mirrored without them, so a warm start restored "this has been
+	// measured" and none of the measurements — the tooltip lost the size and
+	// the frame rate until the file was opened, and, far worse, the rule
+	// that decides whether a conversion goes to the graphics hardware
+	// (hwWorthIt) is pixels a second and had nothing to work with, so every
+	// film converted on the processor after every restart.
+	Width  int     `json:"w,omitempty"`
+	Height int     `json:"h,omitempty"`
+	FPS    float64 `json:"fps,omitempty"`
 }
 
 // Items returns every persisted index record.

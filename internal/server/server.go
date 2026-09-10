@@ -971,6 +971,11 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	if start < 0 || start > 1e7 {
 		start = 0
 	}
+	// What is being converted has to be known before it can be decided where
+	// to convert it: the rule is pixels a second, and a film nobody has
+	// opened this run has no size or rate on it. This is the probe that runs
+	// when a film is opened anyway, once per item per process.
+	it = s.probed(r.Context(), it)
 
 	// At most two live transcodes; further viewers wait their turn.
 	select {

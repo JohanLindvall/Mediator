@@ -56,6 +56,7 @@ func (l *Library) LoadFromDB(db *blob.DB) int {
 			Album: cleanTag(r.Album), Genre: cleanGenreTag(r.Genre), Track: r.Track,
 			Year:   cleanYear(r.Year),
 			VCodec: r.VCodec, ACodec: r.ACodec, enriched: r.Enriched, shape: r.Shape,
+			Width: r.Width, Height: r.Height, FPS: r.FPS,
 		}
 		// The episode a path names is parsed rather than stored: it is
 		// derived from the path, the record has no field for it, and this
@@ -159,6 +160,7 @@ func (l *Library) flush(db *blob.DB) {
 			Title:    it.Title, Artist: it.Artist, Album: it.Album,
 			Genre: it.Genre, Track: it.Track, Year: it.Year,
 			VCodec: it.VCodec, ACodec: it.ACodec, Enriched: it.enriched, Shape: it.shape,
+			Width: it.Width, Height: it.Height, FPS: it.FPS,
 		})
 	}
 	remove := make([]string, 0, len(l.removed))
