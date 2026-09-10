@@ -810,6 +810,19 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 			h.run(ctx, s, it, t, copyVideo, audio)
 			return
 		}
+		// A run the graphics engine was carrying is written off for this
+		// file: half a conversion is a viewer watching a spinner, and the
+		// processor always works. Where nothing playable was written the
+		// session runs again on it, into the same session, whose waiters are
+		// still waiting.
+		if plan.hardware {
+			hwRefused.note(it)
+			h.log.Info("converting on the processor from now on", "path", it.Rel)
+			if !s.playable() {
+				h.run(ctx, s, it, t, copyVideo, audio)
+				return
+			}
+		}
 		// Only a failure that produced nothing is a failure to the caller;
 		// one that stopped part way leaves a playable prefix behind.
 		s.failIfEmpty(err)
@@ -864,14 +877,22 @@ func (s *hlsSession) fail(err error) {
 	s.finish()
 }
 
-// failIfEmpty records an error only when nothing playable was produced.
-func (s *hlsSession) failIfEmpty(err error) {
+// playable says something has been produced that a player can start on.
+func (s *hlsSession) playable() bool {
 	select {
 	case <-s.ready:
-		return // something was already playable
+		return true
 	default:
-		s.err = err
+		return false
 	}
+}
+
+// failIfEmpty records an error only when nothing playable was produced.
+func (s *hlsSession) failIfEmpty(err error) {
+	if s.playable() {
+		return
+	}
+	s.err = err
 }
 
 func (s *hlsSession) finish() {

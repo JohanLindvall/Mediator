@@ -21,8 +21,12 @@ import (
 // conversion is a planned run: the arguments up to the output, and the pipe
 // feeding standard input where that is the only way to the bytes.
 type conversion struct {
-	args  []string
-	stdin io.ReadCloser // nil where the input is a path or a URL
+	// hardware says the graphics engine was asked to carry this one, so a
+	// caller whose run failed knows whether to write the hardware off for
+	// this file and try again on the processor (hwRefused).
+	hardware bool
+	args     []string
+	stdin    io.ReadCloser // nil where the input is a path or a URL
 }
 
 // close lets go of the pipe, where there was one.
@@ -72,6 +76,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 	// Where this conversion runs. Decided before anything else, because it
 	// changes the arguments on both sides of the input.
 	onHardware := !copyVideo && hw.use(ffmpeg, it, log)
+	c.hardware = onHardware
 
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
 	if onHardware {

@@ -61,7 +61,7 @@ func TestHardwareKeepsFramesWhereTheyAre(t *testing.T) {
 // Deinterlacing has to happen on the hardware too — bwdif works on frames in
 // system memory, which these are not — and only where the file says it is
 // needed, which is what auto=1 means.
-func TestHardwareDeinterlacesAndScales(t *testing.T) {
+func TestHardwareScalesAndDoesNotDeinterlace(t *testing.T) {
 	args := videoEngines[0].encode("/dev/dri/renderD128", 1920)
 	var vf string
 	for i, a := range args {
@@ -72,8 +72,13 @@ func TestHardwareDeinterlacesAndScales(t *testing.T) {
 	if vf == "" {
 		t.Fatal("no filter chain")
 	}
-	if !strings.HasPrefix(vf, "deinterlace_vaapi=auto=1,") {
-		t.Errorf("chain %q does not deinterlace first", vf)
+	// No deinterlacer, where the software chain has one: nothing that
+	// reaches the hardware can be interlaced — interlacing is a
+	// standard-definition and 1080i habit, all far below the pixel rate
+	// that sends work here — and the filter itself fails on the driver this
+	// was measured on, taking the conversion with it.
+	if strings.Contains(vf, "deinterlace_vaapi") {
+		t.Errorf("chain %q deinterlaces; see the note on the recipe", vf)
 	}
 	if !strings.Contains(vf, "scale_vaapi=w='min(1920,iw)'") {
 		t.Errorf("chain %q does not cap the width", vf)

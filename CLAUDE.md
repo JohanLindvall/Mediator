@@ -2781,11 +2781,25 @@ Serving details worth knowing before "fixing" them:
   frames left alone, 0.37 with them brought back). The **codec list is short
   on purpose**: hardware that cannot decode something produces *no frames at
   all*, silently — a DivX file through Intel's video engine produced none —
-  and those old codecs are the ones most likely to need converting. And the
-  deinterlacer has to be the hardware's own, since bwdif works on frames in
-  system memory, which these are not; `auto=1` is the same judgement
-  `deint=interlaced` makes in software, verified on an interlaced disc at
-  166 frames of 166 progressive.
+  and those old codecs are the ones most likely to need converting. And **the hardware chain has no deinterlacer at all**, where the software
+  one always does. It had the hardware's own — bwdif works on frames in
+  system memory, which these are not — and that filter turned out to fail
+  outright on the driver here: measured on a 1080x1920 60 fps clip, "Error
+  while filtering: Cannot allocate memory" after 2.9 s and a truncated
+  stream, which is a viewer watching a spinner that never resolves, where
+  the same conversion without it finishes in 2.7 s — four and a half times
+  real time. It was removed rather than repaired because **nothing that
+  reaches the hardware can be interlaced**: interlacing is a
+  standard-definition and 1080i habit, and every one of those is far below
+  the pixel rate that sends work here, so the filter was only ever a frame
+  copy waiting to fail.
+  **And a hardware run that fails is written off for that file**
+  (`hwRefused`): the failure of a graphics engine is silent and total, and
+  not always something a list of codecs can predict — a driver refuses a
+  size, runs out of surfaces, or simply gives up. The next attempt converts
+  on the processor, which is slower and always works, and where nothing had
+  been sent yet the attempt is made again at once rather than reported. Per
+  file and per run, like the other verdicts here.
   Four backends are defined — VAAPI, QSV, NVENC, VideoToolbox — and **only
   VAAPI has been measured**. That is safe because of how one is chosen: each
   is *proved* by running a real conversion through it before it is ever used,

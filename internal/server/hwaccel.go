@@ -87,7 +87,19 @@ var videoEngines = []hwBackend{
 		},
 		encode: func(_ string, w int) []string {
 			return []string{
-				"-vf", "deinterlace_vaapi=auto=1,scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=nv12",
+				// No deinterlacer here, where the software chain has one.
+				// Two reasons, and the second is why it was removed rather
+				// than fixed: nothing that reaches the hardware can be
+				// interlaced — interlacing is a standard-definition and
+				// 1080i habit, and every one of those is far below the pixel
+				// rate that sends work here — and `deinterlace_vaapi` fails
+				// outright on this driver. Measured on a 1080x1920 60 fps
+				// clip: "Error while filtering: Cannot allocate memory"
+				// after 2.9 s and a truncated stream, where the same
+				// conversion without it finishes in 2.7 s, which is four and
+				// a half times real time. What the viewer saw was a spinner
+				// that never resolved.
+				"-vf", "scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=nv12",
 				"-c:v", "h264_vaapi",
 				// A ceiling rather than a quality target. Everything that
 				// reaches the hardware is demanding by definition — that is
@@ -222,7 +234,7 @@ const hwPixelRate = 120_000_000
 // decision to guess at, and guessing wrong costs either a stalling film or a
 // stream five times larger than it needed to be.
 func (h *hwaccel) use(ffmpeg string, it library.Item, log *slog.Logger) bool {
-	if !hwWorthIt(it) || !h.searched.Load() {
+	if !hwWorthIt(it) || !h.searched.Load() || hwRefused.has(it) {
 		return false
 	}
 	engine, _ := h.chosen()
@@ -341,3 +353,15 @@ func (e *hwProbeError) Error() string {
 	}
 	return e.err.Error() + ": " + e.out
 }
+
+// hwRefused is what the hardware has failed on, for the run.
+//
+// The failure of a graphics engine is silent and total — no frames, or a
+// stream that stops half way — and it is not always something a list of
+// codecs can predict: a driver refuses a size, runs out of surfaces, or
+// simply gives up. So a conversion that fails while the hardware was
+// carrying it puts the file here, and the next attempt converts it on the
+// processor, which is slower and always works. Per file and per run, like
+// the other verdicts here; a restart tries the hardware again, at the cost
+// of one failed attempt.
+var hwRefused badAspect

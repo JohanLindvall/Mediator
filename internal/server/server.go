@@ -1030,6 +1030,14 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		// Nothing went out, so there is still a status to give: a run that
 		// could not so much as open its input used to answer an empty 200,
 		// which in the access log is indistinguishable from success.
+		// A run the graphics engine was carrying is written off for this
+		// file whether it produced anything or not: half a stream is a
+		// viewer watching a spinner, and the processor always works. Noted
+		// before the retry below, so the retry is already on it.
+		if plan.hardware {
+			hwRefused.note(it)
+			s.log.Info("converting on the processor from now on", "path", it.Rel)
+		}
 		if out.n == 0 {
 			// Unless what stopped it was the file's own declaration of what
 			// shape its pixels are, which is not about the bytes at all:
@@ -1039,6 +1047,12 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 			if aspectRefused(errBuf.String()) && !aspects.has(it) {
 				aspects.note(it)
 				s.log.Info("converting again with the declared aspect put right", "path", it.Rel)
+				s.handleTranscode(w, r)
+				return
+			}
+			// The same start-over where the hardware was what failed and
+			// nothing has gone out yet: the retry runs on the processor.
+			if plan.hardware {
 				s.handleTranscode(w, r)
 				return
 			}
