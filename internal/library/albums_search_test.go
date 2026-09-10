@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -563,5 +564,55 @@ func TestCoverPrefersAReleaseThatHasOne(t *testing.T) {
 	got := l2.Artists()
 	if len(got) != 1 || got[0].CoverID != PathID("/library/Tern Signal/2003/01 track.mp3") {
 		t.Errorf("with no sleeves anywhere the cover is %v, want the most recent release", got)
+	}
+}
+
+// A collection can be ordered by what arrived in the library lately, which
+// is not the same question as what was written lately: a download carries
+// the timestamp it was made with, so a record from 1994 fetched this
+// morning is old by one and new by the other.
+func TestCollectionsSortByWhatArrived(t *testing.T) {
+	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// Two performers. The old record arrived today; the new one has been
+	// here for months. By modification time they sort one way and by
+	// arrival the other, which is the whole point of the key.
+	add := func(artist, album string, modified, arrived int64) {
+		path := fmt.Sprintf("/library/%s/%s/01 track.mp3", artist, album)
+		l.upsert(path, KindAudio, 1000, time.Unix(modified, 0), fileKey{}, false)
+		l.setMeta(PathID(path), tagMeta{artist: artist, album: album, genre: "Rock"}, 1000)
+		l.mu.Lock()
+		l.items[PathID(path)].FirstSeen = arrived
+		l.mu.Unlock()
+	}
+	add("Gorse Beacon", "Old Record", 100, 9000) // written long ago, here today
+	add("Tern Signal", "New Record", 900, 1000)  // written lately, here for ages
+
+	byKey := func(sortKey string) []string {
+		out := []string{}
+		for _, a := range l.SearchArtists("", sortKey, true, PathFilter{}) {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+	if got := byKey("mtime"); !slices.Equal(got, []string{"Tern Signal", "Gorse Beacon"}) {
+		t.Errorf("by modified = %v", got)
+	}
+	if got := byKey("added"); !slices.Equal(got, []string{"Gorse Beacon", "Tern Signal"}) {
+		t.Errorf("by added = %v, want the performer whose file arrived last first", got)
+	}
+
+	// The releases answer the same way, and each carries the arrival of its
+	// newest track rather than of its first.
+	albums := l.SearchAlbums(AlbumQuery{Sort: "added", Desc: true})
+	if len(albums) != 2 || albums[0].Name != "Old Record" {
+		t.Errorf("releases by added = %v", albumNames(albums))
+	}
+	if albums[0].Added != 9000 {
+		t.Errorf("the release's arrival = %d, want its newest track's", albums[0].Added)
+	}
+	// And a genre gathers the newest of everything filed under it.
+	genres := l.SearchGenres("", "added", true, PathFilter{})
+	if len(genres) != 1 || genres[0].Added != 9000 {
+		t.Errorf("the genre's arrival = %v", genres)
 	}
 }

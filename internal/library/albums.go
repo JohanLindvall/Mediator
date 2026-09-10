@@ -21,7 +21,11 @@ type Album struct {
 	TrackIDs []string `json:"-"`      // track lists ship via AlbumDetailResponse only
 	Tracks   int      `json:"tracks"`
 	CoverID  string   `json:"coverId,omitempty"` // item whose artwork represents the album
-	Genre    string   `json:"genre,omitempty"`   // when the tracks agree: the first one named
+	// Added is when the newest of its tracks first appeared in this library.
+	// Not the same question as ModTime, which is the file's own timestamp and
+	// on a download is usually the original's: this is "what is new here".
+	Added int64  `json:"added,omitempty"`
+	Genre string `json:"genre,omitempty"` // when the tracks agree: the first one named
 	// Genres is every genre the tag names — a field reading "Death Metal |
 	// Viking Metal" puts the release in both, which is what it says. Genre
 	// is the first of these, for sorting and for the one-line caption.
@@ -169,6 +173,7 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 // four switches used to spell the shared cases out four times.
 type collection interface {
 	modTime() int64
+	added() int64
 	size() int64
 	tracks() int
 	popularity() int64
@@ -177,24 +182,28 @@ type collection interface {
 }
 
 func (a *Album) modTime() int64     { return a.ModTime }
+func (a *Album) added() int64       { return a.Added }
 func (a *Album) size() int64        { return a.Size }
 func (a *Album) tracks() int        { return a.Tracks }
 func (a *Album) popularity() int64  { return popularity(a.Likes, a.Plays) }
 func (a *Album) duration() int64    { return a.Duration }
 func (a *Album) orderName() string  { return a.sortName }
 func (a *Artist) modTime() int64    { return a.ModTime }
+func (a *Artist) added() int64      { return a.Added }
 func (a *Artist) size() int64       { return a.Size }
 func (a *Artist) tracks() int       { return a.Tracks }
 func (a *Artist) popularity() int64 { return popularity(a.Likes, a.Plays) }
 func (a *Artist) duration() int64   { return a.Duration }
 func (a *Artist) orderName() string { return a.sortName }
 func (g *Genre) modTime() int64     { return g.ModTime }
+func (g *Genre) added() int64       { return g.Added }
 func (g *Genre) size() int64        { return g.Size }
 func (g *Genre) tracks() int        { return g.Tracks }
 func (g *Genre) popularity() int64  { return popularity(g.Likes, g.Plays) }
 func (g *Genre) duration() int64    { return g.Duration }
 func (g *Genre) orderName() string  { return g.sortName }
 func (s *Series) modTime() int64    { return s.ModTime }
+func (s *Series) added() int64      { return s.Added }
 func (s *Series) size() int64       { return s.Size }
 func (s *Series) tracks() int       { return s.Episodes }
 func (s *Series) popularity() int64 { return popularity(s.Likes, s.Plays) }
@@ -207,6 +216,12 @@ func compareCommon(a, b collection, sortKey string) int {
 	switch sortKey {
 	case "mtime":
 		return cmp.Compare(a.modTime(), b.modTime())
+	case "added":
+		// When the newest thing in it turned up here, which is a different
+		// question from when the file was last written: a download carries
+		// the timestamp it was made with, so a record from 1994 arriving
+		// today sorts old by one and new by the other.
+		return cmp.Compare(a.added(), b.added())
 	case "size":
 		return cmp.Compare(a.size(), b.size())
 	case "tracks", "episodes":
@@ -585,6 +600,13 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 		}
 		if t.ModTime > a.ModTime {
 			a.ModTime = t.ModTime
+		}
+		// When the newest of them turned up here, which is what "Added"
+		// sorts by. A playlist's own arrival is not the question either: its
+		// tracks are what was added, and the file naming them may be older
+		// than all of them or newer.
+		if t.FirstSeen > a.Added {
+			a.Added = t.FirstSeen
 		}
 		if t.Album != "" {
 			tagCount[albumTitle(t.Album)]++

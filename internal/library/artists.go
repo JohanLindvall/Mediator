@@ -16,6 +16,8 @@ type Artist struct {
 	Albums  int    `json:"albums"`
 	Tracks  int    `json:"tracks"`
 	CoverID string `json:"coverId,omitempty"` // item whose artwork represents the artist
+	// Added is when the newest file of theirs first appeared here; see Album.Added.
+	Added int64 `json:"added,omitempty"`
 	// Genre is what most of their releases are tagged as. A performer is not
 	// one genre — but a listing that says nothing at all is worse than one
 	// that says what they are mostly filed under.
@@ -113,6 +115,9 @@ func artistsFrom(albums []*Album) []*Artist {
 		}
 		if a.ModTime > ar.ModTime {
 			ar.ModTime = a.ModTime
+		}
+		if a.Added > ar.Added {
+			ar.Added = a.Added
 		}
 		// The most recent release that has a sleeve, rather than the most
 		// recent of all: a performer whose latest release keeps no picture

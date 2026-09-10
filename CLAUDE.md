@@ -317,9 +317,22 @@ Change propagation is the core loop:
   total the chips read. They sort through one rule too (`orderBy`): a thing
   that carries the sort key beats one that does not whichever way the sort
   runs, then the name, then the id — four copies of that closure had begun to
-  drift. The keys the four grouped views share — modified, size, tracks,
+  drift. The keys the four grouped views share — modified, **added**, size, tracks,
   popularity, length — are compared once too (`collection`,
   `compareCommon`), each view adding only its own.
+  **Added is not modified**, and the difference is the point: a file carries
+  the timestamp it was written with, so a record from 1994 downloaded this
+  morning is old by one and new by the other, and "what is new in my
+  library" is the question a shelf is actually asked. A collection's is the
+  arrival of the newest thing in it — a release's newest track, a
+  performer's newest release, a genre's newest release, a show's newest
+  episode — taken from `Item.FirstSeen`, which the index stamps when it
+  first sees a path and the mirrored record carries across restarts. The
+  releases and the performers offer it in their sort menus, which is where
+  it was asked for; the genres and the shows carry the field and order by it
+  if asked, without a menu entry of their own yet. A playlist album takes
+  its tracks' arrivals rather than its own: the file naming them may be
+  older than all of them or newer.
 - Listing (`List`) filters + sorts + pages under `RLock` and returns *copies*
   of items — background enrichment (`enrich.go`: audio tags incl.
   track/year/genre, plus durations for audio and video) mutates items under

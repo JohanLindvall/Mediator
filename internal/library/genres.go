@@ -31,6 +31,8 @@ type Genre struct {
 	Albums  int    `json:"albums"`
 	Tracks  int    `json:"tracks"`
 	CoverID string `json:"coverId,omitempty"` // item whose artwork represents the genre
+	// Added is when the newest file filed under it first appeared here.
+	Added int64 `json:"added,omitempty"`
 	// The span the dated releases in it cover. Both 0 when none are dated.
 	FromYear int   `json:"fromYear,omitempty"`
 	ToYear   int   `json:"toYear,omitempty"`
@@ -97,6 +99,9 @@ func genresFrom(albums []*Album) []*Genre {
 			}
 			if a.ModTime > g.ModTime {
 				g.ModTime = a.ModTime
+			}
+			if a.Added > g.Added {
+				g.Added = a.Added
 			}
 			// The most recent release that has a sleeve; see betterCover.
 			if betterCover(a, g.coverArt, g.coverTime) {

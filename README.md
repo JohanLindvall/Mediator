@@ -515,7 +515,11 @@ Go binary with the TypeScript frontend embedded.
   resolution and by bitrate**, which are two different questions — the
   biggest picture and the heaviest file are rarely the same release; albums
   also by artist, year, genre, track count and length; artists by how many
-  albums, how many tracks and how long. A release that carries the value sorts ahead
+  albums, how many tracks and how long. Both also by **date added** — when
+  the newest thing in them turned up here, which is not when the files were
+  written: a record from 1994 downloaded this morning is old by one and new
+  by the other, and the second is what answers "what is new in my
+  library". A release that carries the value sorts ahead
   of one that does not, whichever way the order runs. Opening a performer
   lists their releases by year, newest first unless the order has been
   turned round. UI state lives in the URL hash. A change of view goes onto the history, so Back returns from a

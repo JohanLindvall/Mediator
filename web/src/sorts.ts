@@ -39,6 +39,11 @@ export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[strin
         ['tracks', 'Tracks'],
         ['duration', 'Length'],
         ['mtime', 'Modified'],
+        // What arrived here lately, which is not what was written lately: a
+        // record from 1994 downloaded this morning is old by one and new by
+        // the other, and "what is new in my library" is the question people
+        // actually ask of a shelf.
+        ['added', 'Added'],
         ['size', 'Size'],
       ];
     case 'artists':
@@ -49,6 +54,9 @@ export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[strin
         ['tracks', 'Tracks'],
         ['duration', 'Length'],
         ['mtime', 'Modified'],
+        // The newest file of theirs, so a performer with one new record
+        // comes to the front; see the note on the album list.
+        ['added', 'Added'],
         ['size', 'Size'],
       ];
     case 'series':

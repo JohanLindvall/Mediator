@@ -273,6 +273,8 @@ type Series struct {
 	Plays    int      `json:"plays,omitempty"`
 	Likes    int      `json:"likes,omitempty"` // the net verdict on its episodes
 	ModTime  int64    `json:"mtime"`
+	// Added is when its newest episode first appeared here; see Album.Added.
+	Added int64 `json:"added,omitempty"`
 
 	lower    string
 	sortName string
@@ -288,6 +290,7 @@ type Season struct {
 	Plays    int    `json:"plays,omitempty"`
 	Likes    int    `json:"likes,omitempty"` // the net verdict on its episodes
 	ModTime  int64  `json:"mtime"`
+	Added    int64  `json:"added,omitempty"`
 }
 
 // Series returns the grouped shows, rebuilt when the library has changed.
@@ -377,6 +380,14 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 		}
 		if it.ModTime > a.s.ModTime {
 			a.s.ModTime = it.ModTime
+		}
+		// When the newest episode turned up here — the answer to "what has
+		// arrived lately", which the file's own timestamp does not give.
+		if it.FirstSeen > se.Added {
+			se.Added = it.FirstSeen
+		}
+		if it.FirstSeen > a.s.Added {
+			a.s.Added = it.FirstSeen
 		}
 		// The first episode of the earliest season is the face of a show:
 		// its thumbnail is a frame from it, and the most recently added

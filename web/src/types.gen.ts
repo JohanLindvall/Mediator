@@ -92,6 +92,7 @@ export interface Album {
   source: string;
   tracks: number;
   coverId?: string;
+  added?: number;
   genre?: string;
   genres?: string[];
   year?: number;
@@ -110,6 +111,7 @@ export interface Artist {
   albums: number;
   tracks: number;
   coverId?: string;
+  added?: number;
   genre?: string;
   fromYear?: number;
   toYear?: number;
@@ -128,6 +130,7 @@ export interface Genre {
   albums: number;
   tracks: number;
   coverId?: string;
+  added?: number;
   fromYear?: number;
   toYear?: number;
   size: number;
@@ -148,6 +151,7 @@ export interface Series {
   plays?: number;
   likes?: number;
   mtime: number;
+  added?: number;
 }
 
 export interface Season {
@@ -159,6 +163,7 @@ export interface Season {
   plays?: number;
   likes?: number;
   mtime: number;
+  added?: number;
 }
 
 export interface Subtitle {
