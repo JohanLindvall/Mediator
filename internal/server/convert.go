@@ -95,11 +95,19 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		args = append(args, "-c:v", "copy")
 	case onHardware:
 		// The filters and the encoder run where the frames already are.
-		args = append(args, hw.encode(convertMaxWidth)...)
+		args = append(args, hw.encode(convertMaxWidth, it.HDR)...)
+		args = append(args, convertColourArgs(it.HDR)...)
 	default:
+		// A wide-colour picture is brought back to ordinary colour on the
+		// way through; see hdr.go for why a stream that keeps it is refused.
+		filters := convertScale
+		if tm := softwareColour(ffmpeg, it.HDR); tm != "" {
+			filters = tm + "," + convertScale
+		}
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", videoFilter(convertScale), "-pix_fmt", "yuv420p")
+			"-vf", videoFilter(filters), "-pix_fmt", "yuv420p")
+		args = append(args, convertColourArgs(it.HDR)...)
 	}
 	c.args = append(args,
 		"-c:a", "aac", "-b:a", "160k", "-ac", "2",

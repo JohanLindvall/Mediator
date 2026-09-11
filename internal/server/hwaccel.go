@@ -59,7 +59,7 @@ type hwBackend struct {
 	input func(dev string) []string
 	// encode is the filter chain and the encoder, for frames wherever this
 	// backend leaves them.
-	encode func(dev string, maxWidth int) []string
+	encode func(dev string, maxWidth int, hdr bool) []string
 	// decodes are the pictures this hardware is asked to decode. Short on
 	// purpose: the failure is silent and total — a DivX file through Intel's
 	// video engine produced *no frames at all*, where software converts it
@@ -85,7 +85,15 @@ var videoEngines = []hwBackend{
 				"-hwaccel_output_format", "vaapi",
 			}
 		},
-		encode: func(_ string, w int) []string {
+		encode: func(_ string, w int, hdr bool) []string {
+			// A wide-colour picture is tone-mapped on the way through, in
+			// the engine's own filter: an H.264 stream that says it is
+			// BT.2020 with a perceptual curve is refused outright by some
+			// players. See hdr.go.
+			vf := "scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=nv12"
+			if hdr {
+				vf = tonemapVAAPI + "," + vf
+			}
 			return []string{
 				// No deinterlacer here, where the software chain has one.
 				// Two reasons, and the second is why it was removed rather
@@ -99,7 +107,7 @@ var videoEngines = []hwBackend{
 				// conversion without it finishes in 2.7 s, which is four and
 				// a half times real time. What the viewer saw was a spinner
 				// that never resolved.
-				"-vf", "scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=nv12",
+				"-vf", vf,
 				"-c:v", "h264_vaapi",
 				// A ceiling rather than a quality target. Everything that
 				// reaches the hardware is demanding by definition — that is
@@ -121,7 +129,7 @@ var videoEngines = []hwBackend{
 		input: func(dev string) []string {
 			return []string{"-hwaccel", "qsv", "-qsv_device", dev, "-hwaccel_output_format", "qsv"}
 		},
-		encode: func(_ string, w int) []string {
+		encode: func(_ string, w int, _ bool) []string {
 			// vpp_qsv does both jobs at once; deinterlace=2 is its adaptive
 			// mode, which leaves progressive frames alone.
 			return []string{
@@ -138,7 +146,7 @@ var videoEngines = []hwBackend{
 		input: func(string) []string {
 			return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
 		},
-		encode: func(_ string, w int) []string {
+		encode: func(_ string, w int, _ bool) []string {
 			return []string{
 				"-vf", "yadif_cuda=deint=interlaced,scale_cuda=w='min(" + strconv.Itoa(w) + ",iw)':h=-2",
 				"-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "6M", "-maxrate", "10M",
@@ -153,7 +161,7 @@ var videoEngines = []hwBackend{
 		name:    "videotoolbox",
 		devices: func() []string { return []string{""} },
 		input:   func(string) []string { return []string{"-hwaccel", "videotoolbox"} },
-		encode: func(_ string, w int) []string {
+		encode: func(_ string, w int, _ bool) []string {
 			return []string{
 				"-vf", videoFilter("scale=w='min(" + strconv.Itoa(w) + ",iw)':h=-2"),
 				"-pix_fmt", "yuv420p",
@@ -257,9 +265,9 @@ func (h *hwaccel) input() []string {
 	return engine.input(device)
 }
 
-func (h *hwaccel) encode(w int) []string {
+func (h *hwaccel) encode(w int, hdr bool) []string {
 	engine, device := h.chosen()
-	return engine.encode(device, w)
+	return engine.encode(device, w, hdr)
 }
 
 // find works out what this machine can do, once.
@@ -324,7 +332,7 @@ func hwProve(ffmpeg string, e *hwBackend, dev string) error {
 		"-vf", "format=nv12"+upload)
 	// The encoder alone: the backend's own filter chain is for frames coming
 	// out of a decoder, and this is proving the device and the encoder.
-	encode := e.encode(dev, 320)
+	encode := e.encode(dev, 320, false)
 	for i, a := range encode {
 		if a == "-vf" || (i > 0 && encode[i-1] == "-vf") {
 			continue

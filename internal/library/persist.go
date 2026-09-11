@@ -160,7 +160,7 @@ func (l *Library) flush(db *blob.DB) {
 			Title:    it.Title, Artist: it.Artist, Album: it.Album,
 			Genre: it.Genre, Track: it.Track, Year: it.Year,
 			VCodec: it.VCodec, ACodec: it.ACodec, Enriched: it.enriched, Shape: it.shape,
-			Width: it.Width, Height: it.Height, FPS: it.FPS,
+			Width: it.Width, Height: it.Height, FPS: it.FPS, HDR: it.HDR,
 		})
 	}
 	remove := make([]string, 0, len(l.removed))

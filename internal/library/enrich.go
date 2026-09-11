@@ -276,7 +276,7 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 			}
 			l.setProbe(id, Probe{
 				VCodec: m.VCodec, ACodec: m.ACodec,
-				Width: m.Width, Height: m.Height, FPS: m.FPS,
+				Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
 			})
 			return
 		}
@@ -335,7 +335,7 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	l.queueMeta(it.ID, blob.Meta{
 		MTime: it.ModTime, Size: it.Size,
 		Duration: p.DurationMs, VCodec: p.VCodec, ACodec: p.ACodec,
-		Width: p.Width, Height: p.Height, FPS: p.FPS, Shape: shapeVersion,
+		Width: p.Width, Height: p.Height, FPS: p.FPS, HDR: p.HDR, Shape: shapeVersion,
 		Title: tm.title, Artist: tm.artist, Album: tm.album,
 		Genre: tm.genre, Track: tm.track, Year: tm.year,
 	})
@@ -427,6 +427,9 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		// which is the moment something has to decide how to convert it.
 		// Dropping them here left that decision with nothing to go on.
 		Width: out.width, Height: out.height, FPS: out.fps,
+		// And what colour it is in, which decides whether a conversion has
+		// to bring it back to ordinary colour (see Item.HDR).
+		HDR:    out.hdr,
 		Probed: out.answered,
 	})
 	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 {
@@ -441,7 +444,8 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		l.queueMeta(id, blob.Meta{
 			MTime: fresh.ModTime, Size: fresh.Size, Duration: fresh.Duration,
 			VCodec: fresh.VCodec, ACodec: fresh.ACodec,
-			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, Shape: fresh.shape,
+			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, HDR: fresh.HDR,
+			Shape: fresh.shape,
 			Title: fresh.Title, Artist: fresh.Artist, Album: fresh.Album,
 			Genre: fresh.Genre, Track: fresh.Track, Year: fresh.Year,
 		})

@@ -2809,6 +2809,26 @@ Serving details worth knowing before "fixing" them:
   standard-definition and 1080i habit, and every one of those is far below
   the pixel rate that sends work here, so the filter was only ever a frame
   copy waiting to fail.
+  **A picture in wide colour is brought back to ordinary colour**
+  (`hdr.go`, `Item.HDR`, read from the same ffprobe that reads the codecs).
+  A 4K release is routinely graded in BT.2020 with a perceptual curve —
+  HDR10, or Dolby Vision over it — and a conversion that re-encodes the
+  picture copies that description straight through, so what comes out is an
+  **H.264 stream claiming to be HDR**, which is a thing H.264 in an HLS
+  presentation is not allowed to be. Measured on a phone: every segmented
+  session for such a film errored on its first segment, the player then fell
+  back to the pipe, which that browser cannot play at all, and the film was
+  reported unplayable — while ordinary-colour films played for hours over
+  the same route. The graphics engine tone-maps in one filter
+  (`tonemap_vaapi`, measured at three times real time on 4K, and it goes
+  **before** the scale, since it decides what the samples mean); the
+  processor needs five to make the same journey (`tonemapSoftware`, about a
+  third of real time on 4K, which is one more reason the pixel rate sends
+  anything that large to the hardware). Where the build has no `zscale` the
+  picture is at least **described** honestly as BT.709 rather than converted
+  to it: wrong colour, but a stream that plays, which is the better of the
+  two failures. An ordinary picture is not touched — a tone-mapper in front
+  of BT.709 would drain the colour out of every film.
   **And a hardware run that fails is written off for that file**
   (`hwRefused`): the failure of a graphics engine is silent and total, and
   not always something a list of codecs can predict — a driver refuses a

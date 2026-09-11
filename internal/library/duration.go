@@ -37,6 +37,12 @@ type Probe struct {
 	Width  int
 	Height int
 	FPS    float64
+	// HDR says the picture is in a wide, high-dynamic-range colour. It rides
+	// along for the same reason the geometry does, and it decides something:
+	// a conversion has to bring such a picture back to ordinary colour, or
+	// what comes out is an H.264 stream claiming to be HDR, which a player
+	// is entitled to refuse and Safari does.
+	HDR bool
 	// Tracks is every soundtrack the file carries, in ffmpeg's own order.
 	Tracks []AudioTrack
 	// Subs is every text subtitle stream, ditto. Bitmap subtitles are left
@@ -488,6 +494,10 @@ type ffprobeResult struct {
 	durationMs int64
 	tracks     []AudioTrack
 	subs       []SubTrack
+	// hdr says the picture is in a wide, high-dynamic-range colour — which
+	// is not a detail of how it looks but a fact about what may be made of
+	// it. See Item.HDR.
+	hdr bool
 	// answered records that ffprobe ran, exited and printed a document we
 	// could parse. It is not "we found something": a container may answer
 	// with codecs and no duration, or with nothing at all, and that is still
@@ -535,7 +545,7 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	// here, and a second invocation for them would be a process per video.
 	args = append(args,
 		"-show_entries",
-		"stream=codec_type,codec_name,width,height,avg_frame_rate,channels:"+
+		"stream=codec_type,codec_name,width,height,avg_frame_rate,channels,color_transfer,color_primaries:"+
 			"stream_tags=language,title:stream_disposition=default,comment:format=duration",
 		"-of", "json", path)
 	cmd := exec.CommandContext(ctx, probe, args...)
@@ -568,6 +578,8 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 			Height    int    `json:"height"`
 			FrameRate string `json:"avg_frame_rate"`
 			Channels  int    `json:"channels"`
+			Transfer  string `json:"color_transfer"`
+			Primaries string `json:"color_primaries"`
 			Tags      struct {
 				Language string `json:"language"`
 				Title    string `json:"title"`
@@ -594,6 +606,7 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 				res.vcodec = st.CodecName
 				res.width, res.height = saneDimension(st.Width), saneDimension(st.Height)
 				res.fps = parseRate(st.FrameRate)
+				res.hdr = isHDR(st.Transfer, st.Primaries)
 			}
 		case "subtitle":
 			if textSubCodecs[st.CodecName] {
@@ -661,4 +674,19 @@ func parseRate(s string) float64 {
 		return 0
 	}
 	return fps
+}
+
+// isHDR reads a picture's colour as ffprobe reports it.
+//
+// The two transfer functions that mean high dynamic range are PQ (which the
+// standards call SMPTE ST 2084, and everything else calls HDR10) and HLG.
+// BT.2020 primaries without either are the wide colour of a few SDR
+// releases, and are counted here as well: an H.264 stream carrying them is
+// refused by the same players for the same reason.
+func isHDR(transfer, primaries string) bool {
+	switch transfer {
+	case "smpte2084", "arib-std-b67":
+		return true
+	}
+	return strings.HasPrefix(primaries, "bt2020")
 }

@@ -125,6 +125,11 @@ type Item struct {
 	Width  int     `json:"width,omitempty"`
 	Height int     `json:"height,omitempty"`
 	FPS    float64 `json:"fps,omitempty"`
+	// HDR says the picture is in a wide, high-dynamic-range colour. It is
+	// what tells a conversion to bring it back to ordinary colour: an H.264
+	// stream that claims to be HDR is refused outright by some players, and
+	// a 4K release converted without this played nowhere on a phone.
+	HDR bool `json:"hdr,omitempty"`
 
 	// The owner's judgement, stamped on by List and Get. Held beside the
 	// index (see annotate.go), not on the indexed item, because a flag
@@ -930,6 +935,12 @@ func (l *Library) setProbe(id string, p Probe) {
 	}
 	if p.FPS > 0 {
 		it.FPS = p.FPS
+	}
+	if p.Probed || p.HDR {
+		// A probe that ran is the whole truth about the colour, false
+		// included: a file replaced on disk may be the ordinary-colour
+		// version of what was there before.
+		it.HDR = p.HDR
 	}
 	if p.ACodec != "" {
 		it.ACodec = p.ACodec

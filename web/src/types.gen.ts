@@ -25,6 +25,7 @@ export interface Item {
   width?: number;
   height?: number;
   fps?: number;
+  hdr?: boolean;
   series?: string;
   season?: number;
   episode?: number;
