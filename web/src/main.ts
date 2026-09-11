@@ -670,7 +670,7 @@ async function openLinked(): Promise<void> {
 }
 
 const itemAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
-  count: () => libSource.total,
+  count: () => libSource.count(),
   get: (i) => libSource.get(i),
   itemKey: (x) => (x as Item).id,
   need: (a, b) => libSource.need(a, b),
@@ -1281,7 +1281,7 @@ function queryState(): QueryState {
 let shownSource: { reset(): void } | null = null;
 
 /** Push current UI state into the data sources and reset the grid. */
-function applyQuery(reset: boolean, push = false): void {
+function applyQuery(reset: boolean, push = false, fromAddress = false): void {
   writeHash(push);
   // Rows are worth holding while an answer is fetched only while they are
   // the rows on screen: that is what makes a search read as the listing
@@ -1292,7 +1292,7 @@ function applyQuery(reset: boolean, push = false): void {
   // until the answer lands. So the incoming source drops what it has, and
   // the grid draws skeletons for the moment it takes, which is honest.
   const incoming = collectionOnScreen() ?? libSource;
-  const arriving = incoming !== shownSource;
+  const arriving = incoming !== shownSource || fromAddress;
   shownSource = incoming;
   switch (state.mode) {
     case 'albums':
@@ -1811,19 +1811,20 @@ void (async () => {
  */
 function applyHash(reset: boolean): void {
   readHash();
-  // An address that changed under the page is a jump to somewhere else, not
-  // a listing settling under a search — so what is on screen goes rather
-  // than being held over. Following a link into the library otherwise
-  // rewound the grid to the top of wherever it had been and showed a
-  // screenful of it, thumbnails and all, until the linked view answered.
-  if (reset) (collectionOnScreen() ?? libSource).reset();
   searchInput.value = state.q;
   searchClear.hidden = state.q === '';
   renderSortOptions();
   renderSortDir();
   syncQueueAll();
   renderChips();
-  applyQuery(reset);
+  // An address that changed under the page is a jump to somewhere else, not
+  // a listing settling under a search, so nothing on screen is held over for
+  // it: following a link otherwise rewound the grid to the top of wherever
+  // it had been and drew a screenful of that. Passed down rather than done
+  // here, because only the views that fetch may be emptied — a show's
+  // seasons are read out of the shows list and nothing would come to fill
+  // them again.
+  applyQuery(reset, false, reset);
   void openLinked();
 }
 

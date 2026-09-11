@@ -142,6 +142,24 @@ export class LibrarySource {
     this.inflight.clear();
   }
 
+  /**
+   * How many rows to draw, as the grid asks it: the total once one has
+   * arrived, -1 while a query is being answered, and **nothing at all**
+   * before one has been asked.
+   *
+   * The difference between those last two is what a viewer sees on the way
+   * in. A page boots, the grid lays itself out, and the address has not been
+   * read yet — it waits on /api/info — so nothing has been asked of this
+   * source. Answering -1 there filled the screen with placeholder cards
+   * before the app knew what it was showing, which read as the whole library
+   * arriving. Placeholders are a promise that an answer is coming; until a
+   * query is in flight there is nothing to promise.
+   */
+  count(): number {
+    if (this.total >= 0) return this.total;
+    return this.inflight.size > 0 ? -1 : 0;
+  }
+
   get(i: number): Item | undefined {
     if (i < 0) return undefined;
     const p = Math.floor(i / PAGE_SIZE);
@@ -246,6 +264,8 @@ export class CollectionSource<T> {
   matching: Counts | null = null;
   private gen = 0;
   private subject = '';
+  /** Whether an answer is on its way; see count. */
+  private loading = false;
   onUpdate: () => void = () => {};
   onError: (err: Error) => void = () => {};
 
@@ -263,6 +283,7 @@ export class CollectionSource<T> {
   ) {}
 
   load(q: QueryState): void {
+    this.loading = true;
     const subject = this.subjectOf(q);
     if (subject !== this.subject) {
       this.subject = subject;
@@ -272,12 +293,15 @@ export class CollectionSource<T> {
     this.fetch(q)
       .then((res) => {
         if (gen !== this.gen) return;
+        this.loading = false;
         this.items = res.items;
         this.matching = res.matching ?? null;
         this.onUpdate();
       })
       .catch((err: Error) => {
-        if (gen === this.gen) this.onError(err);
+        if (gen !== this.gen) return;
+        this.loading = false;
+        this.onError(err);
       });
   }
 
@@ -293,6 +317,7 @@ export class CollectionSource<T> {
    */
   reset(): void {
     this.gen++;
+    this.loading = false; // nothing is on its way until something asks again
     this.clear();
   }
 
@@ -307,8 +332,10 @@ export class CollectionSource<T> {
     return this.items?.[i];
   }
 
+  /** As LibrarySource.count: -1 only while an answer is on its way. */
   count(): number {
-    return this.items?.length ?? -1;
+    if (this.items !== null) return this.items.length;
+    return this.loading ? -1 : 0;
   }
 }
 

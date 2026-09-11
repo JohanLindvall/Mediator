@@ -1401,11 +1401,19 @@ Frontend (`web/src`, no framework, no runtime deps):
   nothing to hold, and `fetchPage`'s past-the-end guard would refuse the very
   fetch meant to replace it. A total of -1 still means nothing has ever arrived — a first load has no rows to keep and shows skeletons, because
   there the wait is real. **The skeletons are the grid's**: a count below
-  zero is a source that has not answered, and the grid fills the screen with
-  placeholder cells for as long as that lasts, asking the source for
+  zero is a source whose answer is on its way, and the grid fills the screen
+  with placeholder cells for as long as that lasts, asking the source for
   nothing. It drew nothing at all before, so a listing that took a moment —
   a cold search over a large library, a busy disk — was a black screen with
   no sign that anything had been asked for.
+  **A source nobody has asked anything answers nought, not "unknown"**
+  (`count` on both sources), and the difference is what a viewer sees on the
+  way in: a page boots, the grid lays itself out, and the address has not
+  been read yet, since that waits on `/api/info`. Answering "unknown" there
+  filled the screen with placeholders before the app knew what it was
+  showing, which reads as the whole library arriving. A placeholder is a
+  promise that an answer is coming, and until a query is in flight there is
+  nothing to promise.
   **Rows are held over only while they are the rows on screen**, and that
   is one rule at one door (`applyQuery`, the `arriving` flag) rather than a
   guard per view. A source the grid has not been drawing holds the answer
@@ -1423,7 +1431,11 @@ Frontend (`web/src`, no framework, no runtime deps):
   back) and draws skeletons for the moment it takes, which is honest. A view arriving from its own source keeps them, which is what makes a
   search read as the listing settling. **An address that changed under the
   page keeps nothing**, whatever view it names: a link followed, a shortlink
-  opened, the Back gesture. That is a jump to somewhere else rather than a
+  opened, the Back gesture. It is passed down to the branch that fetches
+  (`fromAddress`) rather than applied to whatever is on screen, because only
+  a view that will fetch may be emptied — a show's seasons are read out of
+  the shows list already in hand, and nothing would ever come to fill them
+  again. That is a jump to somewhere else rather than a
   listing settling, and holding the rows over rewound the grid to the top of
   wherever it had been and showed a screenful of it — thumbnails and all —
   until the linked view answered.
