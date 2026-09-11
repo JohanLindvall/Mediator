@@ -70,4 +70,11 @@ const (
 	convertMaxWidth = 1920
 	// convertScale says the same thing to the software scaler.
 	convertScale = "scale=w='min(1920,iw)':h=-2"
+	// convertBitrateGuess is what a re-encoded stream is declared to cost,
+	// for the one place that has to say so before any of it exists (the HLS
+	// master playlist). The hardware path is capped at 6 Mbit/s of picture
+	// with a 10 Mbit/s ceiling, and the software path aims at a quality
+	// rather than a rate; eight plus the soundtrack is the honest middle. It
+	// is a description and not a budget — nothing converts to it.
+	convertBitrateGuess = 8_200_000
 )

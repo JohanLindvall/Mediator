@@ -2859,7 +2859,14 @@ Serving details worth knowing before "fixing" them:
   fix. Codecs with no settled type string to ask about (`wmav2` and the
   like) are left to the decode check, and the cinema formats — DTS, TrueHD —
   are refused outright, having no type string and no decoder anywhere. Audio mode may
-  escalate to full if the copied picture turns out to be undecodable too.
+  escalate to full if the copied picture turns out to be undecodable too —
+  **including when the element simply errors**, which is the same news by a
+  shorter route. It used to be read as the delivery failing: a soundtrack
+  conversion is carried over HLS on the browsers that need HLS, so a 4K
+  release in a colour format the phone had no decoder for wrote *HLS* off,
+  and the film fell back to the pipe, which those browsers cannot play at
+  all. The picture being copied through is what makes the difference — an
+  error there is about the picture, and the answer is to re-encode it.
 - `/api/remux/{id}` rewraps rather than converts, for the files where the
   container is the only thing the browser will not open — an FLV or an MKV
   holding H.264 and AAC holds exactly what every browser decodes. `-c copy`
@@ -3136,6 +3143,13 @@ Serving details worth knowing before "fixing" them:
   running time of what was converted rather than of the film. The end marker
   is what says it is complete, and a complete presentation is VOD. While it is
   still growing EVENT is the honest description and is left alone.
+  The master playlist's **BANDWIDTH describes the stream being served**, not
+  the file it was made from: where the picture is copied those are the same
+  thing and the file's own average is honest, and where it is re-encoded
+  they are not — a 4K release of 29 Mbit/s comes out as a 1920-wide stream
+  of six or eight, and declaring the original tells a player on a thin
+  connection that it cannot afford what it is about to be sent
+  (`convertBitrateGuess`, a description and not a budget).
   **Subtitles ride the playlist as renditions** (`hlssubs.go`), because
   AirPlay hands a receiver a URL and nothing else — no caption field, no
   metadata document — so the only way captions reach one is inside what the

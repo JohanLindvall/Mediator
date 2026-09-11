@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestMasterPlaylistNamesEveryRendition(t *testing.T) {
 		{Index: 3, Label: ""},
 		{Index: 4, Label: `Say "hello"`},
 	}
-	body := string(masterPlaylist("sess", library.Item{Duration: 60_000, Size: 1 << 20}, subs, "1"))
+	body := string(masterPlaylist("sess", library.Item{Duration: 60_000, Size: 1 << 20}, subs, "1", true))
 	for _, want := range []string{
 		`NAME="English",`, `NAME="English 2",`, `NAME="English 3",`,
 		`NAME="Track 4",`, `NAME="Say 'hello'",`,
@@ -38,5 +39,36 @@ func TestMasterPlaylistNamesEveryRendition(t *testing.T) {
 	}
 	if !strings.Contains(body, "sess/media.m3u8") {
 		t.Errorf("no media playlist beside the renditions:\n%s", body)
+	}
+}
+
+// What BANDWIDTH describes is the stream being served, not the file it was
+// made from. A 4K release of 29 Mbit/s comes out as a 1920-wide stream of
+// six or eight, and declaring the original tells a player on a thin
+// connection it cannot afford what it is about to be sent.
+func TestMasterBandwidthDescribesTheStream(t *testing.T) {
+	// Roughly 29 Mbit/s: a 25 GB film of 115 minutes.
+	big := library.Item{Duration: 6_913_376, Size: 24_970_724_493}
+	rate := func(body string) int64 {
+		for _, line := range strings.Split(body, "\n") {
+			if after, ok := strings.CutPrefix(line, "#EXT-X-STREAM-INF:BANDWIDTH="); ok {
+				n, _ := strconv.ParseInt(strings.Split(after, ",")[0], 10, 64)
+				return n
+			}
+		}
+		return 0
+	}
+	// The picture re-encoded: what goes out is the conversion's own rate.
+	if got := rate(string(masterPlaylist("s", big, nil, "", false))); got != convertBitrateGuess {
+		t.Errorf("re-encoded stream declared %d, want the conversion's own %d", got, convertBitrateGuess)
+	}
+	// The picture copied through: the file's average is the honest figure.
+	if got := rate(string(masterPlaylist("s", big, nil, "", true))); got < 25_000_000 {
+		t.Errorf("copied stream declared %d, want the file's own average", got)
+	}
+	// And a file whose length nobody measured falls back rather than
+	// declaring nothing, which the specification does not allow.
+	if got := rate(string(masterPlaylist("s", library.Item{Size: 1 << 30}, nil, "", true))); got != convertBitrateGuess {
+		t.Errorf("unmeasured file declared %d", got)
 	}
 }

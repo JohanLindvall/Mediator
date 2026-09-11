@@ -1759,6 +1759,16 @@ class VideoOverlay {
       void this.convertForContainer();
       return;
     }
+    if (this.transcoding && this.tcMode === 'audio') {
+      // A soundtrack-only conversion copies the picture straight through, so
+      // an error here is about the picture and says nothing about how it was
+      // delivered: a 4K release in a colour format this browser has no
+      // decoder for fails exactly this way. Re-encode it rather than
+      // blaming the delivery — which is what happened, and it cost the film
+      // the only delivery this browser had.
+      this.fallbackToTranscode('full');
+      return;
+    }
     if (this.usingHLS) {
       // It said it could play this and could not. The pipe is what every
       // other browser uses and it needs nothing of the sort.

@@ -320,7 +320,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	// its segments are untouched: one conversion serves every choice, and
 	// the choice picks which rendition is marked DEFAULT.
 	if subs := s.lib.Subtitles(it); len(subs) > 0 {
-		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"))
+		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"), copyVideo)
 		defer s.lib.StartStream()()
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")

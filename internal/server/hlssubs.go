@@ -35,7 +35,7 @@ import (
 // masterPlaylist names the media playlist and the subtitle renditions, all
 // relative to the master's own URL so they resolve under the session path —
 // signed prefix and all — exactly as segments always have.
-func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string) []byte {
+func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string, copyVideo bool) []byte {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:4\n")
 	def := -1
@@ -72,10 +72,15 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 			"#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"text\",NAME=\"%s\",%s%s,URI=\"%s/sub%d.m3u8\"\n",
 			name, lang, flags, sid, i)
 	}
-	// BANDWIDTH is required by the specification; the file's own average is
-	// the honest figure where the length is known.
-	bw := int64(8_000_000)
-	if it.Duration > 0 {
+	// BANDWIDTH is required by the specification, and what it has to
+	// describe is **this stream** rather than the file it was made from.
+	// Where the picture is copied through those are the same thing, and the
+	// file's own average is the honest figure. Where it is re-encoded they
+	// are not: a 4K release of 29 Mbit/s comes out at a 1920-wide stream of
+	// six or eight, and declaring the original tells a player on a thin
+	// connection that it cannot afford what it is about to be sent.
+	bw := int64(convertBitrateGuess)
+	if copyVideo && it.Duration > 0 {
 		if v := it.Size * 8 * 1000 / it.Duration; v > 200_000 {
 			bw = v
 		}
