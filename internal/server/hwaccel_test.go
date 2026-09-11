@@ -62,7 +62,7 @@ func TestHardwareKeepsFramesWhereTheyAre(t *testing.T) {
 // system memory, which these are not — and only where the file says it is
 // needed, which is what auto=1 means.
 func TestHardwareScalesAndDoesNotDeinterlace(t *testing.T) {
-	args := videoEngines[0].encode("/dev/dri/renderD128", 1920, false)
+	args := videoEngines[0].encode("/dev/dri/renderD128", 1920, "")
 	var vf string
 	for i, a := range args {
 		if a == "-vf" && i+1 < len(args) {
@@ -119,7 +119,7 @@ func TestEveryEngineIsWellFormed(t *testing.T) {
 					t.Errorf("%q is not safe to send to hardware", bad)
 				}
 			}
-			args := strings.Join(e.encode("/dev/x", 1920, false), " ")
+			args := strings.Join(e.encode("/dev/x", 1920, ""), " ")
 			if !strings.Contains(args, "-c:v") {
 				t.Error("no encoder")
 			}
@@ -182,18 +182,26 @@ func TestHardwareOnlyWhereSoftwareCannotCope(t *testing.T) {
 // front of a picture that is already BT.709 would drain the colour out of
 // every ordinary film.
 func TestHardwareToneMapsOnlyWideColour(t *testing.T) {
-	plain := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, false), " ")
-	wide := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, true), " ")
+	plain := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, ""), " ")
+	wide := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, tonemapSoftware), " ")
 	if strings.Contains(plain, "tonemap") {
 		t.Errorf("an ordinary picture is tone-mapped: %s", plain)
 	}
-	if !strings.Contains(wide, "tonemap_vaapi") {
+	if !strings.Contains(wide, "tonemap=") {
 		t.Errorf("a wide-colour picture is not tone-mapped: %s", wide)
 	}
 	// The tone-map comes before the scale: it is the thing that decides what
 	// the pixels mean, and scaling first would mix wide-colour samples.
-	if i, j := strings.Index(wide, "tonemap_vaapi"), strings.Index(wide, "scale_vaapi"); i < 0 || j < 0 || i > j {
+	if i, j := strings.Index(wide, "tonemap="), strings.Index(wide, "scale_vaapi"); i < 0 || j < 0 || i < j {
 		t.Errorf("the chain is out of order: %s", wide)
+	}
+	for _, want := range []string{"hwdownload", "hwupload", "format=p010"} {
+		if !strings.Contains(wide, want) {
+			t.Errorf("the tone-map has no way to reach the processor (%s): %s", want, wide)
+		}
+	}
+	if strings.Contains(wide, "tonemap_vaapi") {
+		t.Errorf("the engine's own tone-mapper is back; it writes blank frames: %s", wide)
 	}
 	// And the stream says what it now is, whichever way it got there.
 	if got := strings.Join(convertColourArgs(true), " "); !strings.Contains(got, "bt709") {

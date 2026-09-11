@@ -24,22 +24,21 @@ import (
 	"sync"
 )
 
-// tonemapVAAPI is the hardware's own tone-mapper. Measured on an Intel
-// engine: 20 seconds of 4K HDR in 6.3 s, which is three times real time, and
-// the output reads bt709 throughout.
-const tonemapVAAPI = "tonemap_vaapi=format=nv12:matrix=bt709:transfer=bt709:primaries=bt709"
-
-// tonemapSoftware is the same journey through libavfilter: into linear
-// light, into BT.709 primaries, through a tone curve, back out to an
-// ordinary transfer and range. Hable is the curve chosen for keeping
-// highlights rather than clipping them; `desat=0` leaves the colour alone,
-// since the desaturation ffmpeg applies by default is visible on skin.
+// tonemapSoftware is the journey through libavfilter: into linear light,
+// through a tone curve, and back out to an ordinary transfer, matrix and
+// range. Hable is the curve, for rolling the highlights off rather than
+// clipping them; `desat=0` leaves the colour alone, the desaturation ffmpeg
+// applies by default being visible on skin.
 //
-// It costs what it costs — measured on 4K, about a third of real time, where
-// the hardware manages three times — which is one more reason the pixel-rate
-// rule sends anything this large to the hardware in the first place.
-const tonemapSoftware = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709," +
-	"tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p"
+// **The hardware's own tone-mapper is not used, and that is measured rather
+// than assumed.** `tonemap_vaapi` runs on this driver, reports success and
+// writes the right colour tags on a stream with **no picture in it**: 90
+// bytes a frame for 1080p, against 27,000 for the same frames scaled and
+// left alone. What the viewer got was a black screen with sound — which is
+// what a tag-only check misses, so the test that matters here is bytes per
+// frame.
+const tonemapSoftware = "zscale=t=linear:npl=100," +
+	"tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:p=bt709:r=tv"
 
 var (
 	filtersOnce sync.Once
@@ -71,10 +70,26 @@ func haveFilter(ffmpeg, name string) bool {
 	return filterSet[name]
 }
 
-// softwareColour is what the software conversion does about a wide-colour
-// picture: tone-map it where the build can, and otherwise nothing but the
-// label the encoder writes (see convertColourArgs).
-func softwareColour(ffmpeg string, hdr bool) string {
+// toneCurve is the tone-map to splice into a conversion, or "" where there
+// is nothing to do or nothing to do it with. It is the same chain wherever
+// the frames are: the graphics engine cannot do this itself (see above), so
+// even a hardware conversion comes back to the processor for these few
+// filters — after the engine has scaled the picture down, which is what
+// makes it affordable.
+//
+// Measured on a 4K HDR film, eight seconds of it, on a machine whose
+// processor was already busy with something else:
+//
+//	tone-mapped at 4K, frames never leaving the engine .. blank (see above)
+//	tone-mapped at 4K on the processor ................. 0.15x real time
+//	scaled on the engine, tone-mapped at 1080p ......... 0.86x real time
+//	scaled on the engine, colour converted, no curve ... 1.09x real time
+//
+// So the picture is scaled first and the curve is paid at 1080p. It is
+// close to real time on a loaded machine and several times it on an idle
+// one, which is the cost of converting this kind of film at all: the
+// hardware can decode, scale and encode it, and cannot do its colour.
+func toneCurve(ffmpeg string, hdr bool) string {
 	if !hdr || !haveFilter(ffmpeg, "zscale") {
 		return ""
 	}

@@ -94,15 +94,18 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 	case copyVideo:
 		args = append(args, "-c:v", "copy")
 	case onHardware:
-		// The filters and the encoder run where the frames already are.
-		args = append(args, hw.encode(convertMaxWidth, it.HDR)...)
+		// The filters and the encoder run where the frames already are —
+		// except the tone-map, which the engine cannot do and the processor
+		// takes over for, after the engine has scaled the picture down.
+		args = append(args, hw.encode(convertMaxWidth, toneCurve(ffmpeg, it.HDR))...)
 		args = append(args, convertColourArgs(it.HDR)...)
 	default:
 		// A wide-colour picture is brought back to ordinary colour on the
 		// way through; see hdr.go for why a stream that keeps it is refused.
+		// The scale comes first here too, for the same reason it does there.
 		filters := convertScale
-		if tm := softwareColour(ffmpeg, it.HDR); tm != "" {
-			filters = tm + "," + convertScale
+		if tm := toneCurve(ffmpeg, it.HDR); tm != "" {
+			filters = convertScale + ",format=p010le," + tm
 		}
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",

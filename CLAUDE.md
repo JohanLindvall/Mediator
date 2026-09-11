@@ -2819,12 +2819,20 @@ Serving details worth knowing before "fixing" them:
   session for such a film errored on its first segment, the player then fell
   back to the pipe, which that browser cannot play at all, and the film was
   reported unplayable — while ordinary-colour films played for hours over
-  the same route. The graphics engine tone-maps in one filter
-  (`tonemap_vaapi`, measured at three times real time on 4K, and it goes
-  **before** the scale, since it decides what the samples mean); the
-  processor needs five to make the same journey (`tonemapSoftware`, about a
-  third of real time on 4K, which is one more reason the pixel rate sends
-  anything that large to the hardware). Where the build has no `zscale` the
+  the same route. **The graphics engine cannot do this**, and that is measured rather than
+  assumed: `tonemap_vaapi` runs on this driver, reports success, writes the
+  right colour tags — and produces **no picture**, 90 bytes a frame against
+  27,000 for the same frames merely scaled. The viewer got a black screen
+  with sound, which is exactly what checking the tags rather than the
+  content misses; the test that matters here is bytes per frame, and it is
+  in the comment beside the chain.
+  So the tone-map is the processor's, even in a hardware conversion: the
+  engine decodes and **scales first**, the frames come back for
+  `zscale → tonemap(hable) → zscale`, and they go up again for the encoder.
+  Scaling first is what makes it affordable. Measured on eight seconds of a
+  4K film with the processor already busy: 0.15x real time tone-mapping at
+  4K, **0.86x** at 1080p after the engine's scale, 1.09x for a colour
+  conversion with no tone curve at all. Where the build has no `zscale` the
   picture is at least **described** honestly as BT.709 rather than converted
   to it: wrong colour, but a stream that plays, which is the better of the
   two failures. An ordinary picture is not touched — a tone-mapper in front
