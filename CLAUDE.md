@@ -2110,7 +2110,17 @@ set that has gone away should be given up on in seconds, and no more than
   that no longer parse, so `Adopt` deletes them rather than serving a file
   whose soundtrack nothing records.
   The rewrap is produced **before** the URL is handed over, or the set would
-  sit on a request while ffmpeg copied a film underneath it.
+  sit on a request while ffmpeg copied a film underneath it — and **the wait
+  is counted out** (`countCastPreparation`), since for a 25 GB release that
+  is a minute or two of a label saying only "Opening", which is
+  indistinguishable from a set that is not answering. It reads the same
+  progress the player's own waits do (`/api/convert/{id}`) and writes it into
+  the same label; the count stops the moment the set has the URL, and a tick
+  still in flight is dropped rather than putting a stale percentage back over
+  the word that replaced it. The figure is bytes written against the
+  *source's* size, so a copy that drops five of six soundtracks finishes a
+  few per cent short of a hundred — under-reporting, which is the right
+  direction to be wrong in.
   **And where it cannot be produced, the viewer is told** (`CastStatus.Note`,
   shown as a toast where the set was handed the film itself). The commonest
   reason is size: a copy has to fit in the scratch space, and a 25 GB release

@@ -33,7 +33,7 @@ import {
 } from './airplay';
 import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
 import { CastTransport, type CastHooks } from './casting';
-import type { RendererInfo } from './types.gen';
+import type { CastStatus, RendererInfo } from './types.gen';
 import { preferredLang, rememberTrack, rememberedTrack } from './audiopref';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
 import { playingVideo } from './nowplaying';
@@ -596,11 +596,22 @@ class VideoOverlay {
       // which soundtrack, so that choice travels as the file it is given
       // (castSource), and it is named only where it differs from the
       // default the set would pick anyway (castAudioChoice, tested).
-      const started = await tv.cast.start(
-        at,
-        this.subIndex >= 0 ? String(this.subIndex) : 'off',
-        castAudioChoice(this.item.tracks ?? [], this.audioTrack),
-      );
+      // The set is not given the URL until whatever it is being given
+      // exists, and for a soundtrack copied out of a 25 GB release that is a
+      // minute or two of a label that says only "Opening". The copy reports
+      // how far it has got through the same endpoint the player's own waits
+      // use, so the label can count it out.
+      const stopCount = this.countCastPreparation(target.name);
+      let started: CastStatus | null;
+      try {
+        started = await tv.cast.start(
+          at,
+          this.subIndex >= 0 ? String(this.subIndex) : 'off',
+          castAudioChoice(this.item.tracks ?? [], this.audioTrack),
+        );
+      } finally {
+        stopCount();
+      }
       // What the set could not be given. A television plays what is in the
       // file and has no menu to change it, so a soundtrack that could not be
       // copied out is a film in the wrong language with a menu on this side
@@ -1709,6 +1720,36 @@ class VideoOverlay {
     this.showPoster(item);
     this.seekBuf.style.width = '0%';
 
+  }
+
+  /**
+   * Count out the wait before a television is handed the film.
+   *
+   * What the set is given may have to be made first — a copy carrying the
+   * one soundtrack that was chosen, which for a large release is a minute or
+   * two at disk speed — and until it exists there is nothing to hand over.
+   * The label said "Opening" for the whole of it, which is indistinguishable
+   * from a set that is not answering.
+   *
+   * The same progress the player's own waits read, put into the same label.
+   * Returns the way to stop it, which the caller does the moment the set has
+   * the URL: a tick still in flight then has to be dropped, or it would put
+   * a stale percentage back over the word the label has moved on to.
+   */
+  private countCastPreparation(name: string): () => void {
+    let done = false;
+    const stop = poll(800, () => {
+      void convertProgress(this.item.id)
+        .then((p) => {
+          if (done || this.closed || !p.active) return;
+          this.onTv.textContent = `Opening on ${name}… ${p.percent}%`;
+        })
+        .catch(() => {});
+    });
+    return () => {
+      done = true;
+      stop();
+    };
   }
 
   /**
