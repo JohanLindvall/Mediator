@@ -1553,33 +1553,41 @@ class VideoOverlay {
   private load(item: Item, at?: number): void {
     this.beginFile(item, at);
 
-    if (!this.opensDirectly(item)) {
-      // The browser has already said it cannot open this container, so
-      // handing it the file anyway is not a cheap thing that fails fast:
-      // measured, Safari pulled 664 MiB of one film over 68 s — and 7.6 GiB
-      // across the attempts — hunting for something it could play before
-      // giving up and letting the fallback run. Start where it was going to
-      // end up.
+    // The browser has already said it cannot open this container, so handing
+    // it the file anyway is not a cheap thing that fails fast: measured,
+    // Safari pulled 664 MiB of one film over 68 s — and 7.6 GiB across the
+    // attempts — hunting for something it could play before giving up and
+    // letting the fallback run. Start where it was going to end up.
+    const direct = this.opensDirectly(item);
+    if (direct) {
+      // Half a second of playback from where it actually starts, not from
+      // zero, which a resume is already past.
+      this.startSource(streamUrl(item.id), { at: this.startAt, settle: 0.5 });
+      if (this.startAt > 0) showToast(`Resuming at ${formatDuration(this.startAt)}`);
+    } else {
       void this.convertDirectly();
-      return;
     }
-    // Half a second of playback from where it actually starts, not from
-    // zero, which a resume is already past.
-    this.startSource(streamUrl(item.id), { at: this.startAt, settle: 0.5 });
-    if (this.startAt > 0) showToast(`Resuming at ${formatDuration(this.startAt)}`);
+    // What the file *carries* is the same question either way, and both
+    // menus used to be built only on the direct route: a film whose
+    // container the browser will not open — which is most of what gets
+    // converted — offered neither its six soundtracks nor its twelve
+    // subtitle tracks, because the branch above returned before this.
     void this.loadSubs();
     // What the file holds decides the soundtrack, and it decides it now: the
     // codecs may already be known from the listing, and if they are not, the
     // moment they arrive is still before anything has had to fail. The menu
     // — and with it the picked track — was built above, so a conversion
     // started here carries the remembered choice rather than track one.
-    this.useKnownCodecs();
+    if (direct) this.useKnownCodecs();
     void this.refreshItem().then(() => {
       // The soundtracks come out of the probe the metadata request runs, so
       // this is the first moment a first open has a menu to build — and the
-      // pick has to land before the codec check that may act on it.
+      // pick has to land before the codec check that may act on it. On the
+      // converted route the conversion is already running by now, so the
+      // pick is applied to it: a choice that differs from what it carries
+      // costs a reopen, which is what choosing a soundtrack costs anyway.
       this.buildAudioMenu();
-      this.useKnownCodecs();
+      if (direct) this.useKnownCodecs();
       this.applyAudioChoice();
     });
     // The readout is reset by hand rather than through onTime, whose decode

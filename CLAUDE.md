@@ -1608,7 +1608,17 @@ Frontend (`web/src`, no framework, no runtime deps):
   kind, passing over whatever is filed in between — the viewer has nothing to
   show for the other kinds. The player switches file **in place** rather than
   reopening: closing the overlay would drop fullscreen, which is where a
-  swipe is most likely to come from. `load()` is therefore the single point
+  swipe is most likely to come from. **What a file carries is asked whichever route plays it.** The subtitle
+  listing and the soundtrack menu were built only where the browser opens
+  the file itself; a container it will not open — which is most of what gets
+  converted — took an early branch into the conversion and returned before
+  either. A Nordic release with **six soundtracks and twelve subtitle
+  tracks** offered neither, on the one kind of file most likely to have
+  them. Both are asked for now in both cases, and on the converted route the
+  pick lands while the conversion is already running, so a choice that
+  differs from what it carries costs a reopen — which is what choosing a
+  soundtrack costs anyway.
+  `load()` is therefore the single point
   where per-file state is cleared, and `startSource` the single point where the element is handed a source —
   the file, a rewrap, the sound-fix file or a conversion — carrying the seek,
   the track it plays and the decode-check settle, so no route can forget
