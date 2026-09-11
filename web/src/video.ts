@@ -1255,7 +1255,33 @@ class VideoOverlay {
   private toggleMenu(menu: HTMLElement, button: HTMLElement, show: boolean): void {
     menu.hidden = !show;
     button.setAttribute('aria-expanded', String(show));
+    if (show) this.keepMenuOnScreen(menu);
     this.showControls();
+  }
+
+  /**
+   * Slide a menu back onto the screen if opening it took it off.
+   *
+   * Each one hangs from its own button, its right edge against the button's
+   * — which is right for a button on the right of the row and wrong for one
+   * on the left, where the menu then extends past the edge of the window. On
+   * a phone the control row wraps, so which buttons are where depends on the
+   * width: the subtitle button ended up first on the second row, and its
+   * menu opened almost entirely off the left of the screen.
+   *
+   * Measured and shifted rather than anchored by a rule, because the rule
+   * would have to know where the row happened to wrap. The transform is
+   * cleared first so a menu opened twice is measured where it belongs rather
+   * than where it was last pushed to.
+   */
+  private keepMenuOnScreen(menu: HTMLElement): void {
+    menu.style.transform = '';
+    const edge = 8;
+    const r = menu.getBoundingClientRect();
+    let dx = 0;
+    if (r.left < edge) dx = edge - r.left;
+    else if (r.right > window.innerWidth - edge) dx = window.innerWidth - edge - r.right;
+    if (dx !== 0) menu.style.transform = `translateX(${Math.round(dx)}px)`;
   }
 
   /** Play this film's other soundtrack, from where it has got to. */

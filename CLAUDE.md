@@ -1947,7 +1947,15 @@ Frontend (`web/src`, no framework, no runtime deps):
   top would be stuck, there being no further up to reveal it from.
   The player's control row wraps for the same reason and had the same bug —
   fullscreen sat past the right-hand edge of a phone, reachable only by
-  dragging the whole page across. The overlay also takes
+  dragging the whole page across. **And so did what hangs off it**: each
+  menu is anchored with its right edge against its button's, which is right
+  for a button on the right of the row and wrong for one on the left, where
+  the menu extends past the edge of the window. Since the row wraps, which
+  buttons are where depends on the width — the subtitle button ended up
+  first on the second row of a phone and its menu opened almost entirely off
+  the screen. `keepMenuOnScreen` measures it as it opens and slides it back,
+  which is the only way to be right about a position that depends on where
+  the row happened to wrap. The overlay also takes
   `touch-action: manipulation`, because double-tapping the picture asks for
   fullscreen and must not also be the browser's zoom; a zoomed overlay pans,
   which is what put the controls out of reach in the first place.
