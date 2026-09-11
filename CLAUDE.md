@@ -2110,7 +2110,15 @@ set that has gone away should be given up on in seconds, and no more than
   that no longer parse, so `Adopt` deletes them rather than serving a file
   whose soundtrack nothing records.
   The rewrap is produced **before** the URL is handed over, or the set would
-  sit on a request while ffmpeg copied a film underneath it. It is only done
+  sit on a request while ffmpeg copied a film underneath it.
+  **And where it cannot be produced, the viewer is told** (`CastStatus.Note`,
+  shown as a toast where the set was handed the film itself). The commonest
+  reason is size: a copy has to fit in the scratch space, and a 25 GB release
+  does not fit in a 16 GB budget — so the set was handed the original, played
+  the soundtrack the file leads with, and the menu on this side went on
+  showing the language the viewer had picked. A television has no menu of its
+  own to correct that with, which is what makes the silence worse than the
+  refusal. It is only done
   where the viewer chose something other than the first track — that being
   what a set picks anyway — and where the file cannot be rewrapped at all
   the original is sent and the set chooses, which is worth more than

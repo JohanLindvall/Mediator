@@ -287,6 +287,12 @@ type CastStatus struct {
 	// URI is what it is playing, which is how a client tells that the set is
 	// still showing what it sent rather than something started elsewhere.
 	URI string `json:"uri,omitempty"`
+	// Note is what the viewer has to be told about what was handed over, in
+	// their own words, or empty when there is nothing to say. A set plays
+	// what is in the file and has no menu to change it, so a soundtrack that
+	// could not be copied out is a film in the wrong language with nothing
+	// on screen to explain it.
+	Note string `json:"note,omitempty"`
 }
 
 // CastControl drives a renderer that is already playing.

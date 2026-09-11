@@ -596,11 +596,16 @@ class VideoOverlay {
       // which soundtrack, so that choice travels as the file it is given
       // (castSource), and it is named only where it differs from the
       // default the set would pick anyway (castAudioChoice, tested).
-      await tv.cast.start(
+      const started = await tv.cast.start(
         at,
         this.subIndex >= 0 ? String(this.subIndex) : 'off',
         castAudioChoice(this.item.tracks ?? [], this.audioTrack),
       );
+      // What the set could not be given. A television plays what is in the
+      // file and has no menu to change it, so a soundtrack that could not be
+      // copied out is a film in the wrong language with a menu on this side
+      // insisting otherwise — which is worth a sentence.
+      if (started?.note) showToast(started.note, 5000);
     } catch (err) {
       if (this.closed || this.tv !== tv) return;
       // A set that will not play it says so on our behalf; coming back here

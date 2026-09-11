@@ -167,7 +167,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	// the wrong subtitle, or none.
 	it = s.probed(r.Context(), it)
 
-	src, mimeType, err := s.castSource(r.Context(), d, it, r.URL.Query().Get("audio"))
+	src, mimeType, note, err := s.castSourceNoted(r.Context(), d, it, r.URL.Query().Get("audio"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -205,7 +205,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.log.Info("casting", "renderer", d.Name, "item", it.Name, "type", mimeType)
-	writeJSON(w, CastStatus{State: "TRANSITIONING", URI: src})
+	writeJSON(w, CastStatus{State: "TRANSITIONING", URI: src, Note: note})
 }
 
 // castMeta describes the file to the set. A television has been handed one
@@ -289,6 +289,16 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 // conversion is not offered at all: it answers no ranges and has no length,
 // and a renderer given one either refuses it or plays it once from the top.
 func (s *Server) castSource(ctx context.Context, d *dlna.Renderer, it library.Item, audio string) (src, mimeType string, err error) {
+	src, mimeType, _, err = s.castSourceNoted(ctx, d, it, audio)
+	return src, mimeType, err
+}
+
+// castSourceNoted is castSource with the one thing the viewer has to be told
+// when it does not work out: whether the soundtrack they chose is actually
+// in what the set was handed. A set plays what is in the file and has no
+// menu to change it, so a choice that could not be copied out is a film
+// speaking the wrong language with nothing on screen to explain it.
+func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it library.Item, audio string) (src, mimeType, note string, err error) {
 	mimeType = mimeFor(it)
 	path := "stream/" + url.PathEscape(it.ID)
 
@@ -311,8 +321,13 @@ func (s *Server) castSource(ctx context.Context, d *dlna.Renderer, it library.It
 			path = "remux/" + url.PathEscape(it.ID) + "?a=" + strconv.Itoa(audioTrack(audio)) + remuxQuery(kind)
 			mimeType = remuxMime(it, kind)
 		} else {
-			// Nothing is lost: the file itself still plays, with whichever
-			// soundtrack the set picks out of it.
+			// Nothing is lost but the choice: the file itself still plays,
+			// with whichever soundtrack the set picks out of it. The
+			// commonest reason is size — a copy has to fit in the scratch
+			// space, and a 25 GB release does not fit in 16 GB — and it is
+			// worth saying out loud, since what the viewer sees otherwise is
+			// a film in the wrong language and a menu insisting otherwise.
+			note = "The television plays this film's own soundtrack: the one you chose cannot be copied out"
 			s.log.Debug("cast: cannot copy out the chosen soundtrack",
 				"item", it.Name, "err", err)
 		}
@@ -330,19 +345,19 @@ func (s *Server) castSource(ctx context.Context, d *dlna.Renderer, it library.It
 			path = "remux/" + url.PathEscape(it.ID) + "?a=" + strconv.Itoa(audioTrack(audio))
 			mimeType = "video/mp4"
 		} else {
-			return "", "", errCannotPlay{name: d.Name, typ: mimeType}
+			return "", "", note, errCannotPlay{name: d.Name, typ: mimeType}
 		}
 	}
 	base := s.localBase(d)
 	if base == "" {
-		return "", "", errNoAddress{}
+		return "", "", note, errNoAddress{}
 	}
 	// The query, where there is one, goes after the path the token covers.
 	head, query, _ := strings.Cut(path, "?")
 	if query != "" {
 		query = "?" + query
 	}
-	return s.mediaURL(base, head) + query, mimeType, nil
+	return s.mediaURL(base, head) + query, mimeType, note, nil
 }
 
 // mediaURL is where a set fetches one of our media paths from: our address

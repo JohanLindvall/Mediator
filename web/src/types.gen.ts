@@ -361,6 +361,7 @@ export interface CastStatus {
   position?: number;
   duration?: number;
   uri?: string;
+  note?: string;
 }
 
 export interface CastControl {
