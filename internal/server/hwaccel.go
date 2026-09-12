@@ -378,8 +378,14 @@ func hwProve(ffmpeg string, e *hwBackend, dev string) error {
 // keeps off the hardware for that film.
 func hwProveToneMap(ffmpeg string, e *hwBackend, dev string) error {
 	args, upload := hwProbeInput(e, dev)
-	// The generated frames are ten-bit, as a wide-colour decode's are.
-	args = append(args, "-vf", "format=p010le"+upload)
+	// The generated frames are ten-bit, as a wide-colour decode's are — and
+	// tagged as one: zscale converts from what the frame says it is, and a
+	// synthetic frame says nothing, so the proof failed with "no path
+	// between colorspaces" on the very machine whose real conversions
+	// succeed, and wrote the tone-map off for the process. A decode carries
+	// its BT.2020/PQ tags; the proof has to as well.
+	args = append(args, "-vf",
+		"format=p010le,setparams=colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084"+upload)
 	encode := e.encode(dev, 320, tonemapSoftware)
 	for i, a := range encode {
 		if a == "-vf" && i+1 < len(encode) {
