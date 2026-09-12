@@ -732,3 +732,28 @@ export const PLAYER_KEYS: readonly KeyHelp[] = [
   { keys: ['?'], does: 'This list' },
   { keys: ['Esc'], does: 'Close a menu, or the player' },
 ];
+
+/**
+ * How far to slide a menu so it sits inside the visible box.
+ *
+ * A menu is anchored with its right edge against its button's, which puts a
+ * menu off the left of the screen when the button is on the left of a
+ * wrapped control row. This returns the horizontal shift that brings it
+ * back: nothing when it already fits, a push right when it runs off the
+ * left, a push left when it runs off the right, and — for a menu wider than
+ * the box — a clamp to the left edge rather than the right, since the left
+ * is where reading starts.
+ */
+export function menuShift(
+  left: number,
+  right: number,
+  viewLeft: number,
+  viewWidth: number,
+  edge: number,
+): number {
+  const min = viewLeft + edge;
+  const max = viewLeft + viewWidth - edge;
+  if (left < min) return min - left;
+  if (right > max) return Math.max(min - left, max - right);
+  return 0;
+}

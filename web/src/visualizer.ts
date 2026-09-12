@@ -664,20 +664,27 @@ export class Visualizer {
    * guarded against here is precisely a film going quiet.
    */
   release(): void {
-    for (const [deck, tap] of [...this.taps]) {
-      if (!tap.stream) continue;
-      try {
-        tap.node.disconnect();
-      } catch {
-        // Already gone with the source it belonged to.
+    // Over every watched deck, not only the tapped ones: a deck parked on
+    // `tapChoice === 'wait'` is watched and untapped, and iterating the taps
+    // left its `loadeddata` listener and its `decks` entry behind across
+    // every open and close — the stale-element leak this is meant to prevent.
+    for (const [deck, again] of [...this.watching]) {
+      const tap = this.taps.get(deck);
+      // A moved output cannot be given back — that asymmetry is the whole
+      // point — so it, and its watch, stay.
+      if (tap && !tap.stream) continue;
+      if (tap) {
+        try {
+          tap.node.disconnect();
+        } catch {
+          // Already gone with the source it belonged to.
+        }
+        this.taps.delete(deck);
       }
-      this.taps.delete(deck);
-      // Let go of the deck itself as well: the next attach takes it up
-      // again from scratch, and one kept here between openings is a stale
-      // element for sounding() to consult on a visualiser reused across
-      // films. A moved deck stays, there being nothing to give back.
-      const again = this.watching.get(deck);
-      if (again) deck.removeEventListener('loadeddata', again);
+      // Let the deck go: the next attach takes it up from scratch, and one
+      // kept here between openings is a stale element for sounding() to
+      // consult on a visualiser reused across films.
+      deck.removeEventListener('loadeddata', again);
       this.watching.delete(deck);
       this.decks = this.decks.filter((d) => d !== deck);
     }

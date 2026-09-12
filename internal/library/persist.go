@@ -56,7 +56,7 @@ func (l *Library) LoadFromDB(db *blob.DB) int {
 			Album: cleanTag(r.Album), Genre: cleanGenreTag(r.Genre), Track: r.Track,
 			Year:   cleanYear(r.Year),
 			VCodec: r.VCodec, ACodec: r.ACodec, enriched: r.Enriched, shape: r.Shape,
-			Width: r.Width, Height: r.Height, FPS: r.FPS,
+			Width: r.Width, Height: r.Height, FPS: r.FPS, HDR: r.HDR,
 		}
 		// The episode a path names is parsed rather than stored: it is
 		// derived from the path, the record has no field for it, and this

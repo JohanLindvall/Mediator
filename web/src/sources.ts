@@ -27,7 +27,7 @@ export type { ItemSource } from './query';
 // The query's shape and the hold-over decision live in query.ts, where the
 // test runner can reach them; re-exported so callers keep one import.
 export type { QueryState } from './query';
-import { listFilters, sameSubject, type QueryState } from './query';
+import { drawCount, listFilters, sameSubject, type QueryState } from './query';
 
 /**
  * How many pages stay cached per query. Scrolling an enormous library end
@@ -89,9 +89,13 @@ export class LibrarySource {
       this.stale.clear();
       this.inflight.clear();
       this.total = -1;
-      this.onUpdate(); // and the grid has to be told, or it keeps drawing them
     }
     this.fetchPage(0);
+    // Announced after the fetch is in flight, not before: count() reads
+    // `inflight`, so telling the grid earlier would have it draw 0 rows
+    // (nothing asked) and never hear that a query is now pending — the
+    // skeletons an arrival should show would never appear.
+    this.onUpdate();
   }
 
   /**
@@ -156,8 +160,7 @@ export class LibrarySource {
    * query is in flight there is nothing to promise.
    */
   count(): number {
-    if (this.total >= 0) return this.total;
-    return this.inflight.size > 0 ? -1 : 0;
+    return drawCount({ answered: this.total >= 0 ? this.total : null, pending: this.inflight.size > 0 });
   }
 
   get(i: number): Item | undefined {
@@ -287,8 +290,16 @@ export class CollectionSource<T> {
     const subject = this.subjectOf(q);
     if (subject !== this.subject) {
       this.subject = subject;
-      if (this.items !== null) this.clear();
+      // Stepping to another subject drops the old rows and their chip counts
+      // at once, rather than showing one performer's releases under the
+      // next one's name until the answer lands.
+      this.items = null;
+      this.matching = null;
     }
+    // Say a fetch is now pending even when there were no rows to drop (the
+    // state reset() leaves): count() reads `loading`, and without this the
+    // grid holds 0 rows and the arrival skeletons never appear.
+    this.onUpdate();
     const gen = ++this.gen;
     this.fetch(q)
       .then((res) => {
@@ -301,6 +312,9 @@ export class CollectionSource<T> {
       .catch((err: Error) => {
         if (gen !== this.gen) return;
         this.loading = false;
+        // Tell the grid, or a screen already drawing skeletons for this
+        // fetch is never told the count is now 0.
+        this.onUpdate();
         this.onError(err);
       });
   }
@@ -334,8 +348,7 @@ export class CollectionSource<T> {
 
   /** As LibrarySource.count: -1 only while an answer is on its way. */
   count(): number {
-    if (this.items !== null) return this.items.length;
-    return this.loading ? -1 : 0;
+    return drawCount({ answered: this.items?.length ?? null, pending: this.loading });
   }
 }
 

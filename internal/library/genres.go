@@ -167,11 +167,17 @@ func itemInGenre(it *Item, want string) bool {
 }
 
 // SearchGenres filters and sorts the genre list.
-func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilter) []*Genre {
-	all := l.Genres()
-	if paths.Restricted() {
-		all = genresFrom(l.AllowedAlbums(l.Albums(), paths))
+// genresFor is the genres this caller may see: the cached list, or one
+// regrouped from the releases it can reach — the same door artistsFor is.
+func (l *Library) genresFor(paths PathFilter) []*Genre {
+	if !paths.Restricted() {
+		return l.Genres()
 	}
+	return genresFrom(l.AllowedAlbums(l.Albums(), paths))
+}
+
+func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilter) []*Genre {
+	all := l.genresFor(paths)
 	words := searchWords(search)
 	out := make([]*Genre, 0, len(all))
 	for _, g := range all {

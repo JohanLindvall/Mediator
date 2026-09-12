@@ -110,8 +110,15 @@ type hlsSession struct {
 	converting bool
 	cancel     context.CancelFunc
 	ready      chan struct{} // closed once the playlist lists a segment
-	err        error
-	used       int64 // for eviction: the sequence number of the last request
+	// stateMu guards done and err. The two are written by the conversion
+	// and by the watcher that opens the gate, from different goroutines,
+	// and read by every waiter the moment the gate opens: a plain field was
+	// a race between "nothing playable, record the error" and the watcher
+	// finding the first segment — and two goroutines closing ready.
+	stateMu sync.Mutex
+	done    bool
+	err     error
+	used    int64 // for eviction: the sequence number of the last request
 }
 
 // hlsKeyFile names what a session's segments are a conversion of, so a later
@@ -426,12 +433,10 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 // nobody was watching.
 func (h *HLS) Progress(id string, durationMs int64) (float64, bool) {
 	h.mu.Lock()
-	var dir string
-	var used int64 = -1
-	for key, s := range h.sessions {
-		if strings.HasPrefix(key, id+"|") && s.used > used {
-			dir, used = s.dir, s.used
-		}
+	s, found := newestOf(h.sessions, id, func(s *hlsSession) int64 { return s.used })
+	dir := ""
+	if found {
+		dir = s.dir
 	}
 	h.mu.Unlock()
 	if dir == "" || durationMs <= 0 {
@@ -574,6 +579,11 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 		h.log.Info("stopped converting, keeping what it produced", "dir", old.dir)
 	}
 
+	// The watcher that opens the gate on the first segment is the
+	// session's, started once: an attempt that failed and is being made
+	// again must not leave a second watcher reading the dead attempt's
+	// playlist beside the new one.
+	go h.watchFirst(cctx, s)
 	go h.run(cctx, s, it, t, copyVideo, audio)
 	go h.reap(cctx, s)
 	return h.await(ctx, s)
@@ -587,8 +597,8 @@ func (h *HLS) await(ctx context.Context, s *hlsSession) (*hlsSession, error) {
 	defer limit.Stop()
 	select {
 	case <-s.ready:
-		if s.err != nil {
-			return nil, s.err
+		if err := s.failure(); err != nil {
+			return nil, err
 		}
 		return s, nil
 	case <-ctx.Done():
@@ -758,27 +768,63 @@ func (h *HLS) forget(s *hlsSession) {
 }
 
 // run is the conversion itself: the plan both converters share (convert.go)
-// delivered as segments.
+// delivered as segments — made again where an attempt taught something
+// (the aspect repair, the hardware written off), and judged only once the
+// last attempt has had its turn.
 func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) {
+	for attempt := 1; ; attempt++ {
+		switch h.attempt(ctx, s, it, t, copyVideo, audio) {
+		case attemptAbandoned:
+			return
+		case attemptAgain:
+			if attempt < hlsMaxAttempts {
+				// The failed attempt's output goes first: ffmpeg will not
+				// write over a playlist it finds, and its stale segments
+				// would count towards the progress and the budget.
+				clearSession(s.dir)
+				continue
+			}
+		}
+		break
+	}
+	h.mu.Lock()
+	s.converting = false
+	h.mu.Unlock()
+	s.finish()
+	if s.failure() != nil {
+		// The waiters have their error; a fresh ask deserves a fresh
+		// attempt rather than this one, cached.
+		h.forget(s)
+	}
+}
+
+// hlsMaxAttempts bounds what one session may try. Each retry is bought by a
+// verdict that is remembered — the aspect noted, the hardware written off —
+// so the loop ends by itself; this is the belt.
+const hlsMaxAttempts = 3
+
+type attemptOutcome int
+
+const (
+	attemptDone      attemptOutcome = iota // ended, for good or ill: judge the session
+	attemptAgain                           // something was learnt that makes another worth it
+	attemptAbandoned                       // failed before it ran, and already forgotten
+)
+
+// attempt is one ffmpeg over the session: planned, run, and read for what
+// stopped it.
+func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) attemptOutcome {
 	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, aspects.has(it), h.log)
 	if err != nil {
 		s.fail(err)
 		h.forget(s)
-		return
+		return attemptAbandoned
 	}
+	// Let go as this attempt ends rather than when the session does: the
+	// next attempt must not run beside this one's repair copy, which would
+	// otherwise sit blocked on an unread pipe for the whole of it.
 	defer plan.close()
-	args := append(plan.args,
-		"-f", "hls",
-		"-hls_time", strconv.Itoa(hlsSegmentSec),
-		// Every segment stays listed and on disk: this is a file being
-		// converted, not a broadcast, so a player is entitled to go back to
-		// what it has already been given.
-		"-hls_list_size", "0",
-		"-hls_flags", "independent_segments",
-		"-hls_playlist_type", "event",
-		"-hls_segment_filename", filepath.Join(s.dir, "seg%05d.ts"),
-		filepath.Join(s.dir, "index.m3u8"),
-	)
+	args := append(plan.args, hlsOutputArgs(s.dir)...)
 
 	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
 	if plan.stdin != nil {
@@ -791,9 +837,8 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 	if err := cmd.Start(); err != nil {
 		s.fail(err)
 		h.forget(s)
-		return
+		return attemptAbandoned
 	}
-	go h.watchFirst(ctx, s)
 	if err := cmd.Wait(); err != nil && ctx.Err() == nil {
 		h.log.Warn("hls conversion ended", "path", it.Rel, "err", err,
 			"ffmpeg", strings.TrimSpace(errBuf.String()))
@@ -801,40 +846,64 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 		// its pixels are, which is not about the bytes: the film is
 		// converted again through the copy that puts that right (aspect.go),
 		// into the same session, whose waiters are still waiting on a first
-		// segment that has not been written. The one thing that must not
-		// happen is judging the session before the second attempt has had
-		// its turn.
-		if aspectRefused(errBuf.String()) && !aspects.has(it) {
+		// segment that has not been written. Only where the copy can be
+		// made — a file it cannot help would be attempted twice identically.
+		if aspectRefused(errBuf.String()) && !aspects.has(it) && repairable(h.ffmpeg, it) {
 			aspects.note(it)
 			h.log.Info("converting again with the declared aspect put right", "path", it.Rel)
-			h.run(ctx, s, it, t, copyVideo, audio)
-			return
+			return attemptAgain
 		}
 		// A run the graphics engine was carrying is written off for this
 		// file: half a conversion is a viewer watching a spinner, and the
 		// processor always works. Where nothing playable was written the
-		// session runs again on it, into the same session, whose waiters are
-		// still waiting.
+		// session runs again on it, and the waiters go on waiting.
 		if plan.hardware {
 			hwRefused.note(it)
 			h.log.Info("converting on the processor from now on", "path", it.Rel)
 			if !s.playable() {
-				h.run(ctx, s, it, t, copyVideo, audio)
-				return
+				return attemptAgain
 			}
 		}
 		// Only a failure that produced nothing is a failure to the caller;
 		// one that stopped part way leaves a playable prefix behind.
 		s.failIfEmpty(err)
 	}
-	h.mu.Lock()
-	s.converting = false
-	h.mu.Unlock()
-	s.finish()
-	if s.err != nil {
-		// The waiters have their error; a fresh ask deserves a fresh
-		// attempt rather than this one, cached.
-		h.forget(s)
+	return attemptDone
+}
+
+// hlsOutputArgs is the delivery: segments of hlsSegmentSec, every one of
+// them kept and listed, into the session's directory.
+func hlsOutputArgs(dir string) []string {
+	return []string{
+		"-f", "hls",
+		"-hls_time", strconv.Itoa(hlsSegmentSec),
+		// Every segment stays listed and on disk: this is a file being
+		// converted, not a broadcast, so a player is entitled to go back to
+		// what it has already been given.
+		"-hls_list_size", "0",
+		"-hls_flags", "independent_segments",
+		"-hls_playlist_type", "event",
+		"-hls_segment_filename", filepath.Join(dir, "seg%05d.ts"),
+		// Over whatever is there. With no terminal to ask at, ffmpeg answers
+		// an existing playlist by refusing — which is exactly what a second
+		// attempt into the same directory finds.
+		"-y", filepath.Join(dir, "index.m3u8"),
+	}
+}
+
+// clearSession empties a session's directory of everything but the key
+// file that says what it is a conversion of, for an attempt that is about
+// to be made again.
+func clearSession(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == hlsKeyFile {
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(dir, e.Name()))
 	}
 }
 
@@ -872,9 +941,18 @@ func (h *HLS) watchFirst(ctx context.Context, s *hlsSession) {
 	}
 }
 
+// fail ends the session with an error, for waiters who have not been
+// answered yet. One that already has something playable keeps it: the
+// error then describes what stopped the rest, which they can still watch.
 func (s *hlsSession) fail(err error) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.done {
+		return
+	}
 	s.err = err
-	s.finish()
+	s.done = true
+	close(s.ready)
 }
 
 // playable says something has been produced that a player can start on.
@@ -887,18 +965,34 @@ func (s *hlsSession) playable() bool {
 	}
 }
 
-// failIfEmpty records an error only when nothing playable was produced.
+// failIfEmpty records an error only when nothing playable was produced —
+// decided under the same lock the watcher opens the gate under, so the two
+// cannot cross: an error recorded a moment after the first segment was
+// found would send a waiter away from a conversion that is playing.
 func (s *hlsSession) failIfEmpty(err error) {
-	if s.playable() {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.done {
 		return
 	}
 	s.err = err
 }
 
+// finish opens the gate, once, whoever gets there first: the watcher on the
+// first segment, or the conversion ending.
 func (s *hlsSession) finish() {
-	select {
-	case <-s.ready:
-	default:
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if !s.done {
+		s.done = true
 		close(s.ready)
 	}
+}
+
+// failure is what the session ended in, if anything, read the way it was
+// written.
+func (s *hlsSession) failure() error {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.err
 }

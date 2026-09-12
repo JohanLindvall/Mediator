@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -107,7 +108,8 @@ func describeSuffix(suffix string) (label, lang string) {
 		// Keep other tokens ("forced", "sdh", "cc") as written, capitalized.
 		w := p
 		if i == 0 || lang != "" {
-			w = strings.ToUpper(p[:1]) + p[1:]
+			r, n := utf8.DecodeRuneInString(p)
+			w = string(unicode.ToUpper(r)) + p[n:]
 		}
 		words = append(words, w)
 	}

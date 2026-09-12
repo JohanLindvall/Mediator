@@ -100,6 +100,12 @@ func (l *Library) watchStateOf(id string) WatchState {
 // have gone stale. It is separate from the library's own version because a
 // position saved every few seconds must not make every client refetch the
 // whole library — it only means something to a query that filters on it.
+// WatchVersion is the position counter, for the ETag that has to move with
+// it: the chips a grouped answer carries count what has been started and
+// finished, and a position saved between two requests changes them without
+// moving either library version.
+func (l *Library) WatchVersion() int64 { return l.watchVersion() }
+
 func (l *Library) watchVersion() int64 {
 	l.watchMu.RLock()
 	defer l.watchMu.RUnlock()
@@ -134,7 +140,7 @@ func (l *Library) watchSnapshot() map[string]WatchState {
 // watchVer) — the map is small, being only what has ever been played, but
 // this is asked for on every listing.
 func (l *Library) watchTotals() (started, done int) {
-	version := l.Version()
+	version := l.GroupVersion()
 	watchVer := l.watchVersion()
 
 	l.watchMu.Lock()

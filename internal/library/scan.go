@@ -63,6 +63,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 	// same folder, and the folder is read once.
 	folded := make(map[string]struct{}, 8)
 	changed := false
+	held := false // a change to what the library holds, not merely bytes
 	pending := 0
 	dupes := 0
 	// Directories the walk could not read. Their entries are left alone
@@ -140,6 +141,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 					}
 					if ch {
 						changed = true
+						held = true
 						pending++
 					}
 				}
@@ -162,6 +164,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				}
 				if ch {
 					changed = true
+					held = true
 					pending++
 				}
 				return nil
@@ -183,7 +186,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				return nil
 			}
 			key, _ := fileID(info)
-			ch, _, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
+			ch, bytesOnly, dup := l.upsert(path, kind, info.Size(), info.ModTime(), key, symlink)
 			if dup {
 				// Another path already represents this file; leaving it out
 				// of seen also drops it if it used to be the indexed one.
@@ -193,6 +196,9 @@ func (l *Library) Scan(addWatch func(dir string)) {
 			seen[path] = struct{}{}
 			if ch {
 				changed = true
+				if !bytesOnly {
+					held = true
+				}
 				pending++
 				// Publish progress during large initial scans so the UI
 				// fills in as files are discovered.
@@ -259,14 +265,21 @@ func (l *Library) Scan(addWatch func(dir string)) {
 		}
 		l.dropItem(it)
 		changed = true
+		held = true
 	}
 	l.mu.Unlock()
 
 	if dupes > 0 {
 		l.log.Info("skipped duplicate files", "paths", dupes)
 	}
-	if changed || pending > 0 {
+	// A rescan that saw only a download grow changes no grouped view, so it
+	// bumps the byte version alone rather than discarding every cache; a
+	// held change (a new file, a drop, a tag) bumps both.
+	switch {
+	case held || pending > 0:
 		l.notify()
+	case changed:
+		l.notifyBytes()
 	}
 }
 
@@ -334,7 +347,8 @@ func ValidateExcludes(patterns []string) error {
 
 // stillIndexable reports whether a path the walk did not report should
 // nevertheless keep its place — the usual reason being a race with the
-// watcher rather than a deliberate skip. Caller must hold l.mu.
+// watcher rather than a deliberate skip. Holds no lock of its own to take;
+// reconciliation calls it unlocked and it takes rootsMu itself.
 func (l *Library) stillIndexable(path string, info fs.FileInfo) bool {
 	// A directory that has been taken out of the preferences leaves its files
 	// exactly where they were, so "it is still on disk" cannot be the whole

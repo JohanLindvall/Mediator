@@ -41,8 +41,8 @@ const tonemapSoftware = "zscale=t=linear:npl=100," +
 	"tonemap=tonemap=hable:desat=0,zscale=t=bt709:m=bt709:p=bt709:r=tv"
 
 var (
-	filtersOnce sync.Once
-	filterSet   map[string]bool
+	filtersMu  sync.Mutex
+	filterSets = map[string]map[string]bool{} // by ffmpeg path
 )
 
 // haveFilter reports whether this ffmpeg was built with a filter, asked once
@@ -50,24 +50,45 @@ var (
 // not every build has it; where it is missing the picture is described
 // honestly as BT.709 instead of being converted to it — wrong colour, but a
 // stream that plays, which is the better of the two failures.
+//
+// Remembered only once the list has actually been read: a `-filters` run
+// that failed — a process limit, a disk that was briefly away — used to be
+// cached as an empty list for the life of the process, which turned the
+// tone-map off for every film after it and reproduced the very fault this
+// file exists to fix. Keyed by path, since the answer is the binary's.
 func haveFilter(ffmpeg, name string) bool {
-	filtersOnce.Do(func() {
-		filterSet = map[string]bool{}
-		if ffmpeg == "" {
-			return
-		}
+	if ffmpeg == "" {
+		return false
+	}
+	filtersMu.Lock()
+	defer filtersMu.Unlock()
+	set, ok := filterSets[ffmpeg]
+	if !ok {
 		out, err := exec.Command(ffmpeg, "-hide_banner", "-filters").Output()
 		if err != nil {
-			return
+			return false // asked again next time
 		}
-		for _, line := range strings.Split(string(out), "\n") {
-			// " TS. colorspace        V->V       Convert between ..."
-			if f := strings.Fields(line); len(f) >= 2 {
-				filterSet[f[1]] = true
-			}
+		set = parseFilters(string(out))
+		filterSets[ffmpeg] = set
+	}
+	return set[name]
+}
+
+// parseFilters reads the names out of `ffmpeg -filters`, one per line after
+// the flags column (" TS. colorspace        V->V       Convert between ...").
+// The header lines have no such column and fall out of the same rule.
+func parseFilters(out string) map[string]bool {
+	set := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		// A filter line has the flags, the name and then what it takes to
+		// what ("V->V", "|->A" for a source); the legend above them has
+		// the flags column too, and nothing with an arrow after it.
+		if len(f) >= 3 && strings.Contains(f[2], "->") {
+			set[f[1]] = true
 		}
-	})
-	return filterSet[name]
+	}
+	return set
 }
 
 // toneCurve is the tone-map to splice into a conversion, or "" where there

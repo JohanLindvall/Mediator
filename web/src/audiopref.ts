@@ -23,7 +23,11 @@ const LANG_KEY = 'media.audioLang';
 
 export function rememberedTrack(id: string): number | undefined {
   const v = recall(FILE_KEY + id);
-  return v === null ? undefined : Number(v);
+  if (v === null) return undefined;
+  // A corrupted value is no answer: Number('') is 0 and Number('x') is NaN,
+  // and either would be read as "this film's track 0" or a bogus index.
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
 }
 
 export function preferredLang(): string {

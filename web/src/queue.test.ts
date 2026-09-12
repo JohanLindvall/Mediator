@@ -10,11 +10,14 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  ahead,
   appendToOrder,
   freshForRadio,
+  freshFrom,
   nextPosition,
   pickRadio,
   placeFirst,
+  recentArtists,
   recordingKey,
   resumable,
   shuffleInPlace,
@@ -217,4 +220,40 @@ test('a neighbourhood that really is one band still fills the batch', () => {
   const batch = pickRadio(pool, 10, seeded(3), ['gorse beacon', 'gorse beacon']);
   assert.equal(batch.length, 10);
   assert.equal(new Set(batch.map((t) => t.id)).size, 10);
+});
+
+test('ahead: how many follow the one playing', () => {
+  assert.equal(ahead(5, 0), 4);
+  assert.equal(ahead(5, 4), 0);
+  assert.equal(ahead(1, 0), 0);
+  assert.equal(ahead(0, -1), 0);
+});
+
+test('recentArtists reads backwards through the order, not the queue tail', () => {
+  const queue = [{ artist: 'A' }, { artist: 'B' }, { artist: 'C' }, { artist: 'D' }];
+  const order = [3, 1, 0, 2]; // playing D, then B, then A, then C
+  // At position 2 (A), the recently played are A, B, D — not the queue's tail.
+  assert.deepEqual(recentArtists(order, queue, 2, 3), ['A', 'B', 'D']);
+  assert.deepEqual(recentArtists(order, queue, 0, 5), ['D']); // clamped at the start
+  assert.deepEqual(recentArtists([0], [{}], 0, 3), ['']); // no performer: empty, not a gap
+});
+
+test('freshFrom reads the sets and does not add the whole pool to them', () => {
+  const ids = new Set(['a']);
+  const heard = new Set([recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' })]);
+  const pool = [
+    { id: 'a', artist: 'x', title: 'y' }, // already queued by id
+    { id: 'b', artist: 'Gorse Beacon', title: 'Signal Fires' }, // queued recording
+    { id: 'c', artist: 'Gorse Beacon', title: 'Other' }, // fresh
+    { id: 'd', artist: 'gorse beacon', title: 'OTHER' }, // same recording as c, within batch
+    { id: 'e' }, // untagged, always fresh
+  ];
+  assert.deepEqual(
+    freshFrom(pool, ids, heard).map((t) => t.id),
+    ['c', 'e'],
+  );
+  // The caller's sets are untouched: only what is actually queued is added,
+  // by the caller, as it appends.
+  assert.deepEqual([...ids], ['a']);
+  assert.equal(heard.size, 1);
 });

@@ -38,14 +38,15 @@ type scaled struct {
 // scaledVectors answers the current scaling, rebuilding it when a vector
 // has arrived since.
 func (l *Library) scaledVectors() *scaled {
+	// Gen and the vectors are read under one lock: taken separately, the
+	// snapshot could hold vectors published after the gen it is stamped
+	// with, and a later reader wanting that gen would rebuild needlessly.
 	l.featMu.RLock()
-	gen := l.featuresGen
-	cur := l.scaledCache
-	l.featMu.RUnlock()
-	if cur != nil && cur.gen == gen {
+	if cur := l.scaledCache; cur != nil && cur.gen == l.featuresGen {
+		l.featMu.RUnlock()
 		return cur
 	}
-	l.featMu.RLock()
+	gen := l.featuresGen
 	raw := make(map[string][]float32, len(l.features))
 	for id, rec := range l.features {
 		if len(rec.vec) == featureDims {
@@ -235,14 +236,20 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 		if !ok || !kinds.Has(it.Kind) || !allowed(it.Path) {
 			continue
 		}
-		// Another copy of the seed itself is the nearest thing there is to
-		// it, and the least worth offering: "more like this" that opens with
-		// this, again.
+		// The recording key is two ToLower strings and a concat; built for
+		// every one of twenty thousand candidates it dwarfs the dot product.
+		// So the score decides first, and only a candidate good enough to be
+		// kept is keyed — except the seed's own other copies, dropped up
+		// front: they score ~1 and would otherwise fill the answer.
+		score := dot(seed, v)
+		if len(best) == n && before(hit{id: other, score: score}, best[n-1]) >= 0 {
+			continue
+		}
 		key := recordingKey(it)
 		if key != "" && key == seedKey {
 			continue
 		}
-		consider(hit{other, key, dot(seed, v)})
+		consider(hit{other, key, score})
 	}
 	out := make([]Item, 0, len(best))
 	for _, h := range best {
@@ -260,14 +267,13 @@ type affinity struct {
 	// The releases' word it kept speech apart by (byRelease): an album build
 	// replaces that map wholesale, and an affinity built against the old
 	// one would go on separating music from speech by a verdict the shelves
-	// no longer hold. Compared by identity, since it is never edited in
-	// place.
+	// no longer hold. Compared by content (sameMap), since the build makes a
+	// fresh map whether or not the verdicts changed.
 	release map[string]bool
 	bucket  map[string]int    // -2..2, see affinityBucket
 	akin    map[string]string // the verdict's track it most resembles
 }
 
-// sameMap says whether two maps are the same map, not merely equal.
 // sameMap compares the release verdicts by content rather than by identity.
 //
 // The album build makes a fresh map every time it runs, so an identity test

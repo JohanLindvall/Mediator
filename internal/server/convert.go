@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/JohanLindvall/Mediator/internal/library"
 )
@@ -60,7 +61,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 	// configured from what the stream says, so without this there is no
 	// conversion to be had at all. The copy does the seek, so the conversion
 	// asks for none — it reads a pipe, and a pipe seeks nowhere anyway.
-	if repair && metadataFilter(it.VCodec) != "" && !it.Archived() {
+	if repair && repairable(ffmpeg, it) {
 		pipe, rerr := startRepair(ctx, ffmpeg, it, t)
 		if rerr != nil {
 			return nil, rerr
@@ -75,10 +76,10 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 
 	// Where this conversion runs. Decided before anything else, because it
 	// changes the arguments on both sides of the input.
-	onHardware := !copyVideo && hw.use(ffmpeg, it, log)
+	onHardware := !copyVideo && hw.use(it, log)
 	c.hardware = onHardware
 
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+	args := ffmpegBase()
 	if onHardware {
 		args = append(args, hw.input()...)
 	}
@@ -97,7 +98,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		// The filters and the encoder run where the frames already are —
 		// except the tone-map, which the engine cannot do and the processor
 		// takes over for, after the engine has scaled the picture down.
-		args = append(args, hw.encode(convertMaxWidth, toneCurve(ffmpeg, it.HDR))...)
+		args = append(args, hw.encode(convertMaxWidth, hw.toneMap(toneCurve(ffmpeg, it.HDR)))...)
 		args = append(args, convertColourArgs(it.HDR)...)
 	default:
 		// A wide-colour picture is brought back to ordinary colour on the
@@ -112,9 +113,37 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 			"-vf", videoFilter(filters), "-pix_fmt", "yuv420p")
 		args = append(args, convertColourArgs(it.HDR)...)
 	}
-	c.args = append(args,
-		"-c:a", "aac", "-b:a", "160k", "-ac", "2",
-		"-avoid_negative_ts", "make_zero",
-	)
+	c.args = append(args, audioEncodeArgs(false)...)
+	c.args = append(c.args, "-avoid_negative_ts", "make_zero")
 	return c, nil
+}
+
+// audioEncodeArgs is the soundtrack every conversion here makes: stereo AAC
+// at 160 kbit/s, which every browser and every set decodes. fast is the
+// coder the sound-fix file uses — it is waited on for the whole encode, and
+// measured over a television episode the fast coder took it from 61 s to
+// 37 s — where a live conversion keeps the default, having only to stay
+// ahead of playback. One spelling, so the same film sounds the same
+// whichever route it took.
+func audioEncodeArgs(fast bool) []string {
+	args := []string{"-c:a", "aac"}
+	if fast {
+		args = append(args, "-aac_coder", "fast")
+	}
+	return append(args, "-b:a", "160k", "-ac", "2")
+}
+
+// newestOf picks, among entries keyed "<id>|…", the one most recently
+// wanted: the item's latest conversion, which a soundtrack change or a seek
+// makes a second of. The readout is about that one; the first found in a
+// map is whichever. Both converters keep such a map and both used to spell
+// this loop.
+func newestOf[T any](entries map[string]T, id string, used func(T) int64) (best T, found bool) {
+	var at int64 = -1
+	for key, cand := range entries {
+		if strings.HasPrefix(key, id+"|") && used(cand) > at {
+			best, at, found = cand, used(cand), true
+		}
+	}
+	return best, found
 }

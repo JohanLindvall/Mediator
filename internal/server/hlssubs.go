@@ -170,7 +170,10 @@ func (s *Server) hlsSessionItem(r *http.Request, sess *hlsSession) (library.Item
 		if len(parts) < 4 {
 			return it, 0, false
 		}
-		got, ok := s.lib.Get(parts[0])
+		// Through the face, as every by-id route is: the token is
+		// unguessable, but a session kept across a restart is the one path
+		// where the item was resolved before this request's face was known.
+		got, ok := s.item(r, parts[0])
 		if !ok {
 			return it, 0, false
 		}

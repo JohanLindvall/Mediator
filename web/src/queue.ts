@@ -217,14 +217,67 @@ export function freshForRadio<T extends RadioTrack>(pool: T[], queued: RadioTrac
     const key = recordingKey(t);
     if (key !== '') heard.add(key);
   }
+  // Within the batch too (freshFrom keeps adding as it goes): the server
+  // deduplicates one answer, but a page open across a restart may hold a
+  // copy from before it did.
+  return freshFrom(pool, ids, heard);
+}
+
+/**
+ * How many tracks follow the one playing in the order — what radio tops up
+ * against. Spelled once here rather than as `order.length - 1 - pos` in two
+ * places that could drift.
+ */
+export function ahead(orderLength: number, orderPos: number): number {
+  return orderLength - 1 - orderPos;
+}
+
+/**
+ * The performers of the tracks lately played: the one on now and the `n`
+ * before it, read backwards through the order.
+ *
+ * Radio damps a performer already in earshot, and "in earshot" is what has
+ * played, not the tail of a shuffled queue — with the whole library shuffled
+ * in, `queue.slice(-n)` is an arbitrary handful of library-order entries, so
+ * the damping was fed noise. This follows the order the player is actually
+ * walking.
+ */
+export function recentArtists(
+  order: number[],
+  queue: { artist?: string }[],
+  orderPos: number,
+  n: number,
+): string[] {
+  const out: string[] = [];
+  for (let p = orderPos; p >= 0 && out.length < n; p--) {
+    const t = queue[order[p]!];
+    if (t) out.push(t.artist ?? '');
+  }
+  return out;
+}
+
+/**
+ * The fold of `freshForRadio` when the caller already holds the queue's ids
+ * and recording keys, so a top-up need not walk a queue that may be the
+ * whole library. The two sets are **read, not written**: only the tracks a
+ * top-up actually keeps go into the queue, and the caller adds those as it
+ * appends them — folding the whole pool in here would bar every track it
+ * looked at and did not take. Duplicates *within* the batch are still
+ * dropped, against a set local to this call.
+ */
+export function freshFrom<T extends RadioTrack>(
+  pool: T[],
+  ids: ReadonlySet<string>,
+  heard: ReadonlySet<string>,
+): T[] {
+  const batchIds = new Set<string>();
+  const batchKeys = new Set<string>();
   return pool.filter((t) => {
-    if (ids.has(t.id)) return false;
+    if (ids.has(t.id) || batchIds.has(t.id)) return false;
     const key = recordingKey(t);
-    if (key !== '' && heard.has(key)) return false;
-    // Within the batch too: the answer is deduplicated by the server, but a
-    // page open across a restart may hold one from before it was.
-    ids.add(t.id);
-    if (key !== '') heard.add(key);
+    if (key !== '' && (heard.has(key) || batchKeys.has(key))) return false;
+    batchIds.add(t.id);
+    if (key !== '') batchKeys.add(key);
     return true;
   });
 }

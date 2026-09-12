@@ -169,7 +169,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 
 	src, mimeType, note, err := s.castSourceNoted(r.Context(), d, it, r.URL.Query().Get("audio"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		castSourceError(w, err)
 		return
 	}
 
@@ -263,9 +263,9 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 	// Probed for the same reason handleCast probes: what is queued next has
 	// the same soundtracks and captions to resolve as what is playing.
 	it = s.probed(r.Context(), it)
-	src, mimeType, err := s.castSource(r.Context(), d, it, r.URL.Query().Get("audio"))
+	src, mimeType, note, err := s.castSourceNoted(r.Context(), d, it, r.URL.Query().Get("audio"))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		castSourceError(w, err)
 		return
 	}
 	meta := s.castMeta(r, d, it, src, mimeType)
@@ -277,7 +277,7 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotImplemented)
 		return
 	}
-	writeJSON(w, CastStatus{State: "QUEUED", URI: src})
+	writeJSON(w, CastStatus{State: "QUEUED", URI: src, Note: note})
 }
 
 // castSource decides what URL to hand over and what to call it.
@@ -288,11 +288,6 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 // unlike the segmented conversion something it can seek in. A live
 // conversion is not offered at all: it answers no ranges and has no length,
 // and a renderer given one either refuses it or plays it once from the top.
-func (s *Server) castSource(ctx context.Context, d *dlna.Renderer, it library.Item, audio string) (src, mimeType string, err error) {
-	src, mimeType, _, err = s.castSourceNoted(ctx, d, it, audio)
-	return src, mimeType, err
-}
-
 // castSourceNoted is castSource with the one thing the viewer has to be told
 // when it does not work out: whether the soundtrack they chose is actually
 // in what the set was handed. A set plays what is in the file and has no
@@ -434,6 +429,18 @@ func (s *Server) castCaption(d *dlna.Renderer, it library.Item, choice string) s
 		return ""
 	}
 	return s.mediaURL(base, "subs/"+url.PathEscape(it.ID)+"/"+strconv.Itoa(index)) + "?format=srt"
+}
+
+// castSourceError answers a castSource failure: a set that cannot play the
+// container is the caller's problem (422), no local address is this
+// server's (503).
+func castSourceError(w http.ResponseWriter, err error) {
+	var noAddr errNoAddress
+	if errors.As(err, &noAddr) {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 }
 
 type errCannotPlay struct{ name, typ string }

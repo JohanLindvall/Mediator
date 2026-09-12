@@ -440,9 +440,12 @@ func run(cfg config, log *slog.Logger) error {
 		}
 	}
 
+	var runErr error
 	select {
-	case err := <-errCh:
-		return err
+	case runErr = <-errCh:
+		// Fall through to the same drain rather than returning here: a bind
+		// or serve error still has to flush the stores before db.Close, or
+		// the deferred close races the final writes.
 	case <-ctx.Done():
 	}
 
@@ -456,7 +459,7 @@ func run(cfg config, log *slog.Logger) error {
 	stop()
 	<-stateDone
 	<-persistDone
-	return nil
+	return runErr
 }
 
 // scratchDirName is what to call the working space in a log line when the

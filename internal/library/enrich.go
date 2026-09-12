@@ -432,7 +432,7 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		HDR:    out.hdr,
 		Probed: out.answered,
 	})
-	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 {
+	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 && !out.hdr {
 		return // nothing to write down, and nothing changed on the item
 	}
 	if fresh, ok := l.Get(id); ok {
@@ -445,7 +445,11 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 			MTime: fresh.ModTime, Size: fresh.Size, Duration: fresh.Duration,
 			VCodec: fresh.VCodec, ACodec: fresh.ACodec,
 			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, HDR: fresh.HDR,
-			Shape: fresh.shape,
+			// A film the eager pass never reached has no marker yet, and a
+			// record carrying a size under "shape unread" is a header to
+			// read again on every start. What was just measured is this
+			// reading.
+			Shape: shapeMarker(fresh),
 			Title: fresh.Title, Artist: fresh.Artist, Album: fresh.Album,
 			Genre: fresh.Genre, Track: fresh.Track, Year: fresh.Year,
 		})
@@ -501,4 +505,14 @@ func ReadPicture(it Item) (data []byte, mime string) {
 		}
 	})
 	return data, mime
+}
+
+// shapeMarker is which reading of the shape a record written now carries:
+// the item's own where it has one, and the current one where the picture
+// was measured by the probe that is writing this.
+func shapeMarker(it Item) int {
+	if it.shape == 0 && it.Width > 0 {
+		return shapeVersion
+	}
+	return it.shape
 }

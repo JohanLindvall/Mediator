@@ -48,7 +48,7 @@ func (l *Library) playsSnapshot() map[string]int {
 // judged, and both outlive the files they belong to until the next prune —
 // so they are intersected with the index rather than measured on their own.
 func (l *Library) playedTotal() int {
-	version := l.Version()
+	version := l.GroupVersion()
 
 	l.playedMu.Lock()
 	if l.playedValid && l.playedVersion == version {

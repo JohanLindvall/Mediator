@@ -597,3 +597,34 @@ func TestReplacedStoredMemberForgetsWhatWasRead(t *testing.T) {
 		t.Errorf("the disc's own length was forgotten with the rest: %d", it.Duration)
 	}
 }
+
+// The colour follows the probe's own rule about what counts as an answer:
+// a probe that ran is the whole truth about it, false included, and one
+// that did not run (the cache-restore branch carries no Probed) must not
+// wipe a verdict already held. A file replaced in place forgets it with the
+// rest of what was read from the old bytes.
+func TestSetProbeKeepsAndClearsTheColour(t *testing.T) {
+	l := quietLib("/m")
+	l.upsert("/m/film.mkv", KindVideo, 10, time.Unix(1, 0), fileKey{}, false)
+	id := PathID("/m/film.mkv")
+	l.setProbe(id, Probe{VCodec: "hevc", HDR: true, Probed: true})
+	if it, _ := l.Get(id); !it.HDR {
+		t.Fatal("an answered probe did not record the colour")
+	}
+	// No probe ran: the colour it held stands.
+	l.setProbe(id, Probe{VCodec: "hevc"})
+	if it, _ := l.Get(id); !it.HDR {
+		t.Error("a restore with no probe wiped the colour")
+	}
+	// A probe ran and found ordinary colour: that is the truth now.
+	l.setProbe(id, Probe{VCodec: "hevc", Probed: true})
+	if it, _ := l.Get(id); it.HDR {
+		t.Error("an answered probe finding ordinary colour did not clear the old verdict")
+	}
+	// Replaced on disk: everything read from the old bytes goes, colour too.
+	l.setProbe(id, Probe{VCodec: "hevc", HDR: true, Probed: true})
+	l.upsert("/m/film.mkv", KindVideo, 11, time.Unix(2, 0), fileKey{}, false)
+	if it, _ := l.Get(id); it.HDR || it.VCodec != "" {
+		t.Errorf("a replaced file kept the old bytes' colour or codec: hdr=%v vcodec=%q", it.HDR, it.VCodec)
+	}
+}

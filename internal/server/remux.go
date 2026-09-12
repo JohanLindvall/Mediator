@@ -451,7 +451,7 @@ func (r *Remuxer) File(ctx context.Context, it library.Item, audio string, kind 
 	// Keyed like every other derived artefact here: a file that changed
 	// under us is a different file, not a stale copy of the same one.
 	track := audioTrack(audio)
-	key := fmt.Sprintf("%s|%d|%d|%d|%s", it.ID, it.ModTime, it.Size, track, kind)
+	key := fmt.Sprintf("%s|%d|%s", itemKey(it), track, kind)
 
 	// An idempotent mkdir, so a Remuxer that was never told to adopt an
 	// earlier run's files still has somewhere to write this one.
@@ -501,14 +501,9 @@ func (r *Remuxer) Progress(id string) (float64, bool) {
 	// a second — is the one the readout is about; the first found in a map
 	// is whichever.
 	r.mu.Lock()
-	var e *remuxEntry
-	for key, cand := range r.entries {
-		if strings.HasPrefix(key, id+"|") && (e == nil || cand.used > e.used) {
-			e = cand
-		}
-	}
+	e, found := newestOf(r.entries, id, func(e *remuxEntry) int64 { return e.used })
 	r.mu.Unlock()
-	if e == nil {
+	if !found {
 		return 0, false
 	}
 	select {
@@ -673,7 +668,7 @@ func (r *Remuxer) run(ctx context.Context, it library.Item, track int, kind remu
 		defer input.pipe.Close()
 		stdin = input.pipe
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y"}
+	args := append(ffmpegBase(), "-y")
 	args = append(args, input.args...)
 
 	// One soundtrack, and it is the one asked for. A film shipping four
@@ -689,7 +684,7 @@ func (r *Remuxer) run(ctx context.Context, it library.Item, track int, kind remu
 		// "fast" is what this is waited on for, and measured over a
 		// television episode it took the encode from 61 s to 37 s. That
 		// difference is the whole wait, the copy itself being 2 s.
-		args = append(args, "-c:a", "aac", "-aac_coder", "fast", "-b:a", "160k", "-ac", "2")
+		args = append(args, audioEncodeArgs(true)...)
 	} else {
 		args = append(args, "-c:a", "copy")
 	}

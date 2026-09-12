@@ -44,6 +44,7 @@ import { icons } from './icons';
 import { findKind, type ItemSource } from './sources';
 import {
   audioSilent,
+  menuShift,
   shouldSave,
   PLAYER_KEYS,
   cropScale,
@@ -273,6 +274,10 @@ class VideoOverlay {
   private prepMsg: HTMLElement;
   private stopPrep: () => void = () => {};
   private prepGen = 0;
+  /** Stops the cast-preparation poll; see countCastPreparation. */
+  private stopCount: () => void = () => {};
+  /** The in-flight metadata fetch for the current file, shared and cleared per file. */
+  private refreshing: Promise<void> | null = null;
   private slideCur: HTMLCanvasElement;
   /** The keys, listed on request. */
   private helpEl!: HTMLElement;
@@ -606,7 +611,11 @@ class VideoOverlay {
       // minute or two of a label that says only "Opening". The copy reports
       // how far it has got through the same endpoint the player's own waits
       // use, so the label can count it out.
-      const stopCount = this.countCastPreparation(target.name);
+      // Held in a field, not a local, so close() can stop it: copying a
+      // 25 GB release is minutes, and a viewer who leaves must not leave the
+      // poll running.
+      this.stopCount();
+      this.stopCount = this.countCastPreparation(target.name);
       let started: CastStatus | null;
       try {
         started = await tv.cast.start(
@@ -615,7 +624,7 @@ class VideoOverlay {
           castAudioChoice(this.item.tracks ?? [], this.audioTrack),
         );
       } finally {
-        stopCount();
+        this.stopCount();
       }
       // What the set could not be given. A television plays what is in the
       // file and has no menu to change it, so a soundtrack that could not be
@@ -658,8 +667,19 @@ class VideoOverlay {
     this.onTv.hidden = true;
     this.markCastMenu();
     this.buildCastMenu(knownRenderers());
-    if (resumeHere) this.load(this.item, at);
-    else this.paint();
+    if (resumeHere) {
+      this.load(this.item, at);
+      return;
+    }
+    // Not resuming — the set was stopped from its own remote, or a season
+    // rolled on with nothing to follow. The element never showed this film,
+    // so its poster stays up over a stale clock unless it is taken down; and
+    // sourced/tcOffset still describe the pre-cast stream, which curT() would
+    // otherwise report.
+    this.hidePoster();
+    this.sourced = false;
+    this.tcOffset = 0;
+    this.paint();
   }
 
   /**
@@ -1136,9 +1156,20 @@ class VideoOverlay {
    * codecs the file holds, and the silent-playback check needs that.
    */
   private async refreshItem(): Promise<void> {
+    // One fetch per file, shared: load() asks, and convertForContainer asks
+    // again, and whichever won used to decide whether the conversion opened
+    // once or twice. Cleared in beginFile, so the next file fetches afresh.
+    if (!this.refreshing) this.refreshing = this.fetchItem();
+    return this.refreshing;
+  }
+
+  private async fetchItem(): Promise<void> {
+    // By id, so a late answer for the film that has been stepped away from
+    // does not repoint the player at it — the same guard onMediaError makes.
+    const id = this.item.id;
     try {
-      const fresh = await getItem(this.item.id);
-      if (!this.closed) this.item = fresh;
+      const fresh = await getItem(id);
+      if (!this.closed && this.item.id === id) this.item = fresh;
     } catch {
       // Metadata is an optimisation here; playback carries on without it.
     }
@@ -1148,13 +1179,17 @@ class VideoOverlay {
 
   /** Load external subtitle files and expose them through the CC button. */
   private async loadSubs(): Promise<void> {
+    // By id: a listing that answers after the viewer has stepped to another
+    // film must not append this film's <track>s to that one, nor mix its
+    // indices with the other's id in subUrl.
+    const id = this.item.id;
     let subs: Subtitle[] = [];
     try {
-      subs = (await listSubs(this.item.id)).subs;
+      subs = (await listSubs(id)).subs;
     } catch {
       return;
     }
-    if (this.closed || subs.length === 0) return;
+    if (this.closed || this.item.id !== id || subs.length === 0) return;
     this.subs = subs;
     for (const s of subs) {
       const track = document.createElement('track');
@@ -1309,11 +1344,14 @@ class VideoOverlay {
    */
   private keepMenuOnScreen(menu: HTMLElement): void {
     menu.style.transform = '';
-    const edge = 8;
     const r = menu.getBoundingClientRect();
-    let dx = 0;
-    if (r.left < edge) dx = edge - r.left;
-    else if (r.right > window.innerWidth - edge) dx = window.innerWidth - edge - r.right;
+    // The visible viewport, not the layout one: after a pinch or while
+    // Safari's bars slide, they differ, and this function was written for
+    // exactly that device. The arithmetic is menuShift (playback.ts, tested).
+    const vv = window.visualViewport;
+    const viewLeft = vv?.offsetLeft ?? 0;
+    const viewWidth = vv?.width ?? window.innerWidth;
+    const dx = menuShift(r.left, r.right, viewLeft, viewWidth, 8);
     if (dx !== 0) menu.style.transform = `translateX(${Math.round(dx)}px)`;
   }
 
@@ -1443,11 +1481,20 @@ class VideoOverlay {
 
   private selectSubtitle(index: number): void {
     this.subIndex = index >= 0 && index < this.subs.length ? index : -1;
-    this.applySubtitle();
-    // The choice lives in the playlist on this path, so changing it means
-    // reopening the stream where it is — the same cost a soundtrack change
-    // pays there, and rare enough to pay it.
-    if (this.usingHLS) void this.startTranscodeAt(this.switchAt());
+    if (this.tv) {
+      // A television draws one subtitle out of the file it was handed and
+      // has no menu to change it, so the choice is re-sent as a new handover,
+      // the way a soundtrack change is. Touching tcOffset/usingHLS here
+      // instead left a bogus offset that curT() used after the cast ended.
+      this.markSubMenu();
+      void this.startCast(this.tv.cast.renderer);
+    } else {
+      this.applySubtitle();
+      // The choice lives in the playlist on this path, so changing it means
+      // reopening the stream where it is — the same cost a soundtrack change
+      // pays there, and rare enough to pay it.
+      if (this.usingHLS) void this.startTranscodeAt(this.switchAt());
+    }
     const chosen = this.subs[this.subIndex];
     if (chosen) {
       remember('media.subtitle', chosen.lang || chosen.label);
@@ -1684,6 +1731,8 @@ class VideoOverlay {
     // answer still in flight for the file being left behind.
     this.tcGen++;
     this.remuxed = false;
+    this.refreshing = null; // the next file's metadata is a fresh fetch
+    this.stopCount();
     this.stopSoundFix();
     this.transcoding = false;
     this.usingHLS = false;
@@ -1835,7 +1884,10 @@ class VideoOverlay {
    */
   private async onMediaError(): Promise<void> {
     this.root.classList.remove('buffering');
-    if (this.faulted) return;
+    // A television holds the film; the element is paused and empty. A late
+    // error from the source it was left with must not start a rewrap over
+    // the set, nor give up on a format the set is playing perfectly well.
+    if (this.faulted || this.tv) return;
     if (!this.readChecked) {
       this.readChecked = true;
       // By id, not by object: refreshItem replaces the item for the same
@@ -2548,6 +2600,7 @@ class VideoOverlay {
     if (this.tv) this.endCast(false);
     window.clearInterval(this.saveTimer);
     this.stopPrep();
+    this.stopCount();
     window.clearTimeout(this.audioWatch);
     window.clearTimeout(this.castVolTimer);
     this.stopSoundFix();

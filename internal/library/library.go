@@ -657,7 +657,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 // file does. Caller must hold l.mu.
 func (it *Item) forgetContent() {
 	it.Duration, it.VCodec, it.ACodec = 0, "", ""
-	it.Width, it.Height, it.FPS = 0, 0, 0
+	it.Width, it.Height, it.FPS, it.HDR = 0, 0, 0, false
 	it.Tracks, it.EmbSubs = nil, nil
 	it.enriched, it.probed, it.shape = false, false, 0
 }
@@ -711,7 +711,10 @@ func (l *Library) upsertStored(container string, e *storedEntry, modTime time.Ti
 	}
 	it := &Item{
 		ID: id, Name: name, Rel: rel, Kind: Classify(name),
-		Size: e.size, ModTime: mt, FirstSeen: time.Now().UnixMilli(),
+		// The container's own time, not now: an archived item is never
+		// persisted, so time.Now() would date every member "today" on each
+		// restart and sort it to the front of the Added order.
+		Size: e.size, ModTime: mt, FirstSeen: mt,
 		// A DVD says how long its title is and nothing else can (see
 		// ifoDuration), so the answer is there from the moment it is indexed
 		// rather than waiting for a probe that would get it wrong anyway.
@@ -1099,7 +1102,11 @@ func (l *Library) BroadcastLoop(ctx context.Context) {
 func (l *Library) Counts() Counts {
 	l.ensureFlags()
 	l.mu.RLock()
-	c, version := l.kindCounts, l.version
+	// The group version, not the plain one: these totals answer "how much of
+	// each kind, how much hidden, started, played" — none of which a
+	// download's growing byte count changes, and keying on the plain version
+	// rebuilt every one of them 45 times a second while a torrent landed.
+	c, version := l.kindCounts, l.groupVersion
 	l.mu.RUnlock()
 	// Hidden items are indexed but out of the way, so a chip that counted
 	// them would disagree with the grid beneath it.
@@ -1268,6 +1275,11 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	// what has been watched, played and judged, which used to be three lock
 	// acquisitions for every file in the library.
 	allowed := q.Paths.allower()
+	// Captured before the snapshot, not after the build: a position saved
+	// while this runs must not stamp the result with a watch version newer
+	// than the map it filtered on, or the stale filter is served until the
+	// library version next moves.
+	watchVer := l.watchVersion()
 	var watch map[string]WatchState
 	if q.Watch != "" {
 		watch = l.watchSnapshot()
@@ -1393,7 +1405,7 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		items[i] = e.it
 	}
 	return &queryResult{
-		version: version, watchVer: l.watchVersion(),
+		version: version, watchVer: watchVer,
 		kind: q.Kind, kinds: q.Kinds, watch: q.Watch, played: q.Played,
 		series: q.Series, season: q.Season, paths: q.Paths, search: q.Search,
 		sort: q.Sort, seed: q.Seed, desc: q.Desc,

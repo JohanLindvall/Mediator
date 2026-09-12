@@ -569,7 +569,7 @@ func ifoTitle(data []byte) (durationMs int64, index []seekPoint, covers int64) {
 		return ms, nil, 0
 	}
 	// The sentinel, so the last cell interpolates like every other one.
-	covers = int64(cells[len(cells)-1].last+1) * isoSector
+	covers = (int64(cells[len(cells)-1].last) + 1) * isoSector
 	return ms, append(index, seekPoint{ms: ms, off: covers}), covers
 }
 

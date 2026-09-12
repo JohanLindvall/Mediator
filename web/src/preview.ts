@@ -42,6 +42,14 @@ const sheets = new Map<string, HTMLImageElement>();
  */
 const SHEET_CAP = 40;
 
+/**
+ * How long to wait for one sheet before giving the fetch slot back. A sheet
+ * that is genuinely being made returns in a few seconds; past this the disk
+ * is busy with playback, and holding the slot open would starve every later
+ * hover for the life of the page.
+ */
+const FETCH_TIMEOUT_MS = 15000;
+
 let fetching = false;
 let current: Preview | null = null;
 
@@ -95,8 +103,16 @@ class Preview {
       img.decoding = 'async';
       const src = spriteUrl(this.item.id, this.item.mtime, true);
       const ok = await new Promise<boolean>((done) => {
-        img.onload = () => done(true);
-        img.onerror = () => done(false);
+        // A sheet is ten seeks on the playback disk, and a request that
+        // wedges there must not wedge the one-at-a-time flag with it: give
+        // up on this one after a while so the next hover can still ask.
+        const timer = setTimeout(() => done(false), FETCH_TIMEOUT_MS);
+        const settle = (v: boolean) => {
+          clearTimeout(timer);
+          done(v);
+        };
+        img.onload = () => settle(true);
+        img.onerror = () => settle(false);
         img.src = src;
       });
       if (!ok) return null;

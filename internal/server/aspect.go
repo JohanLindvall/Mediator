@@ -35,32 +35,57 @@ func aspectRefused(stderr string) bool {
 	return strings.Contains(stderr, "pixel_aspect")
 }
 
-// badAspect remembers the files whose declaration was refused, for the run,
-// keyed by identity like every other per-file verdict here. Nothing is
-// written down: a file is judged again after a restart, at the cost of one
-// failed attempt, and a file that is replaced on disk is a different key.
-type badAspect struct {
+// perFileVerdict remembers something found out about a file the hard way,
+// for the run — a declaration ffmpeg refused (aspects), a graphics engine
+// that failed on it (hwRefused) — keyed by identity like every other
+// per-file verdict here. Nothing is written down: a file is judged again
+// after a restart, at the cost of one failed attempt, and a file that is
+// replaced on disk is a different key.
+type perFileVerdict struct {
 	mu   sync.Mutex
 	seen map[string]bool
 }
 
-func aspectKey(it library.Item) string {
+// badAspect is the name the type had while it remembered only the aspect
+// verdicts; aspect_test.go still uses it.
+type badAspect = perFileVerdict
+
+// itemKey is a file's identity for anything remembered about it in this
+// process: the id, and the size and time that change when the file does.
+func itemKey(it library.Item) string {
 	return it.ID + "|" + strconv.FormatInt(it.ModTime, 10) + "|" + strconv.FormatInt(it.Size, 10)
 }
 
-func (b *badAspect) note(it library.Item) {
+func (b *perFileVerdict) note(it library.Item) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.seen == nil {
 		b.seen = map[string]bool{}
 	}
-	b.seen[aspectKey(it)] = true
+	b.seen[itemKey(it)] = true
 }
 
-func (b *badAspect) has(it library.Item) bool {
+func (b *perFileVerdict) has(it library.Item) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.seen[aspectKey(it)]
+	return b.seen[itemKey(it)]
+}
+
+// ffmpegBase is how every ffmpeg here is started: no terminal to read, no
+// banner, and only errors on stderr — which is what the converters read a
+// refusal out of, so anything chattier would bury it.
+func ffmpegBase() []string {
+	return []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+}
+
+// repairable says whether the aspect repair can be made for this file at
+// all: something to run it with, a codec whose declaration the bitstream
+// filter can rewrite, and a plain file to read (an archived member has no
+// path for the copy to open). It gates the repair itself and every retry
+// that counts on it — a file this cannot help must not be attempted twice
+// identically before it is given up on.
+func repairable(ffmpeg string, it library.Item) bool {
+	return ffmpeg != "" && metadataFilter(it.VCodec) != "" && !it.Archived()
 }
 
 // repairSeconds is how much of a film is copied to take one still from.
@@ -89,7 +114,7 @@ func metadataFilter(vcodec string) string {
 // carries the repair. secs bounds the copy where one picture is wanted; zero
 // copies to the end, which is what a conversion reads.
 func repairArgs(it library.Item, t float64, secs int, out string) []string {
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error"}
+	args := ffmpegBase()
 	if t > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 3, 64))
 	}
@@ -107,7 +132,7 @@ func repairArgs(it library.Item, t float64, secs int, out string) []string {
 // and the converters — whichever of them meets a file first tells the
 // others, so a tile made through the repair spares the player from
 // discovering the same thing again.
-var aspects badAspect
+var aspects perFileVerdict
 
 // startRepair runs that copy into a pipe, for a conversion to read instead
 // of the file. Closing the reader ends the process and reaps it: an

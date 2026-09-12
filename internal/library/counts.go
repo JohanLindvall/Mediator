@@ -116,6 +116,17 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	l.mu.RUnlock()
 	key := countsKey{version, l.watchVersion(), q}
 
+	// The releases this caller may see, taken before the counts lock: the
+	// grouped list is cached per version and usually free, but when it is
+	// not — a rebuild, which reads playlists off the disk — it must not run
+	// under a lock that every other narrowed count is queued behind. On a
+	// cache hit below the read was wasted, at the cost of a cached lookup.
+	music := q.Kinds.Has(KindAudio)
+	albums := []*Album{}
+	if music {
+		albums = l.AllowedAlbums(l.Albums(), q.Paths)
+	}
+
 	l.counts.mu.Lock()
 	defer l.counts.mu.Unlock()
 	if c, ok := l.counts.get(key); ok {
@@ -183,11 +194,6 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	// genre lists, which know nothing of the other narrowing.
 	performers := map[string]struct{}{}
 	genres := map[string]struct{}{}
-	music := q.Kinds.Has(KindAudio)
-	albums := []*Album{}
-	if music {
-		albums = l.AllowedAlbums(l.Albums(), q.Paths)
-	}
 	for _, a := range albums {
 		if q.Artist != "" && !strings.EqualFold(a.Artist, q.Artist) {
 			continue

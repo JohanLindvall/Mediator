@@ -20,6 +20,9 @@ import {
   narrowed,
   sameSubject,
   viewSource,
+  drawCount,
+  arrivalPlan,
+  viewFetches,
   type ItemSource,
   type QueryState,
 } from './query.ts';
@@ -210,4 +213,36 @@ test('leaving a drill-down is a change of source, and narrowing one is not', () 
   // Whereas searching inside a view keeps its source, which is what lets
   // the rows stay up while the next answer is fetched.
   assert.equal(viewSource({ mode: 'albums' }), viewSource({ mode: 'albums' }));
+});
+
+
+test('the grid draws skeletons only while an answer is on its way', () => {
+  // Nothing asked: no promise to make, so no placeholders on the way in.
+  assert.equal(drawCount({ answered: null, pending: false }), 0);
+  // Asked, not answered: skeletons.
+  assert.equal(drawCount({ answered: null, pending: true }), -1);
+  // Answered wins even when a refetch is in flight (a live update).
+  assert.equal(drawCount({ answered: 42, pending: true }), 42);
+  assert.equal(drawCount({ answered: 0, pending: false }), 0);
+});
+
+test('a view keeps its rows only while it is the view on screen', () => {
+  // Same source, no address jump: hold the rows over (a search settling).
+  assert.deepEqual(arrivalPlan('items', 'items', true, false), { reset: false, load: true });
+  // A different source: drop what it held and fetch afresh.
+  assert.deepEqual(arrivalPlan('albums', 'items', true, false), { reset: true, load: true });
+  // First draw, nothing shown yet: reset (there is nothing to hold anyway).
+  assert.deepEqual(arrivalPlan('items', null, true, false), { reset: true, load: true });
+  // An address changed under the page is a jump, even to the same source.
+  assert.deepEqual(arrivalPlan('items', 'items', true, true), { reset: true, load: true });
+  // A view that fetches nothing neither resets nor loads, whatever else.
+  assert.deepEqual(arrivalPlan('series', 'albums', false, true), { reset: false, load: false });
+});
+
+test('every view fetches except a show\'s seasons', () => {
+  assert.ok(viewFetches({ mode: 'all' }));
+  assert.ok(viewFetches({ mode: 'albums' }));
+  assert.ok(viewFetches({ mode: 'series' })); // the shows
+  assert.ok(viewFetches({ mode: 'series', series: 'An Episode', season: 2 })); // a season's episodes
+  assert.ok(!viewFetches({ mode: 'series', series: 'An Episode' })); // the seasons list
 });

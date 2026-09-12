@@ -488,6 +488,27 @@ func TestOneRecordingIsOfferedOnce(t *testing.T) {
 	if seen["Low Water"] != 1 {
 		t.Errorf("the other performer's song was offered %d times, want once", seen["Low Water"])
 	}
+	// And the one kept is the *nearest* copy, not merely some copy. Which
+	// that is falls out of the z-scoring, so it is computed here rather than
+	// guessed: the copy of Low Water whose scaled vector has the highest dot
+	// with the seed.
+	sv := l.scaledVectors()
+	seedVec := sv.vecs[seed]
+	wantAlbum, wantDot := "", float32(-2)
+	l.mu.RLock()
+	for id, it := range l.items {
+		if it.Title == "Low Water" {
+			if d := dot(seedVec, sv.vecs[id]); d > wantDot {
+				wantDot, wantAlbum = d, it.Album
+			}
+		}
+	}
+	l.mu.RUnlock()
+	for _, it := range got {
+		if it.Title == "Low Water" && it.Album != wantAlbum {
+			t.Errorf("kept %q, want the nearest copy %q", it.Album, wantAlbum)
+		}
+	}
 
 	// Untagged files are not folded together: their titles are unknown, and
 	// the catalogue's own tracks carry none.
@@ -539,6 +560,22 @@ func TestAnalysisPublishesInBatches(t *testing.T) {
 // interface. Nothing else announced a listing or a search — only playback,
 // thumbnails and tag reading did — so the analysis went on decoding a track
 // a second while the viewer waited for the page in front of them.
+func TestPublishAnalysisMovesTheGroupVersion(t *testing.T) {
+	l := libWithSounds(t)
+	l.Albums() // build the collections once, cached on the group version
+	g := l.GroupVersion()
+	// Written but not published: the group version must not move.
+	l.putFeatures("newtrack", 1, 1, shapedVector(0.5, false))
+	if l.GroupVersion() != g {
+		t.Error("putFeatures moved the group version")
+	}
+	// Published: it moves, so Albums()/byRelease rebuild against the batch.
+	l.publishAnalysis()
+	if l.GroupVersion() == g {
+		t.Error("publishAnalysis did not move the group version")
+	}
+}
+
 func TestUsedMarksTheInterface(t *testing.T) {
 	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if l.UsedWithin(time.Minute) {

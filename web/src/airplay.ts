@@ -108,11 +108,25 @@ export function watchAirPlay(
   const remote = remoteOf(el);
   if (!remote) return () => {};
   let watch: number | undefined;
+  // A generation, because two arms can be in flight at once: the player
+  // changes source on a rewrap, a conversion and the sound fix, and each
+  // fires `loadedmetadata`, so a second arm can start before the first
+  // watchAvailability has resolved to an id there is anything to cancel.
+  // Without this the first watch is never put down and goes on answering
+  // about a file that is gone.
+  let armed = 0;
   const arm = () => {
     if (watch !== undefined) void remote.cancelWatchAvailability(watch).catch(() => {});
     watch = undefined;
+    const gen = ++armed;
     remote.watchAvailability(onChange).then(
       (id) => {
+        // A newer arm already superseded this one: cancel what this call
+        // opened rather than adopt it, or it leaks exactly as before.
+        if (gen !== armed) {
+          void remote.cancelWatchAvailability(id).catch(() => {});
+          return;
+        }
         watch = id;
       },
       // A browser that will not answer the question has not answered it "no".
@@ -130,6 +144,7 @@ export function watchAirPlay(
   // watch left armed on it is still a watch.
   return () => {
     el.removeEventListener('loadedmetadata', arm);
+    armed++; // a resolve still in flight sees a newer generation and stands down
     if (watch !== undefined) void remote.cancelWatchAvailability(watch).catch(() => {});
     watch = undefined;
   };

@@ -438,7 +438,10 @@ func (s *Server) versionTag(w http.ResponseWriter, r *http.Request) (int64, bool
 	// changed faces — or a cache in between serving both — keep the answer
 	// it had. Hashed rather than spelled out: a header can be long, and an
 	// ETag is echoed back on every request.
-	tag := fmt.Sprintf(`W/"v%d-%s"`, version, faceTag(r))
+	// The watch version rides in the tag as well: the matching counts these
+	// answers carry include what has been started and finished, which a
+	// saved position changes without moving either library version.
+	tag := fmt.Sprintf(`W/"v%d.%d-%s"`, version, s.lib.WatchVersion(), faceTag(r))
 	w.Header().Set("ETag", tag)
 	w.Header().Set("Cache-Control", "no-cache")
 	// And said out loud, so a shared cache keeps the answers apart rather
@@ -977,7 +980,11 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	// when a film is opened anyway, once per item per process.
 	it = s.probed(r.Context(), it)
 
-	// At most two live transcodes; further viewers wait their turn.
+	// At most two live transcodes; further viewers wait their turn. Acquired
+	// once and held across any retry below: a retry that re-entered the
+	// handler asked for a second of the two slots while still holding the
+	// first, so two concurrent failures deadlocked, and counted as two
+	// streams against the background-work gate.
 	select {
 	case s.transSem <- struct{}{}:
 		defer func() { <-s.transSem }()
@@ -1000,70 +1007,77 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		copyVideo = false
 	}
 
-	// The same plan the segmented converter runs (convert.go); only the
-	// delivery is this endpoint's own: fragmented MP4 down the response.
-	plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), aspects.has(it), s.log)
-	if err != nil {
-		// Known and unopenable, not unknown: the same answer the stream
-		// gives, with the same reason, so the player says what happened
-		// rather than blaming the format.
-		http.Error(w, "file unavailable: "+openFault(err), http.StatusServiceUnavailable)
-		return
-	}
-	defer plan.close()
-	args := append(plan.args,
-		"-movflags", "+frag_keyframe+empty_moov+default_base_moof",
-		"-f", "mp4", "pipe:1",
-	)
+	// A failure that produced nothing can be started over — the aspect put
+	// right, or the graphics engine written off — as a loop rather than a
+	// re-entry, so the semaphore and the stream count are held once. Two
+	// starts-over at most: the aspect verdict and the hardware verdict, each
+	// remembered so planConversion cannot choose it again.
+	for attempt := 0; attempt < 3; attempt++ {
+		// The same plan the segmented converter runs (convert.go); only the
+		// delivery is this endpoint's own: fragmented MP4 down the response.
+		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), aspects.has(it), s.log)
+		if err != nil {
+			// Known and unopenable, not unknown: the same answer the stream
+			// gives, with the same reason, so the player says what happened
+			// rather than blaming the format.
+			http.Error(w, "file unavailable: "+openFault(err), http.StatusServiceUnavailable)
+			return
+		}
+		args := append(plan.args,
+			"-movflags", "+frag_keyframe+empty_moov+default_base_moof",
+			"-f", "mp4", "pipe:1",
+		)
+		w.Header().Set("Content-Type", "video/mp4")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Accept-Ranges", "none")
 
-	w.Header().Set("Content-Type", "video/mp4")
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Accept-Ranges", "none")
-
-	cmd := exec.CommandContext(r.Context(), ffmpeg, args...)
-	if plan.stdin != nil {
-		cmd.Stdin = plan.stdin
-	}
-	out := &flushWriter{w: w}
-	cmd.Stdout = out
-	var errBuf bytes.Buffer
-	cmd.Stderr = &errBuf
-	cmd.WaitDelay = 5 * time.Second
-	if err := cmd.Run(); err != nil && r.Context().Err() == nil {
-		s.log.Warn("transcode failed", "path", it.Rel,
-			"err", err, "ffmpeg", strings.TrimSpace(errBuf.String()))
-		// Nothing went out, so there is still a status to give: a run that
-		// could not so much as open its input used to answer an empty 200,
-		// which in the access log is indistinguishable from success.
+		cmd := exec.CommandContext(r.Context(), ffmpeg, args...)
+		if plan.stdin != nil {
+			cmd.Stdin = plan.stdin
+		}
+		out := &flushWriter{w: w}
+		cmd.Stdout = out
+		var errBuf bytes.Buffer
+		cmd.Stderr = &errBuf
+		cmd.WaitDelay = 5 * time.Second
+		err = cmd.Run()
+		wasHardware := plan.hardware
+		stderr := errBuf.String()
+		// Closed before any retry, so an abandoned repair pipe is killed and
+		// reaped rather than left blocked on an unread pipe for the whole of
+		// the next attempt.
+		plan.close()
+		if err == nil || r.Context().Err() != nil {
+			return
+		}
+		s.log.Warn("transcode failed", "path", it.Rel, "err", err, "ffmpeg", strings.TrimSpace(stderr))
 		// A run the graphics engine was carrying is written off for this
 		// file whether it produced anything or not: half a stream is a
-		// viewer watching a spinner, and the processor always works. Noted
-		// before the retry below, so the retry is already on it.
-		if plan.hardware {
+		// viewer watching a spinner, and the processor always works.
+		if wasHardware {
 			hwRefused.note(it)
 			s.log.Info("converting on the processor from now on", "path", it.Rel)
 		}
-		if out.n == 0 {
-			// Unless what stopped it was the file's own declaration of what
-			// shape its pixels are, which is not about the bytes at all:
-			// that is remembered and the film is converted again through
-			// the copy that puts the declaration right (aspect.go). Safe to
-			// start over because nothing has been written to the response.
-			if aspectRefused(errBuf.String()) && !aspects.has(it) {
-				aspects.note(it)
-				s.log.Info("converting again with the declared aspect put right", "path", it.Rel)
-				s.handleTranscode(w, r)
-				return
-			}
-			// The same start-over where the hardware was what failed and
-			// nothing has gone out yet: the retry runs on the processor.
-			if plan.hardware {
-				s.handleTranscode(w, r)
-				return
-			}
+		if out.n > 0 {
+			return // a partial stream went out; there is no starting over
+		}
+		// Nothing went out, so there is still a status to give and a start
+		// over to try: the aspect put right (aspect.go), or — if the
+		// hardware was what failed — the same plan on the processor.
+		switch {
+		case aspectRefused(stderr) && !aspects.has(it) && repairable(ffmpeg, it):
+			aspects.note(it)
+			s.log.Info("converting again with the declared aspect put right", "path", it.Rel)
+		case wasHardware:
+			// hwRefused.note above already steers the next plan to software.
+		default:
 			http.Error(w, "conversion failed", http.StatusServiceUnavailable)
+			return
 		}
 	}
+	// Every start-over spent and nothing went out: say so, rather than
+	// letting the handler fall off the end into an empty 200.
+	http.Error(w, "conversion failed", http.StatusServiceUnavailable)
 }
 
 // sheetWorthMaking answers the one question handleSprite has to decide: may
@@ -1213,6 +1227,9 @@ func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {
 // and the database's epoch and changes when either does.
 func serveImmutableJPEG(w http.ResponseWriter, r *http.Request, it library.Item, data []byte) {
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// Faced like every other by-id route, so a cache in front cannot hand
+	// one face's thumbnail to a face that would be refused the item.
+	w.Header().Set("Vary", ContentHeader+", "+PathsHeader)
 	w.Header().Set("Content-Type", "image/jpeg")
 	http.ServeContent(w, r, "", time.UnixMilli(it.ModTime), bytes.NewReader(data))
 }
@@ -1290,7 +1307,20 @@ func (s *Server) handleFlagsBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no ids", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags(body.IDs, body.Hidden, body.Favourite, body.NoCrop, body.Rotation)})
+	// Every id through the face, exactly as the single-item routes do: a
+	// caller confined by content or paths may flag only what it can see, and
+	// the returned map must not confirm the existence of anything else.
+	allowed := body.IDs[:0]
+	for _, id := range body.IDs {
+		if _, ok := s.item(r, id); ok {
+			allowed = append(allowed, id)
+		}
+	}
+	if len(allowed) == 0 {
+		http.Error(w, "no ids", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags(allowed, body.Hidden, body.Favourite, body.NoCrop, body.Rotation)})
 }
 
 func decodeFlagUpdate(w http.ResponseWriter, r *http.Request) (FlagUpdate, bool) {

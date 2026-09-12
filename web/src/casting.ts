@@ -258,7 +258,14 @@ export class CastTransport<C extends CastLike = CastLike> {
       default:
         break;
     }
-    this.playing = step.action === 'playing';
+    // `opening` is a slow set still finding the file, not a paused one:
+    // reading it as paused stopped the carried clock and flipped the button
+    // to "play" one poll after the caller wrote "Playing", so the flag is
+    // left as it was. Anything else that reaches here — playing, paused, or
+    // a stop still inside its handover wait — says plainly whether it plays.
+    if (step.action !== 'opening') {
+      this.playing = step.action === 'playing';
+    }
     // A set that has not opened the file will not say where it is, and a
     // zero there would drag the clock back to the beginning.
     if (st?.position && !this.hooks.seeking()) this.pos = st.position;

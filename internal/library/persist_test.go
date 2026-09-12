@@ -303,3 +303,51 @@ func TestLoadFromDBNormalisesStoredTags(t *testing.T) {
 		t.Fatalf("artist restored as %q", got.Artist)
 	}
 }
+
+// What the probes learn about a picture survives a restart — the size, the
+// rate and the colour — because the decision that sends a conversion to the
+// graphics hardware is pixels a second and the one that tone-maps it is the
+// colour, and a warm start that restored the marker without the
+// measurements left both deciding on nothing. The colour was left out of
+// the restore once already; this is what would have caught it.
+func TestProbeFieldsSurviveRestart(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "Film.mkv"), "video")
+	dbPath := filepath.Join(t.TempDir(), "media.db")
+	db, err := blob.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := quietLib(dir)
+	l.SetMetaDB(db)
+	l.Scan(nil)
+	id := PathID(filepath.Join(dir, "Film.mkv"))
+	l.setProbe(id, Probe{VCodec: "hevc", ACodec: "eac3", Width: 3840, Height: 2160, FPS: 24, HDR: true, Probed: true})
+	flushNow(l, db)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db2, err := blob.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	l2 := quietLib(dir)
+	if n := l2.LoadFromDB(db2); n != 1 {
+		t.Fatalf("restored %d items, want 1", n)
+	}
+	it, ok := l2.Get(id)
+	if !ok {
+		t.Fatal("the film did not come back")
+	}
+	if it.Width != 3840 || it.Height != 2160 || it.FPS != 24 {
+		t.Errorf("restored shape %dx%d @ %v, want 3840x2160 @ 24", it.Width, it.Height, it.FPS)
+	}
+	if !it.HDR {
+		t.Error("restored film lost its colour: a restart would convert it without tone-mapping")
+	}
+	if it.VCodec != "hevc" || it.ACodec != "eac3" {
+		t.Errorf("restored codecs %q/%q", it.VCodec, it.ACodec)
+	}
+}

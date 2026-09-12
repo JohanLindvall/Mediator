@@ -205,6 +205,9 @@ type hwaccel struct {
 	// twenty seconds apiece, and the first film opened after a start was
 	// blocking behind all of it.
 	searched atomic.Bool
+	// tonemap says the engine has been shown to carry frames out to the
+	// processor for the colour work and back (hwProveToneMap).
+	tonemap atomic.Bool
 }
 
 // chosen is what the search settled on, or nil while it is still looking or
@@ -242,12 +245,32 @@ const hwPixelRate = 120_000_000
 // file, and a missing frame rate or size means the same — none of this is a
 // decision to guess at, and guessing wrong costs either a stalling film or a
 // stream five times larger than it needed to be.
-func (h *hwaccel) use(ffmpeg string, it library.Item, log *slog.Logger) bool {
-	if !hwWorthIt(it) || !h.searched.Load() || hwRefused.has(it) {
+func (h *hwaccel) use(it library.Item, log *slog.Logger) bool {
+	if !hwWorthIt(it) || !h.searched.Load() {
+		return false
+	}
+	if hwRefused.has(it) {
+		// Said once per conversion rather than never: a film converting on
+		// the processor when the machine has an engine is the kind of thing
+		// somebody comes to the log to understand.
+		log.Debug("converting on the processor: the hardware failed this file before", "path", it.Rel)
 		return false
 	}
 	engine, _ := h.chosen()
 	return engine != nil && engine.decodes[it.VCodec]
+}
+
+// toneMap is the tone-map chain to splice into a hardware conversion, or
+// nothing where the engine has not been shown to carry frames out to the
+// processor and back (see hwProveToneMap). Without it a wide-colour film
+// converts with its colours left as they are and described as ordinary —
+// wrong on screen, but a stream that plays, which is the better of the two
+// failures and the same one a build without zscale accepts.
+func (h *hwaccel) toneMap(curve string) string {
+	if curve == "" || !h.tonemap.Load() {
+		return ""
+	}
+	return curve
 }
 
 // hwWorthIt reports whether this picture is more than the processor should be
@@ -300,6 +323,18 @@ func (h *hwaccel) find(ffmpeg string, log *slog.Logger) {
 				h.engine, h.device = e, dev
 				h.mu.Unlock()
 				log.Info("converting on the graphics hardware", "engine", e.name, "device", dev)
+				// And whether it can hand frames out to the processor for
+				// the colour work and take them back, which the base proof
+				// never exercises: a chain that cannot would fail every
+				// wide-colour film on the first frame.
+				if !haveFilter(ffmpeg, "zscale") {
+					log.Info("wide-colour films convert with their colour left as it is: this ffmpeg has no zscale")
+				} else if err := hwProveToneMap(ffmpeg, e, dev); err != nil {
+					log.Warn("wide-colour films convert with their colour left as it is: the hardware cannot carry frames out and back",
+						"engine", e.name, "device", dev, "err", err)
+				} else {
+					h.tonemap.Store(true)
+				}
 				return
 			}
 		}
@@ -315,8 +350,58 @@ func (h *hwaccel) find(ffmpeg string, log *slog.Logger) {
 // hwupload does the moving. A backend that leaves frames in system memory
 // anyway (Apple's) uploads nothing and simply encodes.
 func hwProve(ffmpeg string, e *hwBackend, dev string) error {
-	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin"}
-	upload := ""
+	args, upload := hwProbeInput(e, dev)
+	args = append(args, "-vf", "format=nv12"+upload)
+	// The encoder alone: the backend's own filter chain is for frames coming
+	// out of a decoder, and this is proving the device and the encoder.
+	encode := e.encode(dev, 320, "")
+	for i, a := range encode {
+		if a == "-vf" || (i > 0 && encode[i-1] == "-vf") {
+			continue
+		}
+		args = append(args, a)
+	}
+	return hwProbeRun(ffmpeg, args)
+}
+
+// hwProveToneMap runs the wide-colour chain through a backend that has
+// already proved itself: frames uploaded to the engine, scaled there, handed
+// back to the processor for the tone-map, and taken up again for the
+// encoder. That round trip is the part the base proof never touches, and
+// it is where a driver refuses (a surface format it will not write, an
+// upload it will not take after a download).
+//
+// What it cannot prove is the real run's device selection: the proof names
+// the device for the filters, where a conversion leaves ffmpeg to take the
+// decoder's — measured to work on the engine this was written against. A
+// chain that failed there anyway fails the conversion, which hwRefused then
+// keeps off the hardware for that film.
+func hwProveToneMap(ffmpeg string, e *hwBackend, dev string) error {
+	args, upload := hwProbeInput(e, dev)
+	// The generated frames are ten-bit, as a wide-colour decode's are.
+	args = append(args, "-vf", "format=p010le"+upload)
+	encode := e.encode(dev, 320, tonemapSoftware)
+	for i, a := range encode {
+		if a == "-vf" && i+1 < len(encode) {
+			// Onto the end of the upload rather than as a second -vf, which
+			// would replace the first: one chain, uploaded first.
+			args[len(args)-1] += "," + encode[i+1]
+			continue
+		}
+		if i > 0 && encode[i-1] == "-vf" {
+			continue
+		}
+		args = append(args, a)
+	}
+	return hwProbeRun(ffmpeg, args)
+}
+
+// hwProbeInput is the front of every proof: the device opened by name, the
+// filters told to use it, and five generated frames. It answers the upload
+// filter as well, since that differs by backend and the caller splices it
+// onto its own chain.
+func hwProbeInput(e *hwBackend, dev string) (args []string, upload string) {
+	args = ffmpegBase()
 	switch e.name {
 	case "vaapi":
 		args = append(args, "-init_hw_device", "vaapi=hw:"+dev, "-filter_hw_device", "hw")
@@ -328,20 +413,12 @@ func hwProve(ffmpeg string, e *hwBackend, dev string) error {
 		args = append(args, "-init_hw_device", "cuda=hw", "-filter_hw_device", "hw")
 		upload = ",hwupload_cuda"
 	}
-	args = append(args,
-		"-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-frames:v", "5",
-		"-vf", "format=nv12"+upload)
-	// The encoder alone: the backend's own filter chain is for frames coming
-	// out of a decoder, and this is proving the device and the encoder.
-	encode := e.encode(dev, 320, "")
-	for i, a := range encode {
-		if a == "-vf" || (i > 0 && encode[i-1] == "-vf") {
-			continue
-		}
-		args = append(args, a)
-	}
-	args = append(args, "-f", "null", "-")
+	return append(args, "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-frames:v", "5"), upload
+}
 
+// hwProbeRun runs one proof to a null output under the probe's budget.
+func hwProbeRun(ffmpeg string, args []string) error {
+	args = append(args, "-f", "null", "-")
 	ctx, cancel := context.WithTimeout(context.Background(), hwProbeBudget)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, ffmpeg, args...).CombinedOutput()
@@ -373,4 +450,4 @@ func (e *hwProbeError) Error() string {
 // processor, which is slower and always works. Per file and per run, like
 // the other verdicts here; a restart tries the hardware again, at the cost
 // of one failed attempt.
-var hwRefused badAspect
+var hwRefused perFileVerdict

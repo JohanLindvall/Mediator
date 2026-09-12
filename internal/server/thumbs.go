@@ -558,8 +558,7 @@ func (t *Thumbnailer) fromVideo(ctx context.Context, it library.Item, width int)
 // with the bad ratio still on it, the declaration living in the container's
 // own codec record there as well.
 func (t *Thumbnailer) repairedFrame(ctx context.Context, it library.Item, width int) ([]byte, error) {
-	bsf := metadataFilter(it.VCodec)
-	if t.ffmpeg == "" || bsf == "" || it.Archived() {
+	if !repairable(t.ffmpeg, it) {
 		return nil, nil
 	}
 	tmpf, err := os.CreateTemp("", "media-repair-*.mkv")

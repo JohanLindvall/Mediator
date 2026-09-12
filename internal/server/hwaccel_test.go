@@ -190,8 +190,10 @@ func TestHardwareToneMapsOnlyWideColour(t *testing.T) {
 	if !strings.Contains(wide, "tonemap=") {
 		t.Errorf("a wide-colour picture is not tone-mapped: %s", wide)
 	}
-	// The tone-map comes before the scale: it is the thing that decides what
-	// the pixels mean, and scaling first would mix wide-colour samples.
+	// The scale comes *first*, then the frames come down for the tone-map:
+	// it is the processor's work, and what it is handed should be a 1080p
+	// frame rather than a 4K one — the difference between 0.86 and 0.15 of
+	// real time, measured. So the tone-map's index is the greater.
 	if i, j := strings.Index(wide, "tonemap="), strings.Index(wide, "scale_vaapi"); i < 0 || j < 0 || i < j {
 		t.Errorf("the chain is out of order: %s", wide)
 	}

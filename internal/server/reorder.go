@@ -91,7 +91,7 @@ func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 	if it.Kind != library.KindVideo || it.VCodec == "" {
 		return false
 	}
-	key := it.ID + "|" + strconv.FormatInt(it.ModTime, 10) + "|" + strconv.FormatInt(it.Size, 10)
+	key := itemKey(it)
 	if v, ok := s.reorder.get(key); ok {
 		return v
 	}

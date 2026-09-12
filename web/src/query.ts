@@ -232,3 +232,59 @@ export function viewSource(s: { mode: string; series?: string; season?: number }
       return 'items';
   }
 }
+
+/**
+ * How many rows the grid draws, from what the source knows: the answered
+ * count once one has arrived, -1 while a fetch is in flight (skeletons),
+ * and 0 before anything has been asked at all.
+ *
+ * The last two are what a viewer sees on the way in — a page boots and lays
+ * the grid out before the address has been read, so nothing has been asked
+ * of the source yet, and answering -1 there fills the screen with
+ * placeholders for a query nobody made. A placeholder is a promise that an
+ * answer is coming; until one is pending there is nothing to promise.
+ */
+export function drawCount(o: { answered: number | null; pending: boolean }): number {
+  if (o.answered !== null) return o.answered;
+  return o.pending ? -1 : 0;
+}
+
+/**
+ * What entering a view does to the source behind it.
+ *
+ * `reset` drops the rows the source is holding before the new query is
+ * asked; `load` says to fetch at all. Holding rows over is what makes a
+ * search read as the listing settling rather than flashing — but only while
+ * they are the rows on screen. A view arriving from a *different* source
+ * holds the answer to a question nobody has looked at since (the artists
+ * list from before a drill-down, the whole library from before the albums
+ * view), so it drops them and draws skeletons for the moment it takes. An
+ * address that changed under the page is a jump elsewhere, so it resets too
+ * (`fromAddress`).
+ *
+ * A view that fetches nothing of its own — a show's seasons, read out of
+ * the shows list already in hand — neither resets nor loads: dropping it
+ * would blank the seasons for good, nothing ever arriving to fill them.
+ */
+export interface ArrivalPlan {
+  reset: boolean;
+  load: boolean;
+}
+export function arrivalPlan(
+  view: ViewSource,
+  shownView: ViewSource | null,
+  fetches: boolean,
+  fromAddress: boolean,
+): ArrivalPlan {
+  if (!fetches) return { reset: false, load: false };
+  return { reset: view !== shownView || fromAddress, load: true };
+}
+
+/**
+ * Whether a view fetches its own rows. Every view does except a show's
+ * seasons, which are read from the shows list the series source already
+ * holds — see viewSource, which groups the seasons with those shows.
+ */
+export function viewFetches(s: { mode: string; series?: string; season?: number }): boolean {
+  return !(s.mode === 'series' && !!s.series && !s.season);
+}

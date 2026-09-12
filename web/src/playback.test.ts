@@ -37,6 +37,7 @@ import {
   trackLabel,
   rewrapWorthTheWait,
   tapChoice,
+  menuShift,
 } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
@@ -629,4 +630,21 @@ test('every key in the help does something, and no key is listed twice', () => {
       seen.add(k);
     }
   }
+});
+
+
+test('menuShift keeps a menu inside the visible box', () => {
+  // Fits: no shift.
+  assert.equal(menuShift(100, 260, 0, 400, 8), 0);
+  // Off the left (a menu anchored to a button on the left of the row):
+  // pushed right to the edge.
+  assert.equal(menuShift(-30, 130, 0, 400, 8), 38);
+  // Off the right: pushed left to the edge.
+  assert.equal(menuShift(300, 460, 0, 400, 8), -68);
+  // A visible box offset from the window (a pinch, Safari's bars): measured
+  // against the box, not the window.
+  assert.equal(menuShift(5, 165, 20, 300, 8), 23);
+  // Wider than the box: clamped to the left edge rather than the right, so
+  // the start of the list is what shows.
+  assert.equal(menuShift(0, 500, 0, 300, 8), 8);
 });

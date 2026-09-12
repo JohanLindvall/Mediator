@@ -128,6 +128,11 @@ func (c content) mask(x library.Counts) library.Counts {
 	if !c.video {
 		x.Series = 0 // television is video, and this face has none
 	}
+	// Started, Watched and Played are deliberately not masked: they run
+	// across kinds, so a restricted face is given them by CountsFor (with
+	// its Kinds in the query) rather than by the running totals, and by the
+	// time mask runs they are already this face's own numbers. Zeroing them
+	// here would throw away the correct answer. See Library.List.
 	x.Total = x.Video + x.Image + x.Audio + x.Playlist
 	return x
 }

@@ -99,11 +99,11 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 	// live records and on bootlegs, and a queue that plays it nine times
 	// running is nobody's listening. Similar has already done this among
 	// its own answer; here it reaches every other way a queue is filled.
-	tracks = library.FoldRecordings(tracks)
-	// The cut, where the view held more than a queue takes. A similar
-	// answer is bounded by its own cap and is never cut.
+	// Whether the view held more than a queue takes, asked before the fold:
+	// a dropped duplicate must not disguise a genuine cut.
 	truncated := len(tracks) > maxQueue
-	if truncated {
+	tracks = library.FoldRecordings(tracks)
+	if len(tracks) > maxQueue {
 		tracks = tracks[:maxQueue]
 	}
 	// What is about to be listened to is worth reading tags for ahead of the

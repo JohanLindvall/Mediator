@@ -314,6 +314,9 @@ func parseRar4(f *os.File, path string, add func(string, int64, storedSeg, bool)
 				dataSize = int64(binary.LittleEndian.Uint32(as[:]))
 			}
 		}
+		if dataSize < 0 || pos+headSize+dataSize <= pos {
+			return fmt.Errorf("rar: block does not advance at %d", pos)
+		}
 		pos += headSize + dataSize
 	}
 	return nil
@@ -434,6 +437,9 @@ func parseRar5(f *os.File, path string, add func(string, int64, storedSeg, bool)
 		case 5: // end of archive
 			return nil
 		}
+		if dataSize < 0 || headStart+headSize+dataSize <= pos {
+			return fmt.Errorf("rar5: block does not advance at %d", pos)
+		}
 		pos = headStart + headSize + dataSize
 	}
 	return nil
@@ -450,11 +456,10 @@ func hasRar5ExtraCrypt(hdr []byte, extraOff, extraSize int64) bool {
 		if err != nil || recSize <= 0 {
 			return false
 		}
-		recType, m, err := rarVint(sliceReaderAt(hdr), p+int64(n))
+		recType, _, err := rarVint(sliceReaderAt(hdr), p+int64(n))
 		if err != nil {
 			return false
 		}
-		_ = m
 		if recType == 0x01 {
 			return true
 		}
@@ -503,10 +508,11 @@ type storedReader struct {
 	// than an error anywhere near whoever assembled the segments.
 	cum []int64
 
-	mu    sync.Mutex
-	pos   int64
-	files map[int]*os.File
-	lru   []int // segment indices, least recently used first
+	mu     sync.Mutex
+	pos    int64
+	files  map[int]*os.File
+	lru    []int // segment indices, least recently used first
+	closed bool
 }
 
 func newStoredReader(e *storedEntry) *storedReader {
@@ -532,6 +538,9 @@ func (r *storedReader) ReadAt(p []byte, off int64) (int, error) {
 
 // readAt implements ReadAt; the caller holds r.mu.
 func (r *storedReader) readAt(p []byte, off int64) (int, error) {
+	if r.closed {
+		return 0, os.ErrClosed
+	}
 	if off < 0 {
 		return 0, fmt.Errorf("negative offset")
 	}
@@ -570,6 +579,9 @@ func (r *storedReader) readAt(p []byte, off int64) (int, error) {
 // file returns the open volume holding segment i, opening it (and closing
 // the least recently used volume) if needed. The caller holds r.mu.
 func (r *storedReader) file(i int) (*os.File, error) {
+	if r.closed {
+		return nil, os.ErrClosed
+	}
 	if f, ok := r.files[i]; ok {
 		r.touch(i)
 		return f, nil
@@ -636,6 +648,7 @@ func (r *storedReader) Seek(offset int64, whence int) (int64, error) {
 func (r *storedReader) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.closed = true
 	for _, f := range r.files {
 		f.Close()
 	}

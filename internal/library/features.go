@@ -250,9 +250,12 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 	chromaFrames := 0
 	var loudness []float64
 	var envelopes [][]float64 // per-frame RMS per window, silent frames included
-	silent := 0               // silent frames between the first and last sound
-	firstSound, lastSound := -1, -1
-	frames := 0
+	// The span that sounded, and the pauses within it, summed per window.
+	// The windows are sampled minutes apart, so the silence at one window's
+	// end and the next's start is not one pause between sentences but two
+	// window edges; counting them across the concatenation made that seam a
+	// minutes-long pause and tipped music toward the spoken verdict.
+	silent, soundSpan := 0, 0
 	var onsets []float64
 	prevMel := make([]float64, featMels)
 	mel := make([]float64, featMels)
@@ -264,6 +267,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 		}
 		var envelope []float64
 		hasPrev := false // an onset is a change since the frame before, within one window
+		winFirst, winLast, winFrames, winSilent := -1, -1, 0, 0
 		for start := 0; start+featFrame <= len(pcm); start += featHop {
 			frame := pcm[start : start+featFrame]
 			// Loudness and zero crossings from the raw frame.
@@ -280,18 +284,18 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 			db := 20 * math.Log10(rms+1e-9)
 			envelope = append(envelope, rms)
 			if db < featSilence {
-				if firstSound >= 0 {
-					silent++ // provisionally; the trailing run is taken back below
+				if winFirst >= 0 {
+					winSilent++ // provisionally; this window's trailing run is taken back below
 				}
 				hasPrev = false // an onset across silence is not a beat
-				frames++
+				winFrames++
 				continue
 			}
-			if firstSound < 0 {
-				firstSound = frames
+			if winFirst < 0 {
+				winFirst = winFrames
 			}
-			lastSound = frames
-			frames++
+			winLast = winFrames
+			winFrames++
 			loud.add(db)
 			loudness = append(loudness, db)
 			zcr.add(float64(crossings) / featFrame)
@@ -388,13 +392,18 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 			hasPrev = true
 		}
 		envelopes = append(envelopes, envelope)
+		if winLast >= 0 {
+			// The silence after this window's last sound is a window edge,
+			// not a pause between sentences, so it is taken back here — per
+			// window, since the next window's leading silence is its own edge.
+			winSilent -= winFrames - 1 - winLast
+			silent += winSilent
+			soundSpan += winLast - winFirst + 1
+		}
 	}
 	if loud.n == 0 {
 		return nil
 	}
-	// Silence after the last sound was counted on the way through and is
-	// not a pause between sentences: take it back.
-	silent -= frames - 1 - lastSound
 
 	out := make([]float32, featureDims)
 	for i := range featMFCC {
@@ -415,7 +424,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 	out[48] = float32(loudRange(loudness))
 	out[49] = float32(zcr.mean())
 	out[50], out[51] = tempoOf(onsets)
-	out[52] = float32(pauseShare(loudness, silent, lastSound-firstSound+1))
+	out[52] = float32(pauseShare(loudness, silent, soundSpan))
 	out[53] = float32(syllableShare(envelopes))
 	out[54] = float32(zcr.std())
 	// Seconds of sound: the frames that sounded, each a hop apart, plus the

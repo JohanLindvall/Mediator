@@ -52,7 +52,16 @@ import {
   mediaShape,
 } from './format';
 import { watchState } from './playback';
-import { countKey, countsToShow, listFilters, narrowed, viewSource } from './query';
+import {
+  arrivalPlan,
+  countKey,
+  countsToShow,
+  listFilters,
+  narrowed,
+  viewFetches,
+  viewSource,
+  type ViewSource,
+} from './query';
 import { defaultMode, fallbackMode, modeShown, queueSource, type ViewMode } from './content';
 import { openingDesc, openingSort, sortOptions } from './sorts';
 import { loadThumb, cancelThumb, retryThumbs } from './thumbs';
@@ -780,87 +789,73 @@ function renderSeasonCell(el: HTMLElement, season: Season | undefined): void {
   });
 }
 
+/** Anything the grid can draw: an item, or one of the grouped cards. */
+type Cell = Item | Album | Artist | Genre | Series | Season;
+
 /** The size of a collection card, which is the same for every collection. */
 const collectionSize = {
   minCardWidth: (w: number): number => (w < 480 ? 156 : w < 1100 ? 180 : 200),
   cellHeight: (cardW: number): number => cardW + 56,
 };
 
-const albumAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
-  count: () => albumsSource.count(),
-  get: (i) => albumsSource.get(i),
-  itemKey: (x) => (x as Item).id,
-  need: () => {},
-  render: (el, album) => renderAlbumCell(el, album as Album | undefined),
-  release: (el) => cancelThumb(el),
-  onClick: (i, ev) => {
-    const album = albumsSource.get(i);
-    if (!album) return;
-    // The performer's name under the title is a way to the rest of their
-    // work, which is the question a release most often raises.
-    if (followLink(ev)) return;
-    // Anywhere but the badge still opens the sheet, which is where the
-    // running order and the individual tracks are.
-    if (viaPlayBadge(ev)) void playCollection(album.id, 'album');
-    else openAlbumPanel(album.id, panelOpts);
-  },
-  ...collectionSize,
-};
+/**
+ * A grid adapter over a collection source: the four grouped views differ
+ * only in their source, how a card is drawn, and what a press does, so the
+ * boilerplate (identity, no prefetch, thumbnail cancel, card size) lives
+ * here once.
+ */
+function collectionAdapter<T extends Cell & { id: string }>(
+  source: { count(): number; get(i: number): T | undefined },
+  render: (el: HTMLElement, x: T | undefined) => void,
+  onClick: (x: T, ev: MouseEvent | KeyboardEvent) => void,
+): GridAdapter<Cell> {
+  return {
+    count: () => source.count(),
+    get: (i) => source.get(i),
+    itemKey: (x) => (x as T).id,
+    need: () => {},
+    render: (el, x) => render(el, x as T | undefined),
+    release: (el) => cancelThumb(el),
+    onClick: (i, ev) => {
+      const x = source.get(i);
+      if (x) onClick(x, ev);
+    },
+    ...collectionSize,
+  };
+}
 
-const artistAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
-  count: () => artistsSource.count(),
-  get: (i) => artistsSource.get(i),
-  itemKey: (x) => (x as Item).id,
-  need: () => {},
-  render: (el, artist) => renderArtistCell(el, artist as Artist | undefined),
-  release: (el) => cancelThumb(el),
-  onClick: (i, ev) => {
-    // The genre under their name goes across to it; anywhere else drills
-    // down into this performer's own releases.
-    if (followLink(ev)) return;
-    const artist = artistsSource.get(i);
-    if (artist) showArtist(artist.name);
-  },
-  ...collectionSize,
-};
+const albumAdapter = collectionAdapter<Album>(albumsSource, renderAlbumCell, (album, ev) => {
+  // The performer's name under the title is a way to the rest of their work,
+  // which is the question a release most often raises.
+  if (followLink(ev)) return;
+  // Anywhere but the badge still opens the sheet, which is where the running
+  // order and the individual tracks are.
+  if (viaPlayBadge(ev)) void playCollection(album.id, 'album');
+  else openAlbumPanel(album.id, panelOpts);
+});
 
-const genreAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
-  count: () => genresSource.count(),
-  get: (i) => genresSource.get(i),
-  itemKey: (x) => (x as Item).id,
-  need: () => {},
-  render: (el, genre) => renderGenreCell(el, genre as Genre | undefined),
-  release: (el) => cancelThumb(el),
-  onClick: (i) => {
-    // Drill down: the albums view, limited to this genre.
-    const genre = genresSource.get(i);
-    if (genre) showGenre(genre.name);
-  },
-  ...collectionSize,
-};
+const artistAdapter = collectionAdapter<Artist>(artistsSource, renderArtistCell, (artist, ev) => {
+  // The genre under their name goes across to it; anywhere else drills down
+  // into this performer's own releases.
+  if (followLink(ev)) return;
+  showArtist(artist.name);
+});
+
+const genreAdapter = collectionAdapter<Genre>(genresSource, renderGenreCell, (genre) => {
+  // Drill down: the albums view, limited to this genre.
+  showGenre(genre.name);
+});
 
 /**
- * The shows, and the seasons of one show.
- *
- * Two adapters over one source: the seasons are already in the series object,
- * so opening a show is a change of adapter and nothing else — no request, no
- * spinner, no second endpoint.
+ * The shows, and — once one is open — its seasons. Two adapters over one
+ * source: the seasons travel inside the series object, so opening a show is
+ * a change of adapter and nothing else, no request and no spinner.
  */
-const seriesAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
-  count: () => seriesSource.count(),
-  get: (i) => seriesSource.get(i),
-  itemKey: (x) => (x as Series).id,
-  need: () => {},
-  render: (el, show) => renderSeriesCell(el, show as Series | undefined),
-  release: (el) => cancelThumb(el),
-  onClick: (i) => {
-    const show = seriesSource.get(i);
-    if (show) showSeries(show.name);
-  },
-  ...collectionSize,
-};
+const seriesAdapter = collectionAdapter<Series>(seriesSource, renderSeriesCell, (show) => {
+  showSeries(show.name);
+});
 
-const seasonAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
+const seasonAdapter: GridAdapter<Cell> = {
   count: () => seasonsOf().length,
   get: (i) => seasonsOf()[i],
   itemKey: (x) => `s${(x as Season).season}`,
@@ -870,8 +865,8 @@ const seasonAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season
   onClick: (i, ev) => {
     const season = seasonsOf()[i];
     if (!season) return;
-    // The badge plays the season from its first episode; anywhere else
-    // opens its episodes.
+    // The badge plays the season from its first episode; anywhere else opens
+    // its episodes.
     if (viaPlayBadge(ev)) void playSeason(season.season);
     else showSeason(season.season);
   },
@@ -887,7 +882,15 @@ const seasonAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season
  */
 async function playSeason(season: number): Promise<void> {
   const episodes = new LibrarySource();
-  episodes.setQuery({ kind: 'video', q: '', sort: 'episode', desc: false, series: state.series, season });
+  const where = { series: state.series, season };
+  episodes.setQuery({
+    kind: 'video',
+    q: '',
+    sort: openingSort('series', where),
+    desc: openingDesc('series', where),
+    series: state.series,
+    season,
+  });
   const src: ItemSource = { item: (i) => episodes.item(i), total: () => episodes.total };
   const first = await findKind(src, 0, 1, 'video');
   if (!first) {
@@ -1136,7 +1139,7 @@ function enterView(mode: Mode): void {
   renderChips();
   renderSortOptions();
   syncQueueAll();
-  applyQuery(true, true); // a view is somewhere to come back to
+  applyQuery(true); // a view is somewhere to come back to
 }
 
 /**
@@ -1275,67 +1278,56 @@ function queryState(): QueryState {
 }
 
 /**
- * Which source the grid was drawing before this call, so that entering a
- * view can tell whether it is arriving from another one.
+ * The source the grid was last drawing from, so entering a view can tell
+ * whether it is arriving from a different one (see arrivalPlan). A view name
+ * rather than the source object, since two views can share a source.
  */
-let shownSource: { reset(): void } | null = null;
+let shownView: ViewSource | null = null;
 
-/** Push current UI state into the data sources and reset the grid. */
-function applyQuery(reset: boolean, push = false, fromAddress = false): void {
-  writeHash(push);
-  // Rows are worth holding while an answer is fetched only while they are
-  // the rows on screen: that is what makes a search read as the listing
-  // settling. A view arriving from a different source holds the answer to a
-  // question nobody has looked at since — the artists list from before a
-  // drill-down, the whole library from before the albums view — and showing
-  // that puts one performer's card, artwork and all, under another's name
-  // until the answer lands. So the incoming source drops what it has, and
-  // the grid draws skeletons for the moment it takes, which is honest.
-  const incoming = collectionOnScreen() ?? libSource;
-  const arriving = incoming !== shownSource || fromAddress;
-  shownSource = incoming;
-  switch (state.mode) {
+/**
+ * Which grid adapter draws a view.
+ *
+ * `series` is the one view that maps to two: the shows, and — once one is
+ * open — its seasons, which are read out of the shows list already in hand.
+ */
+function adapterFor(): GridAdapter<Cell> {
+  switch (viewSource(state)) {
     case 'albums':
-    case 'audiobooks':
-      // The audiobook shelf is the album view over the other releases.
-      grid.setAdapter(albumAdapter);
-      if (arriving) albumsSource.reset();
-      albumsSource.load(queryState());
-      break;
+      return albumAdapter;
     case 'artists':
-      grid.setAdapter(artistAdapter);
-      if (arriving) artistsSource.reset();
-      artistsSource.load(queryState());
-      break;
+      return artistAdapter;
     case 'genres':
-      grid.setAdapter(genreAdapter);
-      if (arriving) genresSource.reset();
-      genresSource.load(queryState());
-      break;
+      return genreAdapter;
     case 'series':
-      // Three views behind one chip: the shows, one show's seasons, and one
-      // season's episodes. Which is on screen is what the drill-down state
-      // says, and only the first of them fetches anything.
-      if (state.series && state.season) {
-        if (reset) grid.setAdapter(itemAdapter);
-        if (arriving) libSource.reset();
-        libSource.setQuery(queryState());
-      } else if (state.series) {
-        // Read out of the shows list already in hand: nothing to fetch, and
-        // nothing to drop — dropping it would leave this view empty for
-        // good, since no answer is coming to fill it.
-        grid.setAdapter(seasonAdapter);
-        grid.refresh();
-      } else {
-        grid.setAdapter(seriesAdapter);
-        if (arriving) seriesSource.reset();
-        seriesSource.load(queryState());
-      }
-      break;
+      return state.series ? seasonAdapter : seriesAdapter;
     default:
-      if (reset) grid.setAdapter(itemAdapter);
-      if (arriving) libSource.reset();
-      libSource.setQuery(queryState());
+      return itemAdapter;
+  }
+}
+
+/** Push current UI state into the data sources and point the grid at it. */
+function applyQuery(push = false, fromAddress = false): void {
+  writeHash(push);
+  const view = viewSource(state);
+  const plan = arrivalPlan(view, shownView, viewFetches(state), fromAddress);
+  shownView = view;
+
+  const grouped = collectionOnScreen();
+  // Reset before the adapter is pointed at the source, or the grid would
+  // mount a screenful of the rows this very reset is dropping.
+  if (plan.reset) (grouped ?? libSource).reset();
+  grid.setAdapter(adapterFor());
+
+  if (plan.load) {
+    if (grouped) grouped.load(queryState());
+    else libSource.setQuery(queryState());
+  } else {
+    // The seasons view fetches nothing of its own — it reads the show's
+    // seasons out of the series list. That list may never have loaded,
+    // though (a cold boot, or a shortlink straight to a season), so fetch
+    // it where it is missing rather than showing an empty view for good.
+    if (!seriesSource.find(state.series)) seriesSource.load(queryState());
+    grid.refresh();
   }
   // No reset of the grid beyond what setAdapter did: pointing it at the same
   // adapter rewinds to the top and keeps the cells, so a new query crossfades
@@ -1351,7 +1343,7 @@ searchInput.addEventListener('input', () => {
   searchTimer = window.setTimeout(() => {
     if (searchInput.value.trim() === state.q) return;
     state.q = searchInput.value.trim();
-    applyQuery(true);
+    applyQuery();
   }, 250);
 });
 searchClear.addEventListener('click', () => {
@@ -1359,7 +1351,7 @@ searchClear.addEventListener('click', () => {
   searchClear.hidden = true;
   if (state.q !== '') {
     state.q = '';
-    applyQuery(true);
+    applyQuery();
   }
   searchInput.focus();
 });
@@ -1369,7 +1361,7 @@ searchInput.addEventListener('keydown', (ev) => {
     searchInput.blur();
     if (state.q !== '') {
       state.q = '';
-      applyQuery(true);
+      applyQuery();
     }
   }
 });
@@ -1383,7 +1375,7 @@ document.addEventListener('keydown', (ev) => {
 
 sortSelect.addEventListener('change', () => {
   state.sort = sortSelect.value;
-  applyQuery(true);
+  applyQuery();
 });
 
 function renderSortDir(): void {
@@ -1427,7 +1419,7 @@ queueAllBtn.addEventListener('click', () => void queueAll());
 sortDirBtn.addEventListener('click', () => {
   state.desc = !state.desc;
   renderSortDir();
-  applyQuery(true);
+  applyQuery();
 });
 
 $('#brand').addEventListener('click', (ev) => {
@@ -1492,23 +1484,25 @@ function searchedWhere(): string {
 
 /** How many things the view on screen holds, and what to call them. */
 function viewCount(): { total: number; noun: string } {
-  switch (state.mode) {
+  switch (viewSource(state)) {
     case 'albums':
-      return { total: albumsSource.count(), noun: 'albums' };
-    case 'audiobooks':
-      return { total: albumsSource.count(), noun: 'audiobooks' };
+      // One source, two views over it: the shelf names its own noun.
+      return { total: albumsSource.count(), noun: state.mode === 'audiobooks' ? 'audiobooks' : 'albums' };
     case 'artists':
       return { total: artistsSource.count(), noun: 'artists' };
     case 'genres':
       return { total: genresSource.count(), noun: 'genres' };
     case 'series':
-      // Three views behind one chip: the shows, one show's seasons, and the
-      // episodes of one season, which are an item listing.
-      if (!state.series) return { total: seriesSource.count(), noun: 'series' };
-      if (!state.season) return { total: seasonsOf().length, noun: 'seasons' };
-      return { total: libSource.total, noun: 'items' };
+      // The shows, or — once one is open — its seasons, which are counted
+      // from the list in hand rather than a source of their own.
+      // The seasons come from the shows list: while that is still loading
+      // its count is -1, and the seasons view is hidden rather than showing
+      // "0 seasons" for the moment it takes to arrive.
+      return state.series
+        ? { total: seriesSource.count() < 0 ? -1 : seasonsOf().length, noun: 'seasons' }
+        : { total: seriesSource.count(), noun: 'series' };
     default:
-      return { total: libSource.total, noun: 'items' };
+      return { total: libSource.count(), noun: 'items' };
   }
 }
 
@@ -1596,10 +1590,10 @@ function bindCollection(
     syncStatus();
   };
 }
-bindCollection(albumsSource, () => state.mode === 'albums' || state.mode === 'audiobooks');
-bindCollection(artistsSource, () => state.mode === 'artists');
-bindCollection(genresSource, () => state.mode === 'genres');
-bindCollection(seriesSource, () => state.mode === 'series' && !state.season);
+bindCollection(albumsSource, () => viewSource(state) === 'albums');
+bindCollection(artistsSource, () => viewSource(state) === 'artists');
+bindCollection(genresSource, () => viewSource(state) === 'genres');
+bindCollection(seriesSource, () => viewSource(state) === 'series');
 
 // Only the relayout: the bar appearing or disappearing changes the grid's
 // height. The album sheet watches the player itself, and must not drag a
@@ -1634,7 +1628,10 @@ function shareLabel(): string {
  */
 function writeHash(push = false): void {
   const p = new URLSearchParams();
-  if (state.mode !== 'all') p.set('m', state.mode);
+  // Omitted only when it is this face's own default: 'all' is not the
+  // default on a music face (that is 'artists'), so leaving it out there
+  // made "All" unaddressable and Back to it land on the artists.
+  if (state.mode !== defaultMode(shownContent())) p.set('m', state.mode);
   if (state.artist) p.set('ar', state.artist);
   if (state.genre) p.set('g', state.genre);
   if (state.series) p.set('tv', state.series);
@@ -1642,8 +1639,12 @@ function writeHash(push = false): void {
   if (state.near) p.set('n', state.near);
   if (state.nearName) p.set('nn', state.nearName);
   if (state.q) p.set('q', state.q);
-  if (state.sort !== 'mtime') p.set('s', state.sort);
-  if (!state.desc) p.set('o', 'asc');
+  // The sort and its direction are written only when they differ from how
+  // this view opens (openingSort/openingDesc), and read back the same way,
+  // so choosing "Modified" in a view that opens on name, or turning a season
+  // to newest-first, survives Back and a reload rather than reverting.
+  if (state.sort !== openingSort(state.mode, state)) p.set('s', state.sort);
+  if (state.desc !== openingDesc(state.mode, state)) p.set('o', state.desc ? 'desc' : 'asc');
   const h = p.toString();
   const url = h ? `#${h}` : location.pathname;
   if (push && location.hash !== (h ? `#${h}` : '')) history.pushState(null, '', url);
@@ -1824,7 +1825,7 @@ function applyHash(reset: boolean): void {
   // here, because only the views that fetch may be emptied — a show's
   // seasons are read out of the shows list and nothing would come to fill
   // them again.
-  applyQuery(reset, false, reset);
+  applyQuery(false, reset);
   void openLinked();
 }
 

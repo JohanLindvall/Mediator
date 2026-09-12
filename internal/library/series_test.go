@@ -26,8 +26,8 @@ func TestParseEpisode(t *testing.T) {
 		},
 		{
 			"file names the show too",
-			"/m/pub/Norra.Kajen.S01.SWEDiSH.1080p.WEB.H264-GRP/Norra.Kajen.S01E06.SWEDiSH.1080p.WEB.H264-GRP/norra.kajen.s01e06.swedish.1080p.mkv",
-			"Norra Kajen", 1, 6,
+			"/m/pub/Salt.Marsh.S01.SWEDiSH.1080p.WEB.H264-GRP/Salt.Marsh.S01E06.SWEDiSH.1080p.WEB.H264-GRP/salt.marsh.s01e06.swedish.1080p.mkv",
+			"Salt Marsh", 1, 6,
 		},
 		{
 			// Underscores, and a year that is a disambiguator rather than
@@ -207,7 +207,7 @@ func TestSearchSeriesSorts(t *testing.T) {
 		add(fmt.Sprintf("/m/Harbour.Lights.S01E%02d.mkv", i), int64(200+i))
 	}
 	for i := 1; i <= 4; i++ {
-		add(fmt.Sprintf("/m/Norra.Kajen.S01E%02d.mkv", i), int64(i))
+		add(fmt.Sprintf("/m/Salt.Marsh.S01E%02d.mkv", i), int64(i))
 	}
 
 	names := func(ss []*Series) []string {
@@ -229,13 +229,13 @@ func TestSearchSeriesSorts(t *testing.T) {
 		return true
 	}
 
-	if got := names(l.SearchSeries("", "name", false, PathFilter{})); !eq(got, []string{"Grey Harvest", "Harbour Lights", "Norra Kajen"}) {
+	if got := names(l.SearchSeries("", "name", false, PathFilter{})); !eq(got, []string{"Grey Harvest", "Harbour Lights", "Salt Marsh"}) {
 		t.Errorf("by name: %v", got)
 	}
-	if got := names(l.SearchSeries("", "episodes", true, PathFilter{})); !eq(got, []string{"Norra Kajen", "Harbour Lights", "Grey Harvest"}) {
+	if got := names(l.SearchSeries("", "episodes", true, PathFilter{})); !eq(got, []string{"Salt Marsh", "Harbour Lights", "Grey Harvest"}) {
 		t.Errorf("by episodes desc: %v", got)
 	}
-	if got := names(l.SearchSeries("", "mtime", true, PathFilter{})); !eq(got, []string{"Harbour Lights", "Grey Harvest", "Norra Kajen"}) {
+	if got := names(l.SearchSeries("", "mtime", true, PathFilter{})); !eq(got, []string{"Harbour Lights", "Grey Harvest", "Salt Marsh"}) {
 		t.Errorf("by newest: %v", got)
 	}
 	// The search matches the show's name.

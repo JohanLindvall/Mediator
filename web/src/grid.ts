@@ -71,6 +71,7 @@ export class VirtualGrid<T> {
     this.scroller.removeEventListener('scroll', this.onScroll);
     this.resizeObs.disconnect();
     this.plane.removeEventListener('click', this.onPlaneClick);
+    this.plane.removeEventListener('keydown', this.onPlaneKey);
   }
 
   /**

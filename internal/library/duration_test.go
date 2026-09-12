@@ -238,3 +238,24 @@ func TestArchivedVideoProbePipesEnoughPrefix(t *testing.T) {
 			got.Duration, got.VCodec)
 	}
 }
+
+// The colour decision that gates the whole tone-map path: the two transfer
+// curves that mean high dynamic range, and wide primaries on their own,
+// which an H.264 stream is refused for by the same players.
+func TestIsHDR(t *testing.T) {
+	for _, tc := range []struct {
+		transfer, primaries string
+		want                bool
+	}{
+		{"smpte2084", "bt2020", true},    // HDR10
+		{"arib-std-b67", "bt2020", true}, // HLG
+		{"bt709", "bt2020", true},        // wide colour without a curve
+		{"bt709", "bt709", false},
+		{"", "", false},
+		{"smpte170m", "smpte170m", false},
+	} {
+		if got := isHDR(tc.transfer, tc.primaries); got != tc.want {
+			t.Errorf("isHDR(%q, %q) = %v, want %v", tc.transfer, tc.primaries, got, tc.want)
+		}
+	}
+}

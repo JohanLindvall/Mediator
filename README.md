@@ -278,9 +278,10 @@ Go binary with the TypeScript frontend embedded.
   not about what plays.
 - **Spectrum analyser** — a quarter-octave analyser for the music bar and
   for the video player alike, shown above the player's controls and fading
-  with them. Opening it on a film ends AirPlay for that film until it is
-  reopened, which the button says before you press it; casting to a
-  television is unaffected.
+  with them. On a browser that cannot copy a playing element's sound
+  (Safari), opening it on a film ends AirPlay for that film until it is
+  reopened, which the button says before you press it; where the sound can
+  be copied, and for casting to a television, it is unaffected.
 - **Downloadable DVD titles** — a disc is authored from pieces that each
   start their own clock, so a title downloaded as one file reports minutes
   instead of hours and cannot be seeked. (That is the disc, not the export:
@@ -301,10 +302,17 @@ Go binary with the TypeScript frontend embedded.
   is the distributor's logo and the title card. Tiles already made are kept
   as they are; new and changed files get the better frame.
 - **Deinterlacing** — a PAL DVD is 576i, and a browser shows those combed
-  fields as horizontal teeth on anything that moves. Wherever the picture is
-  converted or a frame extracted for a thumbnail, interlaced frames are
-  deinterlaced; progressive files are untouched, since only the frames the
-  file itself flags are processed.
+  fields as horizontal teeth on anything that moves. The software converter
+  and every extracted thumbnail deinterlace; progressive files are
+  untouched, since only the frames the file itself flags are processed. The
+  hardware converter does not deinterlace, deliberately — nothing large
+  enough to reach it is interlaced.
+- **HDR to ordinary colour** — a 4K release is often graded in wide colour
+  with a perceptual curve (HDR10, or Dolby Vision over it), and an H.264
+  stream that keeps that description is refused by some players. When such a
+  film is converted its picture is tone-mapped back to ordinary BT.709 —
+  on the processor, since the graphics engine's own tone-mapper produces no
+  picture on the hardware tested.
 - **DVD images and folders** — a disc image (`.iso`, `.img`) holding
   DVD-Video, an unpacked `VIDEO_TS` folder, and an image that is itself
   inside a rar volume set — which is how a DVD release ships — are indexed as
@@ -511,7 +519,7 @@ Go binary with the TypeScript frontend embedded.
   the grid instead of flashing it, and anything the two searches have in
   common keeps its tile and its loaded thumbnail. Type filter chips (all / videos / images / music /
   albums / artists). What can be sorted on follows the view: files by
-  modified date, name, size, date added or playing time; **videos also by
+  modified date, name, popularity, size, date added or playing time; **videos also by
   resolution and by bitrate**, which are two different questions — the
   biggest picture and the heaviest file are rarely the same release; albums
   also by artist, year, genre, track count and length; artists by how many

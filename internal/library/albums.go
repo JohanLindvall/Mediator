@@ -84,10 +84,17 @@ func (l *Library) AlbumByID(id string) (*Album, []Item, bool) {
 // tracksOfAlbum is the release's tracks as the caller sees them, in its own
 // running order.
 func (l *Library) tracksOfAlbum(a *Album) []Item {
+	// One stamper and one read lock for the whole sheet, the shape TracksOf
+	// uses: a Get per track took the lock afresh each time and could rebuild
+	// the resemblance and affinity caches once per track while the analysis
+	// ran.
+	st := l.stamper()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
 	tracks := make([]Item, 0, len(a.TrackIDs))
 	for _, tid := range a.TrackIDs {
-		if it, ok := l.Get(tid); ok {
-			tracks = append(tracks, it)
+		if it, ok := l.items[tid]; ok {
+			tracks = append(tracks, st.stamp(*it))
 		}
 	}
 	return tracks
@@ -297,7 +304,13 @@ func (l *Library) buildAlbums() []*Album {
 			pictures[filepath.Dir(it.Path)] = true
 		case KindAudio:
 			dir := filepath.Dir(it.Path)
-			byDir[dir] = append(byDir[dir], it)
+			// A copy, not the live pointer: the grouping, the disc sort,
+			// fillAlbum and markSpoken all run after the lock is dropped, and
+			// an upsert or a tag read would otherwise rewrite these fields
+			// under them. This is the "never hand out *Item across the lock"
+			// rule, and List obeys it the same way.
+			cp := *it
+			byDir[dir] = append(byDir[dir], &cp)
 			if it.Artist != "" {
 				key := strings.ToLower(it.Artist)
 				if spellings[key] == nil {
@@ -388,7 +401,8 @@ func (l *Library) buildAlbums() []*Album {
 		l.mu.RLock()
 		for _, id := range ids {
 			if it, ok := l.items[id]; ok {
-				tracks = append(tracks, it)
+				cp := *it // a copy, as above: the build reads it unlocked
+				tracks = append(tracks, &cp)
 			}
 		}
 		l.mu.RUnlock()

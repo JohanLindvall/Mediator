@@ -68,7 +68,11 @@ func FFmpegPath() string {
 // the analysis, by the loader, and by tests that seed a library.
 func (l *Library) SetFeatures(id string, mtime, size int64, vec []float32) {
 	l.putFeatures(id, mtime, size, vec)
-	l.bumpFeatures()
+	// Publish, not merely bump: the collections are cached on the library
+	// version and group speech apart by the vectors, so a vector arriving
+	// through this door — the loader and the tests — must rebuild them, or
+	// Albums() serves a shelf that does not know about it.
+	l.publishAnalysis()
 }
 
 // putFeatures writes a vector without publishing it.
@@ -134,7 +138,9 @@ func (l *Library) LoadFeatures(db *blob.DB) int {
 		n++
 	})
 	if n > 0 {
-		l.bumpFeatures()
+		// One publish for the whole restore, not one per track: the
+		// collections rebuild once, against the batch.
+		l.publishAnalysis()
 		l.log.Info("audio features restored", "tracks", n)
 	}
 	return n
@@ -188,7 +194,7 @@ func (l *Library) AnalyzeLoop(ctx context.Context, db *blob.DB, busy func() bool
 // else, and reports as it goes.
 func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, busy func() bool) {
 	start := time.Now()
-	done, failed := 0, 0
+	done, failed, published := 0, 0, 0
 	l.log.Info("audio analysis starting", "tracks", len(todo))
 	for _, id := range todo {
 		for busy() || l.enriching.Load() > 0 {
@@ -221,14 +227,19 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 			// What the collections say changes as the vectors land — an
 			// audiobook shelved, a resemblance found — and they are cached
 			// per version, so the version moves now and then rather than
-			// only at the end of a pass that takes the better part of a
-			// day. Every track would be a rebuild a second.
-			l.publishAnalysis()
+			// only at the end of a pass that takes the better part of a day.
+			// Only where a vector was actually read, though: a run of
+			// unreadable files publishes nothing and must not discard every
+			// cache for a batch that added nothing.
+			if done > published {
+				l.publishAnalysis()
+				published = done
+			}
 		}
 	}
 	l.log.Info("audio analysis pass complete", "done", done, "failed", failed,
 		"took", time.Since(start).Round(time.Second))
-	if done > 0 {
+	if done > published {
 		l.publishAnalysis()
 	}
 }
@@ -310,12 +321,16 @@ func (l *Library) analyzeOne(ctx context.Context, db *blob.DB, it Item) error {
 	if vec == nil {
 		vec = []float32{}
 	}
+	// The vector is kept in memory first: a database write that fails is a
+	// storage fault, not a track that could not be read, and returning it
+	// as a decode failure would markFailed the track and throw the vector
+	// away — read again next run for nothing.
+	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
 	if db != nil {
 		if err := db.PutFeatures(it.ID, it.ModTime, it.Size, featuresVersion, vec); err != nil {
-			return err
+			l.log.Debug("audio features not stored", "path", it.Rel, "err", err)
 		}
 	}
-	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
 	return nil
 }
 

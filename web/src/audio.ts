@@ -20,9 +20,12 @@ import { recall, remember } from './remember';
 import { icons } from './icons';
 import { showToast } from './toast';
 import {
+  ahead,
   appendToOrder,
-  freshForRadio,
+  freshFrom,
   nextPosition,
+  recentArtists,
+  recordingKey,
   pickRadio,
   placeFirst,
   resumable,
@@ -220,6 +223,22 @@ export class AudioPlayer {
    */
   private radio = recall('media.radio') === '1';
   private radioBusy = false;
+  /**
+   * What is in the queue, by file id and by recording, so a radio top-up
+   * need not walk the queue — which is the whole library when it has been
+   * shuffled in. Kept in step as the queue is replaced or extended; see
+   * freshFrom.
+   */
+  private queuedIds = new Set<string>();
+  private queuedKeys = new Set<string>();
+  /**
+   * Whether the set has been handed the track that follows: asked once per
+   * track, not on every radio top-up. `unasked` after a track change,
+   * `pending` while the request is out, then `accepted` or `refused` — the
+   * last stopping the retries, since `tv.nextUri == null` is true for the
+   * pending and refused states alike and would re-send for ever.
+   */
+  private queuedAhead: 'unasked' | 'pending' | 'accepted' | 'refused' = 'unasked';
   /** The verdict request in flight: only the latest answer is applied. */
   private rateGen = 0;
   /** Whether a media session has ever been set for this page — see prefetchArt. */
@@ -461,6 +480,10 @@ export class AudioPlayer {
     }
     this.queueCtx = context;
     this.queue = items.slice(0, QUEUE_CAP);
+    this.rebuildQueuedSets();
+    // A new queue is a clean slate: a run of failures from the last one must
+    // not count against this one and stop it on its first stumble.
+    this.errStreak = 0;
     this.shuffle = shuffleAll;
     this.rebuildOrder(shuffleAll ? -1 : start);
     this.orderPos = 0;
@@ -520,7 +543,12 @@ export class AudioPlayer {
     if (taken.length === 0) return 0;
     const first = this.queue.length;
     // Not a spread: the whole library is more arguments than a call takes.
-    for (const t of taken) this.queue.push(t);
+    for (const t of taken) {
+      this.queue.push(t);
+      this.queuedIds.add(t.id);
+      const key = recordingKey(t);
+      if (key !== '') this.queuedKeys.add(key);
+    }
     const at = appendToOrder(this.order, first, taken.length, this.shuffle);
     if (this.exhausted) {
       // The position is not necessarily the last of the old order — a
@@ -528,12 +556,25 @@ export class AudioPlayer {
       // it goes to where the new tracks begin rather than one step on.
       this.orderPos = at;
       this.load(true);
-    } else if (this.tv && this.tv.nextUri == null) {
-      void this.queueAhead();
+    } else if (this.tv && this.queuedAhead === 'unasked') {
+      // Now there is a track to follow the current one, and the set has not
+      // been told one yet.
+      this.queueAhead();
     }
     this.renderQueue();
     this.emit();
     return taken.length;
+  }
+
+  /** Rebuild the queued-id and queued-recording sets from the whole queue. */
+  private rebuildQueuedSets(): void {
+    this.queuedIds = new Set();
+    this.queuedKeys = new Set();
+    for (const t of this.queue) {
+      this.queuedIds.add(t.id);
+      const key = recordingKey(t);
+      if (key !== '') this.queuedKeys.add(key);
+    }
   }
 
   /** Radio on or off; on, the queue is topped up at once. */
@@ -560,19 +601,22 @@ export class AudioPlayer {
   private async topUp(): Promise<void> {
     const it = this.current;
     if (!this.radio || this.radioBusy || !it) return;
-    if (this.order.length - 1 - this.orderPos >= RADIO_AHEAD) return;
+    if (ahead(this.order.length, this.orderPos) >= RADIO_AHEAD) return;
     this.radioBusy = true;
     try {
       const res = await tracksOf('similar', { id: it.id, n: RADIO_POOL });
       // A fast skip meanwhile: the batch is for the track just left, and
       // the track now playing asks for its own on the next change.
       if (this.current !== it) return;
-      const fresh = freshForRadio(res.tracks, this.queue);
+      // By the sets the queue maintains, not by walking it — the queue is
+      // the whole library once it has been shuffled in.
+      const fresh = freshFrom(res.tracks, this.queuedIds, this.queuedKeys);
       if (fresh.length > 0) {
-        const lately = this.queue.slice(-RADIO_MEMORY).map((t) => t.artist ?? '');
+        const lately = recentArtists(this.order, this.queue, this.orderPos, RADIO_MEMORY);
         this.append(pickRadio(fresh, RADIO_BATCH, Math.random, lately));
+      } else if (ahead(this.order.length, this.orderPos) <= 0) {
+        showToast('Radio: nothing else sounds like this yet');
       }
-      else if (this.order.length - 1 - this.orderPos <= 0) showToast('Radio: nothing else sounds like this yet');
     } catch {
       // The next track change asks again.
     } finally {
@@ -599,6 +643,10 @@ export class AudioPlayer {
       // The television is doing the playing, and a fade here would be a fade
       // of nothing: the decks are silent and the set has its own transport.
       if (this.tv.playing) return;
+      // A queue that played out parked the transport and stopped its tick
+      // (see next), so the clock and the poll are both idle — start them
+      // again, or the bar shows "playing" with nothing advancing.
+      this.tv.run();
       this.tv.play();
       this.updatePlayState();
       return;
@@ -725,10 +773,19 @@ export class AudioPlayer {
     this.queue = [];
     this.order = [];
     this.orderPos = -1;
+    this.queuedIds = new Set();
+    this.queuedKeys = new Set();
     // The queue is gone, so its owner's claim goes with it: whoever started it
     // must not still be told the player is playing their collection.
     this.queueCtx = null;
     this.exhausted = false;
+    // Per-run bookkeeping that would otherwise carry into the next queue: a
+    // failure streak, a pending top-up, and the queue panel's repaint.
+    this.errStreak = 0;
+    this.radioBusy = false;
+    cancelAnimationFrame(this.queueRaf);
+    this.queueRaf = 0;
+    this.queuePainted = { first: -1, last: -1, cur: -1 };
     this.shown = null;
     this.artAhead = '';
     this.hideQueue();
@@ -1283,6 +1340,7 @@ export class AudioPlayer {
       handover: CAST_HANDOVER,
     });
     this.tv = tv;
+    this.queuedAhead = 'unasked'; // a new track: the set has been told no follower yet
     tv.begin(at, (item.duration ?? 0) / 1000);
     this.paintTime(tv.pos, tv.dur);
     this.updatePlayState();
@@ -1308,12 +1366,19 @@ export class AudioPlayer {
    */
   private queueAhead(): void {
     const tv = this.tv;
+    if (!tv || this.queuedAhead === 'pending') return;
     const next = this.nextItem();
-    if (!tv || !next) return;
+    if (!next) return;
     // The set will move on by itself, and the bar follows: have the sleeve
     // ready for when it does.
     this.prefetchArt(next);
-    void tv.queueNext(next.id);
+    this.queuedAhead = 'pending';
+    void tv.queueNext(next.id).then(() => {
+      if (this.tv !== tv) return;
+      // A renderer that will not queue leaves nothing here; a top-up must
+      // not keep asking it (nextUri stays null either way — see queuedAhead).
+      this.queuedAhead = tv.nextUri ? 'accepted' : 'refused';
+    });
   }
 
   /**
@@ -1324,13 +1389,21 @@ export class AudioPlayer {
    * handed over in turn.
    */
   private advanceWithSet(): void {
-    if (this.orderPos + 1 < this.order.length) this.orderPos++;
-    else if (this.repeat && this.order.length > 0) this.orderPos = 0;
-    else return; // nothing follows: whatever it is playing is not ours
+    // The same rule next() follows, so the two cannot disagree about what
+    // comes after the current track. Null (the end, or a shuffle's fresh
+    // deal) means the set moved on to something the bar did not send, so
+    // whatever it is playing is not ours.
+    const pos = nextPosition(this.orderPos, this.order.length, this.repeat, this.shuffle);
+    if (pos == null) return;
+    this.orderPos = pos;
     const item = this.current;
     const tv = this.tv;
     if (!item || !tv) return;
+    // Counted where a track the bar sent is (castLoad): the set moving on by
+    // itself is still the track being played.
+    recordPlay(item.id);
     this.exhausted = false;
+    this.queuedAhead = 'unasked';
     tv.begin(0, (item.duration ?? 0) / 1000);
     this.showTrack(item);
     this.queueAhead();
@@ -1353,8 +1426,12 @@ export class AudioPlayer {
     this.showSpectrumButton();
     this.buildCastMenu(knownRenderers());
     const item = this.current;
-    if (resumeHere && item) {
-      this.loadDecks(item, true);
+    if (item) {
+      // Always re-point the decks: startCast cleared their sources, so a bar
+      // left without them has a play button that does nothing for the rest
+      // of the session. Autoplay only when picking the film up here; a stop
+      // from the set's own remote leaves it paused, ready to resume.
+      this.loadDecks(item, resumeHere);
       this.audio.currentTime = at;
     }
     this.updatePlayState();

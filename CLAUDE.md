@@ -190,7 +190,7 @@ Scale invariants (measured at 150k files; keep them true):
   the way the background sweep does — this probe is what tells the player
   whether the browser can decode what it is already playing. Nothing is
   written down when the context expires: interrupted is not answered.
-- The album/artist endpoints send `ETag: W/"v<group version>"` +
+- The album/artist endpoints send `ETag: W/"v<group version>.<watch version>"` +
   `Cache-Control: no-cache`, so browsers revalidate for free; `writeJSON`
   only defaults to no-store when the handler set no policy. The frontend
   additionally throttles those full-list reloads to one per 2 s during
@@ -311,7 +311,16 @@ Change propagation is the core loop:
   quiet and the tags are read, which moves the group version like anything
   else that changes what the library holds. The **listing** keeps the plain
   version, because a listing shows the size and orders by it, and its
-  rebuild is a filter and a sort rather than a rebuild of the world. the grouped views — albums,
+  rebuild is a filter and a sort rather than a rebuild of the world.
+  The three across-kind totals a `Counts` answer carries — hidden, started
+  and finished, played — are cached per group version too (`hiddenCounts`,
+  `watchTotals`, `playedTotal`); keyed on the plain one they copied the
+  flags, watch and play maps on every listing during a download, which was
+  the regression the split exists to stop, one door along. And the
+  **periodic rescan** tells the two apart as the watcher does: a walk that
+  saw only downloads grow bumps the byte version alone (`held` in `Scan`),
+  where before it discarded every grouped cache every ten minutes for
+  nothing. the grouped views — albums,
   artists, genres, shows — are each recomputed lazily and cached per version
   through one arrangement (`perVersion` in `cache.go`), which also carries the
   total the chips read. They sort through one rule too (`orderBy`): a thing
@@ -332,11 +341,24 @@ Change propagation is the core loop:
   it was asked for; the genres and the shows carry the field and order by it
   if asked, without a menu entry of their own yet. A playlist album takes
   its tracks' arrivals rather than its own: the file naming them may be
-  older than all of them or newer.
+  older than all of them or newer. An **archived** member or a DVD title
+  takes its container's own time (`upsertStored`), not the moment the scan
+  found it: those items are deliberately never persisted, so "now" dated
+  every one of them today on every restart and put its release at the top
+  of the Added order each morning.
 - Listing (`List`) filters + sorts + pages under `RLock` and returns *copies*
   of items — background enrichment (`enrich.go`: audio tags incl.
   track/year/genre, plus durations for audio and video) mutates items under
-  the write lock, so never hand out `*Item` across the lock boundary.
+  the write lock, so never hand out `*Item` across the lock
+  boundary. `buildAlbums` broke that on the busiest build there is: it
+  released the lock and went on reading the live items' tags, sizes and
+  times through the disc sort, `fillAlbum` and `markSpoken`, while an
+  upsert or a tag read wrote them. It groups **copies** now (`cp := *it`
+  under the read lock), which is a few megabytes per build against a race
+  on every field the card shows. The album sheet's tracks come through one
+  stamper and one lock (`tracksOfAlbum`) rather than a `Get` apiece, which
+  could rebuild the resemblance caches once per track while the analysis
+  ran.
   Results persist in the blob db (`meta` bucket, keyed by id + mtime/size)
   so restarts skip the file reads. Durations come from `duration.go`: pure
   Go header parsing for mp4/m4a/mov, mp3 (Xing/VBRI/CBR), flac, ogg/opus and
@@ -505,9 +527,22 @@ Change propagation is the core loop:
   loopback URL — and described by `extractFeatures`: fifty-six numbers, a
   pure-Go radix-2 FFT under mel cepstral coefficients, spectral centroid,
   bandwidth, rolloff and flatness, chroma, loudness and dynamics, tempo by
-  onset autocorrelation with a prior toward 120, and three speech cues. The
-  vector is written to the `features` bucket stamped with mtime and size and
-  a recipe version (`featuresVersion`, the same idea as `shapeVersion`),
+  onset autocorrelation with a prior toward 120, and three speech cues. The vector is written to the `features` bucket stamped with mtime and size
+  and a recipe version (`featuresVersion`, the same idea as `shapeVersion`)
+  — **not bumped** for the pause fix of 2026-09-12, deliberately: the
+  silence counter used to run across the three windows, so the minutes
+  between one window's end and the next's start counted as one pause, and
+  the fix only ever *lowers* a track's pause share (the seam sat in both the
+  numerator and the denominator). Old vectors therefore lean toward the
+  verdict the rules were already tuned against, and re-reading 28,000
+  tracks — a working day of a core, with the shelves empty meanwhile — would
+  buy nothing a new file does not get anyway. The `Similar` answer builds a
+  candidate's recording key only once it has beaten the last kept, since
+  two lowercase copies and a concat per candidate was most of the work of a
+  radio top-up; and the pass publishes only when a vector was actually
+  read, where 250 unreadable files used to discard every cache for nothing.
+  A database write that fails is logged and the vector kept in memory,
+  where it used to poison the track as a decode failure.
   restored at startup (`LoadFeatures`), pruned with the item, and never read
   twice for an unchanged file. Measured on the live library: 0.7-1.1 s per
   track, 22k tracks a working day of one core, once. `-analyze=false` turns
@@ -1447,6 +1482,24 @@ Frontend (`web/src`, no framework, no runtime deps):
   source it was derived from — a show's seasons are read out of the shows
   list already in hand, and calling them a source of their own would blank
   them for good, nothing ever arriving to fill them.
+  The rule itself is `arrivalPlan` (`query.ts`, tested): given the view
+  being entered, the one on screen and whether the address changed, it says
+  which source, whether to drop what it holds and whether it fetches at all
+  — the seasons view fetches nothing and is never emptied. And what a
+  source answers the grid while it waits is `drawCount` (tested): nought
+  until something has been asked, minus one while it is being answered, the
+  count once it has. Both used to be spelled in place, and the second had a
+  gap: neither source *announced* entering the loading state, so the
+  skeletons the docs promised on an arrival were never drawn, and a failed
+  fetch left them up for good.
+  Two address faults went with it. The sort round-trip compared against
+  `mtime`/descending rather than against what the view opens on, so a
+  "Modified" chosen in the albums view was lost on Back; `writeHash` now
+  omits a key or a direction only when it equals `openingSort`/`openingDesc`,
+  which `readHash` already fell back to. And `m` was omitted for "all",
+  which on a music face reads back as the artists — it is omitted only for
+  the face's own default now. A show's seasons reached by address load the
+  shows first, since they are read out of that list.
   The mirror of the rule is that an off-screen source is no longer
   refetched: a library being written to changes every few seconds, and the
   item source was fetching a page of the whole library behind every one of
@@ -1518,6 +1571,25 @@ Frontend (`web/src`, no framework, no runtime deps):
   queue is adding up; it is the one column that never gives way, the title
   yielding first, and it is absent rather than zero until the library has
   measured the file.
+  **What the bar does when a set stops.** `endCast` always re-points the
+  decks to the current track at the set's position (autoplaying only when
+  the listener chose to play here), since `startCast` cleared their sources
+  and a stop from the set's own remote used to leave a play button that did
+  nothing for the session. Resuming a parked cast queue restarts the
+  transport's tick as well as pressing play. A track the set advanced to by
+  itself is counted as played like one the bar sent, and `advanceWithSet`
+  goes through `nextPosition` rather than its own copy of the wrap rule.
+  Whether the set has been handed the next track is a tri-state on the bar
+  (`queuedAhead`), because a `null` URI was also "asked and refused" and
+  every top-up re-sent the request to a set that had said no.
+  **Radio's memory is the queue's sets, not the queue.** What is queued, by
+  id and by recording, is kept in two Sets extended as the queue is
+  (`freshFrom`), where walking a million-entry queue on every top-up was two
+  million allocations a song. The performers lately played are read
+  *backwards from the position through the order* (`recentArtists`,
+  tested), not from the queue's tail, which under a shuffled whole-library
+  queue was twenty arbitrary entries. How many follow the one playing is
+  one function (`ahead`, tested) where it was spelled twice.
   **The queue and the spectrum stack** (`.ab-panels`): both used to anchor
   themselves above the bar at the same place, so opening both showed
   whichever was drawn last. One container owns the anchoring now and lays
@@ -1750,8 +1822,8 @@ Frontend (`web/src`, no framework, no runtime deps):
   rather than being sent to a server that would quietly ignore it —
   `openingSort`, which lives in `sorts.ts` beside the option table, both
   pure and tested. That is the first row of the table except where a view's subject is an order:
-  the popularity listing opens on plays, and **a performer's releases open by
-  year**, a discography being read in the order it was made where by name it
+  the popularity listing opens on the popularity key, and **a performer's
+  releases open by year**, a discography being read in the order it was made where by name it
   is one shelf shuffled.
   **Which way it opens is settled in the same place** (`openingDesc`, beside
   `openingSort` and tested with it): newest first nearly everywhere, since a
@@ -2128,7 +2200,9 @@ set that has gone away should be given up on in seconds, and no more than
   the soundtrack the file leads with, and the menu on this side went on
   showing the language the viewer had picked. A television has no menu of its
   own to correct that with, which is what makes the silence worse than the
-  refusal. It is only done
+  refusal. The queued track carries the note too, and a set that cannot be
+  handed a URL because this machine has no address on its network answers
+  503, which it is, rather than the 422 a container it will not play is. It is only done
   where the viewer chose something other than the first track — that being
   what a set picks anyway — and where the file cannot be rewrapped at all
   the original is sent and the set chooses, which is worth more than
@@ -2256,7 +2330,20 @@ set that has gone away should be given up on in seconds, and no more than
   change of track, an escalation and the rewrap all come through it; the
   polls that would arrive with something are stopped as the cast begins; and
   the media keys drive the set rather than the element, as the buttons
-  already did.
+  already did. The element's own `error` is ignored while a set holds the
+  film, a subtitle chosen while casting is re-sent to the set as a
+  soundtrack is, and ending the cast on the set's own stop hides the poster
+  and resets the clock rather than leaving a thumbnail over a frozen time.
+  **Every await in the player is guarded by the film's id**: `refreshItem`
+  and `loadSubs` used to act on whatever film was current when they
+  resolved, so a swipe during the request repointed the player, or hung the
+  previous film's subtitle tracks on the next one. `load` also shares one
+  in-flight item request per file, where two used to race and decide
+  whether the conversion opened once or twice. `menuShift` (`playback.ts`,
+  tested) is the arithmetic that slides a menu back on screen, measured
+  against the visible viewport rather than the layout one. And a set still
+  *opening* the file no longer stops the carried clock (`casting.ts`,
+  tested): only playing and paused write that state.
   In the player, casting is a fork in the transport rather than a second
   player: `curT`/`totT`/`seekTo`/`togglePlay` answer for the set while it
   holds the film, so the seek bar, the clock, the resume point and the media
@@ -2891,7 +2978,30 @@ Serving details worth knowing before "fixing" them:
   size, runs out of surfaces, or simply gives up. The next attempt converts
   on the processor, which is slower and always works, and where nothing had
   been sent yet the attempt is made again at once rather than reported. Per
-  file and per run, like the other verdicts here.
+  file and per run, like the other verdicts here (`perFileVerdict`, which
+  `aspects` and `hwRefused` are two of).
+  **A start-over is a loop, not a re-entry**, in both converters. The piped
+  handler used to call itself, which asked for a second of the two
+  conversion slots while still holding the first — two concurrent failures
+  deadlocked until a client gave up — and counted the request twice against
+  the background-work gate. `HLS.run` re-ran ffmpeg into a directory still
+  holding the failed attempt's segments, with no `-y`, so the retry that
+  fires precisely when the engine died part-way was defeated by its own
+  leftovers: `clearSession` empties it first. `watchFirst` starts once per
+  session rather than once per attempt, and the plan is closed before the
+  next attempt so an abandoned repair pipe is killed rather than left
+  blocked for the whole of the next conversion. The aspect retry is gated
+  on `repairable` at every site, or an archived or MPEG-4 file got a second
+  identical attempt before its 503.
+  **The tone-map chain is proved at startup like the rest of the hardware**
+  (`hwProveToneMap`): the base proof strips `-vf`, so it never exercised the
+  download-tone-map-upload splice, and a driver that refuses the splice
+  would have failed every HDR conversion. Where the proof fails the engine
+  still serves and wide-colour films keep their colour, with a warning.
+  `haveFilter` memoises only a probe that succeeded: one transient failure
+  of `ffmpeg -filters` used to disable the tone-map for the life of the
+  process, which is the unplayable-HDR fault this whole file exists to
+  end.
   Four backends are defined — VAAPI, QSV, NVENC, VideoToolbox — and **only
   VAAPI has been measured**. That is safe because of how one is chosen: each
   is *proved* by running a real conversion through it before it is ever used,
@@ -3748,7 +3858,9 @@ need nothing.
 
 ## Server-complete, UI-pending
 
-The hidden/favourite flags (`PUT /api/flags`, the batch form, the
+The hidden/favourite flags (`PUT /api/flags`, the batch form — faced like
+the single form since 2026-09-12; it used to take any id, which was both a
+way round the restriction and an existence oracle — the
 `hidden=`/`fav=` listing filters), the seeded shuffle sort (`sort=random` +
 `seed=`) and the m3u export helper (`playlistUrl` in `api.ts`) are complete
 and tested on the server and deliberately not yet surfaced in the UI — the

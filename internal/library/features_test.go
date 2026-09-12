@@ -212,3 +212,21 @@ func TestWindowsAreDescribedWithoutASeam(t *testing.T) {
 		t.Errorf("centroid over two windows = %.0f, want the tone", apart[26])
 	}
 }
+
+// The windows are sampled minutes apart, so the silence at one window's end
+// and the next's start is a window edge, not a pause between sentences.
+// Counted across the concatenation it read as a long pause and pushed music
+// toward the spoken verdict; per window it is taken back.
+func TestASilentSeamBetweenWindowsIsNotAPause(t *testing.T) {
+	tone := sine(220, 2, 0.5)
+	quiet := make([]float32, 2*featRate)                // two seconds of silence
+	a := append(append([]float32{}, tone...), quiet...) // tone, then edge silence
+	b := append(append([]float32{}, quiet...), tone...) // edge silence, then tone
+	v := extractFeaturesFrom([][]float32{a, b})
+	if v == nil {
+		t.Fatal("two toned windows were heard as silence")
+	}
+	if v[52] > 0.3 {
+		t.Errorf("window-edge silence read as pauses: pauseShare=%.2f, want low", v[52])
+	}
+}

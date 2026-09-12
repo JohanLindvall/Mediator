@@ -151,7 +151,7 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 	p.VCodec, p.ACodec = out.vcodec, out.acodec
 	p.Tracks = out.tracks
 	p.Subs = out.subs
-	p.Width, p.Height, p.FPS = out.width, out.height, out.fps
+	p.Width, p.Height, p.FPS, p.HDR = out.width, out.height, out.fps, out.hdr
 	p.DurationMs = sane(out.durationMs)
 	// Only an answer counts as having looked. A run that never happened —
 	// no ffprobe on PATH, the member unreadable, the caller's deadline —

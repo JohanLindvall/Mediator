@@ -370,3 +370,19 @@ test('cast: begin() is a new file — nothing seen of it, and answers about the 
   assert.deepEqual(told(events), ['playing']);
   assert.equal(tv.seen, false);
 });
+
+test('cast: the clock keeps advancing while a set is still opening', async () => {
+  // A slow set answers STOPPED before it has played (an `opening` step). The
+  // caller has just written "Playing"; the clock must not stop and the play
+  // state must not flip to paused underneath it.
+  const { tv, set, clock } = harness({ pollEvery: 1 });
+  set.says({ state: 'STOPPED', position: 0 });
+  tv.begin(0, 100);
+  tv.run();
+  assert.equal(tv.playing, true, 'begin leaves the clock running');
+  clock.tick(1);
+  await settle();
+  assert.equal(tv.playing, true, 'an opening answer does not pause the clock');
+  clock.tick(1);
+  assert.equal(tv.pos, 2, 'and the carried clock goes on');
+});
