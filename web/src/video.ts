@@ -577,6 +577,11 @@ class VideoOverlay {
     this.syncCastControls();
     this.seekBuf.style.width = '0%';
     this.showPoster(this.item);
+    // And nothing is still waiting to hand the element something: the
+    // soundtrack conversion polls for a file that is minutes away, and it
+    // would arrive to find the film playing in the next room.
+    this.stopSoundFix();
+    this.stopPrep();
     this.onTv.hidden = false;
     this.onTv.textContent = `Opening on ${target.name}…`;
     this.playBtn.innerHTML = icons[playButtonIcon(true)];
@@ -792,6 +797,16 @@ class VideoOverlay {
    * soundtrack the stream carries, which applyAudioChoice reads back.
    */
   private startSource(url: string, o: { at?: number; track?: number | null; settle?: number }): void {
+    // Not while a television is playing it. Every route into here means "the
+    // viewer should be watching this now", and while a set holds the film
+    // the viewer is watching the set — so handing the element a source puts
+    // a second copy of the film on the air in the room. Measured: a
+    // soundtrack conversion that landed after the cast had begun started
+    // playing on the page, audible over the television, with the poster
+    // still up so there was nothing on screen to say where it came from.
+    // Guarded here because this is the one door: the sound fix, a change of
+    // track, an escalation and the rewrap all come through it.
+    if (this.tv) return;
     this.video.src = url;
     if (o.track !== undefined) this.appliedTrack = o.track;
     this.sourced = true;
@@ -897,7 +912,9 @@ class VideoOverlay {
    * re-encodes the video.
    */
   private fallbackToTranscode(mode: 'full' | 'audio'): void {
-    if (this.closed || this.faulted) return;
+    // A television is playing the file itself; what this element can or
+    // cannot decode stopped being the question when the film left the page.
+    if (this.closed || this.faulted || this.tv) return;
     // Audio mode may still be escalated to a full conversion if the copied
     // video turns out to be undecodable too; nothing else re-enters.
     if (this.transcoding && !(this.tcMode === 'audio' && mode === 'full')) return;
@@ -1565,10 +1582,16 @@ class VideoOverlay {
     // The keys belong to what is in front, which is now this. Prev and next
     // are deliberately not taken: a film is not a track list, and a key that
     // skipped to another film would be a surprise nobody asked for.
+    // Whatever is playing the film is what they drive: a set holding it
+    // answers the keys the same way the buttons do, and the element stays
+    // paused and empty rather than starting a second showing in the room.
     this.releaseKeys = claimMediaKeys({
-      play: () => void this.video.play().catch(() => {}),
-      pause: () => this.video.pause(),
-      stop: () => this.video.pause(),
+      play: () => {
+        if (this.tv) this.tv.play();
+        else void this.video.play().catch(() => {});
+      },
+      pause: () => (this.tv ? this.tv.pause() : this.video.pause()),
+      stop: () => (this.tv ? this.tv.pause() : this.video.pause()),
     });
     this.bind();
 

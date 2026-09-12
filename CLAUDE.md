@@ -2245,6 +2245,18 @@ set that has gone away should be given up on in seconds, and no more than
   on every poll and rolls the season on at an ending; the bar clears its
   error streak when the set plays, follows it into the track it queued in
   advance, and sends the next track at an ending.
+  **While a set holds the film, nothing here hands the element a source.**
+  Every route into `startSource` means "the viewer should be watching this
+  now", and while the film is on a television the viewer is watching that —
+  so a source started here is a second showing of the same film in the same
+  room. Measured: a soundtrack conversion asked for before the cast landed
+  minutes later and began playing on the page, audible over the television,
+  with the poster still up so there was nothing on screen to say where the
+  sound came from. The guard is in that one door, since the sound fix, a
+  change of track, an escalation and the rewrap all come through it; the
+  polls that would arrive with something are stopped as the cast begins; and
+  the media keys drive the set rather than the element, as the buttons
+  already did.
   In the player, casting is a fork in the transport rather than a second
   player: `curT`/`totT`/`seekTo`/`togglePlay` answer for the set while it
   holds the film, so the seek bar, the clock, the resume point and the media
