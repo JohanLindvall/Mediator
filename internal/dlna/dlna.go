@@ -75,22 +75,26 @@ type Renderer struct {
 // containers has a fistful of bridges, and a multicast sent out of one of
 // those finds nothing at all.
 func Discover(ctx context.Context, wait time.Duration) []*Renderer {
-	locs := search(ctx, wait)
+	return describeAll(ctx, search(ctx, wait))
+}
 
+// describeAll fetches the description behind every location that answered and
+// keeps the ones that are renderers.
+//
+// A noisy network answers with dozens of locations, and describing them all
+// at once is dozens of fetches in flight for a list nobody needs faster. It
+// is a fixed pool fed from a channel rather than a goroutine per location
+// with a gate in front of it: how many datagrams arrive is decided by other
+// hosts, and the one thing this process can keep constant is how much of
+// itself it spends on them.
+func describeAll(ctx context.Context, locs map[string]bool) []*Renderer {
 	var (
 		mu    sync.Mutex
 		found []*Renderer
 		wg    sync.WaitGroup
 	)
-	// A noisy network answers with dozens of locations; describing them all
-	// at once is dozens of fetches in flight for a list nobody needs faster.
-	// It is a fixed pool rather than a goroutine per location with a gate in
-	// front of it: how many datagrams arrive is decided by other hosts, and
-	// the one thing this process can keep constant is how much of itself it
-	// spends on them.
 	queue := make(chan string)
-	workers := min(describeAtOnce, len(locs))
-	for range workers {
+	for range min(describeAtOnce, len(locs)) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -176,23 +180,7 @@ func search(ctx context.Context, wait time.Duration) map[string]bool {
 					deadline = d
 				}
 				_ = conn.SetDeadline(deadline)
-				// A deadline is not the whole of it. These are called from
-				// handlers, whose context carries no deadline at all, so
-				// until this the search ran its full window after the caller
-				// had gone — a socket and a goroutine per interface, and the
-				// search mutex held against the next client, for an answer
-				// nobody was left to read. Winding the deadline forward is
-				// what a read in progress notices; the socket is closed by
-				// the defer as before.
-				stopped := make(chan struct{})
-				defer close(stopped)
-				go func() {
-					select {
-					case <-ctx.Done():
-						_ = conn.SetDeadline(time.Now())
-					case <-stopped:
-					}
-				}()
+				defer endReadsWhenDone(ctx, conn)()
 				for range 2 {
 					if _, err := conn.WriteToUDP(msg, dst); err != nil {
 						return
@@ -215,6 +203,29 @@ func search(ctx context.Context, wait time.Duration) map[string]bool {
 	}
 	wg.Wait()
 	return locs
+}
+
+// endReadsWhenDone winds a socket's deadline forward the moment ctx is
+// cancelled, and hands back the teardown for the caller to defer.
+//
+// A deadline of its own is not the whole of it. These searches are made from
+// handlers, whose context carries no deadline at all, so until this the
+// search ran its full window after the caller had gone — a socket and a
+// goroutine per interface, and the search mutex held against the next
+// client, for an answer nobody was left to read. Winding the deadline
+// forward is what a read already blocked in the kernel notices; the socket
+// itself is closed by the caller's own defer, which LIFO puts after this one,
+// so the watchdog is never left setting a deadline on a socket that has gone.
+func endReadsWhenDone(ctx context.Context, conn interface{ SetDeadline(time.Time) error }) func() {
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.SetDeadline(time.Now())
+		case <-stopped:
+		}
+	}()
+	return func() { close(stopped) }
 }
 
 // location reads the LOCATION header out of an SSDP reply, which is an HTTP

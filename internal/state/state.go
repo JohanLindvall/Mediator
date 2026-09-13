@@ -40,6 +40,16 @@ type Position struct {
 	Like int `json:"l,omitempty"`
 }
 
+// writer is the one thing this store asks of the database, named as an
+// interface rather than taken as *blob.DB for the sake of the failure path.
+// What the store does when a write fails — and in particular what it does
+// about a position saved while that write was in flight — is precisely the
+// behaviour that was wrong, and a database that works cannot be made to
+// exercise it.
+type writer interface {
+	PutPositions(put map[string][]byte, remove []string) error
+}
+
 // Store is a concurrent-safe set of positions, held in memory and flushed to
 // the database on a debounce.
 //
@@ -48,7 +58,7 @@ type Position struct {
 // the player saves every few seconds per viewer, and a transaction each time
 // would be a commit and an fsync for a number nobody is waiting on.
 type Store struct {
-	db  *blob.DB // nil with -db off: positions then live only for this run
+	db  writer // nil with -db off: positions then live only for this run
 	log *slog.Logger
 
 	mu        sync.Mutex
@@ -63,7 +73,7 @@ type Store struct {
 // store this arrangement exists to avoid.
 func Load(db *blob.DB, log *slog.Logger) *Store {
 	s := &Store{
-		db: db, log: log,
+		log:       log,
 		positions: make(map[string]Position),
 		dirty:     make(map[string]struct{}),
 		removed:   make(map[string]struct{}),
@@ -72,6 +82,11 @@ func Load(db *blob.DB, log *slog.Logger) *Store {
 		log.Info("no database: playback positions will not be remembered after this run")
 		return s
 	}
+	// Assigned only here, never in the literal above: db is a pointer and
+	// the field is an interface, so a nil *blob.DB put in it is an interface
+	// that is not nil, and every "no database" test below would take the
+	// writing path and dereference nothing.
+	s.db = db
 	raw, err := db.GetPositions()
 	if err != nil {
 		log.Warn("playback positions unreadable, starting fresh", "err", err)

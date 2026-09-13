@@ -248,12 +248,19 @@ func run(cfg config, log *slog.Logger) error {
 		close(stateDone)
 	}()
 	// Whichever way run leaves — the signal, a serve error, a bind that
-	// failed, a watcher that would not start — the stores are stopped and
-	// drained before the deferred db.Close, which was registered above and
-	// so runs after this. The error returns used to skip the drain
-	// altogether: the loops were never asked to flush, and whatever the walk
-	// had mirrored meanwhile went with them. It is registered here, as early
-	// as both loops exist, so that every return below it is covered.
+	// failed, a watcher that would not start — both loops are stopped and
+	// waited for before the deferred db.Close, which was registered above and
+	// so runs after this. The error returns used to skip that altogether: the
+	// loops were never asked to flush, and whatever the walk had mirrored
+	// meanwhile went with them. It is registered here, as early as both loops
+	// exist, so that every return below it is covered.
+	//
+	// How thorough that last write is differs between the two, and only one
+	// half is in these files. The state store looks again for what landed
+	// during its final commit (flushFinal); the index mirror's PersistLoop
+	// flushes exactly once on cancellation, so an index change recorded
+	// during *that* commit is still dropped — the same fault, one file along
+	// in internal/library.
 	defer func() {
 		stopStores()
 		<-stateDone
@@ -291,8 +298,17 @@ func run(cfg config, log *slog.Logger) error {
 	// of index, metadata and thumbnail records, and with them the moment each
 	// of those files was first seen, which puts them at the top of the Added
 	// order as though they had arrived today. The three walks main starts are
-	// the only ones there are, so one gate held across the walk and the prune
-	// settles it.
+	// the only ones there are, so one gate across the walk and the prune
+	// closes that window.
+	//
+	// It does not close every window, and the remaining one is not this
+	// file's: PruneDB takes its live set under a read lock, lets go, and only
+	// then asks the database to delete everything outside it — so a file the
+	// *watcher* indexes in between, whose record the persist loop writes
+	// before the delete runs, is deleted for being absent from a set taken
+	// before it existed. That is microseconds wide and the cure is to take
+	// the snapshot under the library's own scan lock, which is not reachable
+	// from here.
 	var scanGate sync.Mutex
 	// What every completed scan is followed by: the caches and the owner's
 	// records of files that are gone are dropped, never on an empty index —
@@ -509,30 +525,42 @@ func run(cfg config, log *slog.Logger) error {
 	}
 
 	log.Info("shutting down")
-	// The converters stop before the drain rather than in a defer after it.
-	// Both read archived content over this server's own loopback stream, and
-	// that read is an ordinary in-flight request — which is exactly what
-	// Shutdown waits for. So the drain was waiting on work that only the code
-	// after the drain would release, and spent its whole budget whenever an
-	// archived film was being converted, with nobody watching it. The defers
-	// above stay as the backstop for the paths that never reach here, and
-	// both Close methods are safe to call twice.
-	hls.Close()
+	// The rewrapper stops before the drain rather than only in the defer
+	// after it. For archived content its ffmpeg reads its input from this
+	// server's own /api/stream, which is an ordinary in-flight request and
+	// exactly what Shutdown waits for — so the drain was waiting on work
+	// that only the code after the drain would release, and spent its whole
+	// budget whenever an archived film was being rewrapped with nobody
+	// watching it. A copy still being written is unplayable in any case, and
+	// Close takes its .part with it, so nothing a viewer could have used is
+	// lost by ending it here. The defer above stays as the backstop for the
+	// paths that never reach here; Close is safe to call twice.
+	//
+	// The segmented converter is deliberately *not* closed here, though its
+	// ffmpeg holds the same kind of read. HLS.Close deletes the directory of
+	// every session still converting, and during the drain a viewer's player
+	// is still asking for segments out of it — so closing it first would
+	// answer them 404 for the five seconds they would otherwise have played.
+	// Ending the ffmpeg while keeping the files is what this wants, and that
+	// is hlsSession.stopConverting, which has no exported way in.
 	if err := remux.Close(); err != nil {
 		log.Warn("could not clear the rewrap scratch directory", "err", err)
 	}
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		// Discarded, this said nothing at all — and a timeout here is the one
-		// report that something was still holding the server open.
-		log.Warn("connections were still open when the shutdown budget ran out", "err", err)
+		// Not a warning: Shutdown waits for active requests and does not
+		// cancel their contexts, and a page with the event stream open holds
+		// one open until it is killed — so a browser left on the library is
+		// enough to spend the whole budget, every time. Said at all because
+		// it is the one line that explains why an exit took five seconds.
+		log.Info("shut down with connections still open", "err", err)
 	}
-	// The handlers are gone, so nothing more will be recorded: only now are
-	// the stores told to write their last, in the deferred drain above, and
-	// only after that does the deferred db.Close run. The server-error path
-	// arrives here with ctx still live, so end that too — the watcher, the
-	// broadcast loop and the background passes are on it.
+	// The handlers have finished, or have had their five seconds: only now
+	// are the stores told to write their last, in the deferred drain above,
+	// and only after that does the deferred db.Close run. The server-error
+	// path arrives here with ctx still live, so end that too — the watcher,
+	// the broadcast loop and the background passes are on it.
 	stop()
 	return runErr
 }
