@@ -95,10 +95,10 @@ func TestPlainVideoTileHasOneBudget(t *testing.T) {
 	}
 }
 
-// A picture is read under a budget too, and the read consults it. Without
-// that, the single background slot was held for as long as a half-gigabyte
-// photograph took to arrive over a mount that had gone slow.
-func TestStillReadGivesUpWithItsBudget(t *testing.T) {
+// A picture is generated under a budget of its own. Without it the single
+// background slot was held for as long as the read took, and with it every
+// other tile and every scrub sheet in the process.
+func TestStillGenerationHasAnItemBudget(t *testing.T) {
 	th := NewThumbnailer(nil, nil, quietLog())
 	dir := t.TempDir()
 	path := filepath.Join(dir, "picture.jpg")
@@ -125,6 +125,81 @@ func TestStillReadGivesUpWithItsBudget(t *testing.T) {
 	key := fmt.Sprintf("%s|%d|%d|%d", it.ID, it.ModTime, it.Size, 200)
 	if th.recentlyFailed(key) {
 		t.Error("the still's deadline was negative-cached")
+	}
+}
+
+// trickle hands over a little at a time and never ends, which is what a mount
+// that has gone slow looks like from inside a read. io.ReadAll consults no
+// context, so a budget alone cannot end this; only a reader that checks can.
+type trickle struct{ each time.Duration }
+
+func (s trickle) Read(p []byte) (int, error) {
+	time.Sleep(s.each)
+	return min(len(p), 4096), nil
+}
+
+// And the read consults that budget. A budget the read never looks at expires
+// against a decode that is still going, which is the case this exists for —
+// so the pin has to be a read that is genuinely slow rather than a context
+// already expired on the way in: with the latter, the semaphore in
+// encodeResized is free and its own Done channel is closed, and Go picks
+// between the two at random.
+func TestStillReadConsultsTheBudget(t *testing.T) {
+	th := NewThumbnailer(nil, nil, quietLog())
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := th.encodeResized(ctx, trickle{each: 2 * time.Millisecond}, 200)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("err = %v, want the read to give up with its budget", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the read went on long past its budget: nothing consulted it")
+	}
+}
+
+// A soundtrack's artwork is the one generation that answered for every
+// failure alike. It tries the embedded picture and then each cover candidate
+// beside the track, keeps none of their errors, and said "no thumbnail" — so
+// once the still paths got a budget, an expiry became a verdict on the
+// release, negative-cached and written down under a key that never rotates
+// again for a stable file.
+func TestAudioArtworkDeadlineIsNotAVerdict(t *testing.T) {
+	th := NewThumbnailer(nil, nil, quietLog())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "01 - opening.mp3")
+	if err := os.WriteFile(path, []byte("not really a track"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := library.Item{
+		ID: "abcdef0123456789", Name: "01 - opening.mp3", Path: path,
+		Kind: library.KindAudio, ModTime: info.ModTime().UnixMilli(), Size: info.Size(),
+	}
+
+	was := stillThumbTimeout
+	stillThumbTimeout = time.Nanosecond
+	defer func() { stillThumbTimeout = was }()
+
+	_, err = th.Get(context.Background(), it, 200)
+	if errors.Is(err, ErrNoThumb) {
+		t.Fatalf("err = %v, want the deadline rather than a verdict on the release", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want the artwork's own deadline", err)
+	}
+	key := fmt.Sprintf("%s|%d|%d|%d", it.ID, it.ModTime, it.Size, 200)
+	if th.recentlyFailed(key) {
+		t.Error("the artwork's deadline was negative-cached")
 	}
 }
 

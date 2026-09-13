@@ -449,6 +449,18 @@ func (t *Thumbnailer) fromAudio(ctx context.Context, it library.Item, width int)
 			return out, nil
 		}
 	}
+	// Every attempt above answers with a picture or with nothing, since a
+	// cover that will not decode is not a reason to stop looking at the rest
+	// of the directory — but "nothing decoded" and "we ran out of time" are
+	// not the same thing, and this is the one generator that used to fold
+	// them together. It is the whole contract of the negative cache: a
+	// generator must report a cancellation or an expiry as one, or a tile is
+	// written off for a deadline that says nothing about the file. It has
+	// been a budget rather than only the caller's context since the still
+	// paths got one, which is what made an accident here permanent.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return nil, ErrNoThumb
 }
 
@@ -1346,7 +1358,7 @@ func (t *Thumbnailer) makeSprite(ctx context.Context, it library.Item) ([]byte, 
 	if ctx.Err() != nil {
 		return nil, ctx.Err() // closing the player mid-run is not a verdict
 	}
-	if cctx.Err() != nil {
+	if cctx.Err() != nil && got < spriteFrames {
 		// The sheet's own budget, not the viewer's. Only the caller's context
 		// was consulted here, so an expiry part way through the ten seeks came
 		// out as whatever had been gathered: with a frame or two, a sheet
@@ -1356,6 +1368,11 @@ func (t *Thumbnailer) makeSprite(ctx context.Context, it library.Item) ([]byte, 
 		// process. Neither is earned. A wrapped DeadlineExceeded is what
 		// runFrame already answers one screen up, and it keeps this out of
 		// both the store and the negative cache.
+		//
+		// Only where the sheet is short of a frame, though: an expiry landing
+		// on or just after the tenth seek has cost nothing — every cell is
+		// filled, and throwing that away would spend all ten seeks again on
+		// the next hover for a deadline that arrived after the work was done.
 		return nil, fmt.Errorf("sprite gave up waiting for frames: %w", context.DeadlineExceeded)
 	}
 	if got == 0 {

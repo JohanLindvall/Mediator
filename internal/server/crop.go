@@ -89,9 +89,21 @@ func (s *Server) handleCrop(w http.ResponseWriter, r *http.Request) {
 	// known before they can be placed. The player asks for the borders as it
 	// opens a film — before, in practice, the item request that reads them —
 	// so a film nothing had measured yet was answered without a single seek.
-	// This is the probe every other opening handler already runs, and it is
-	// at most one per film per process.
-	it = s.probed(ctx, it)
+	// This is the probe every other opening handler already runs.
+	//
+	// Only where the length is actually missing, though, which is what the
+	// other openings cannot say. EnsureCodecs deduplicates nothing in flight:
+	// it takes a slot from probeSem, which holds two, so two callers asking
+	// about one film at one moment both pass its "already probed" re-check
+	// and both run ffprobe. The player asks for the borders and for the item
+	// in the same breath, so probing here unconditionally meant a second
+	// process per film opened, for an answer the item already carried. Where
+	// the length really is unknown the two may still overlap, and that is one
+	// wasted process against a detection that could not otherwise happen at
+	// all.
+	if it.Duration <= 0 {
+		it = s.probed(ctx, it)
+	}
 	writeJSON(w, s.cropAnswer(ctx, it, func(ctx context.Context) (CropResponse, bool) {
 		return s.detectCrop(ctx, it)
 	}))
