@@ -88,6 +88,7 @@ func (w *Watcher) AddDir(dir string) {
 // what the scan had just taken out.
 func (w *Watcher) Reset() {
 	w.stopSettles()
+	w.lib.stopMemberReads()
 	for _, dir := range w.fsw.WatchList() {
 		if err := w.fsw.Remove(dir); err != nil {
 			w.lib.log.Debug("unwatch failed", "dir", dir, "err", err)
@@ -114,6 +115,11 @@ const eventQueue = 4096
 func (w *Watcher) Run(ctx context.Context) {
 	defer w.fsw.Close()
 	defer w.stopSettles()
+	// And the reads pending on the containers those events were about: a
+	// timer armed two seconds ago is the same kind of leftover as a settle
+	// walk armed two minutes ago. This runs after the worker has stopped
+	// (the defer below), so nothing can arm another behind it.
+	defer w.lib.stopMemberReads()
 	events := make(chan fsnotify.Event, eventQueue)
 	done := make(chan struct{})
 	go func() {
@@ -227,20 +233,29 @@ func (w *Watcher) armSettle(after time.Duration, dir string) {
 	// The callback waits on this lock until the timer has been recorded,
 	// so it can never find its own slot missing.
 	w.timers[id] = time.AfterFunc(after, func() {
-		w.forget(id)
+		// The slot is held until the walk is done, not merely until the
+		// timer fires: maxSettles bounds the re-walks outstanding, and a
+		// tree moved in wholesale is one Create per directory, so counting
+		// only the armed timers would let a mass arrival put as many
+		// recursive walks on the disk at once as it had directories.
+		if !w.forget(id) {
+			return // stopped: the directories changed, or the watcher did
+		}
+		defer w.releaseSettle()
 		w.rewalk(dir)
 	})
 }
 
-// forget releases the slot a fired or stopped re-walk held.
-func (w *Watcher) forget(id int64) {
+// forget takes a re-walk's timer off the list and says whether it was still
+// there — which is to say whether this caller now owns its slot. Two things
+// can reach one timer, its own callback and stopSettles, and only one of
+// them may hand the slot back.
+func (w *Watcher) forget(id int64) bool {
 	w.mu.Lock()
+	defer w.mu.Unlock()
 	_, held := w.timers[id]
 	delete(w.timers, id)
-	w.mu.Unlock()
-	if held {
-		w.releaseSettle()
-	}
+	return held
 }
 
 // stopSettles drops every re-walk still outstanding: the directories have
@@ -255,7 +270,9 @@ func (w *Watcher) stopSettles() {
 	w.mu.Unlock()
 	for id, t := range armed {
 		t.Stop()
-		w.forget(id)
+		if w.forget(id) {
+			w.releaseSettle()
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -268,5 +269,122 @@ func TestResetStopsTheSettleWalks(t *testing.T) {
 	w.mu.Unlock()
 	if settles != 0 || timers != 0 {
 		t.Fatalf("after a change of directories: %d timers holding %d slots", timers, settles)
+	}
+}
+
+// vobDisc writes one unpacked DVD folder and answers the container both the
+// walk and the watcher name for it — the VOBs' own directory.
+func vobDisc(t *testing.T, root, release string, parts map[string]int) string {
+	t.Helper()
+	holder := filepath.Join(root, release, "VIDEO_TS")
+	for name, size := range parts {
+		writeFile(t, filepath.Join(holder, name), strings.Repeat("x", size))
+	}
+	return holder
+}
+
+// waitAtTheDoor waits until a second reading of one container is inside
+// enterContainer and blocked on it. The refcount is taken before the lock is,
+// so a count of two is the proof that the other goroutine is at the door and
+// has not gone through it — and that whatever it does after the door has not
+// happened yet.
+func waitAtTheDoor(t *testing.T, container string) {
+	t.Helper()
+	waitFor(t, "the second reading to reach the container's door", func() bool {
+		containers.mu.Lock()
+		defer containers.mu.Unlock()
+		h := containers.held[container]
+		return h != nil && h.refs == 2
+	})
+}
+
+// The parse is inside the lock, not merely the reconcile that follows it.
+//
+// That is the whole of the finding: serializing the write alone still lets
+// the older parse run last and reconcile its own older membership — its byte
+// ranges, its sizes — over the newer one's. So the disc is changed while the
+// second reading is held at the door, and what it indexes when it is let in
+// must be what is on the disk then rather than what was there when it
+// arrived. Moving the lock down to wrap the reconcile alone fails this: the
+// parse would have happened before the wait, and the title would come out
+// the size it was.
+func TestAContainersParseIsInsideItsLock(t *testing.T) {
+	root := t.TempDir()
+	holder := vobDisc(t, root, "Larkspur.Nights.2004.PAL.DVDR-GRP", map[string]int{"VTS_01_1.VOB": 900})
+	l := quietLib(root)
+	defer l.stopMemberReads()
+	l.Scan(nil)
+	if items := l.List(Query{Limit: 10}).Items; len(items) != 1 || items[0].Size != 900 {
+		t.Fatalf("the disc was not indexed to begin with: %+v", items)
+	}
+
+	// One reading of the container, holding it as a parse of its own would.
+	release := enterContainer(holder)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		l.reindexDisc(holder, true) // the watcher's route, on an event on a VOB
+	}()
+	waitAtTheDoor(t, holder)
+
+	// A second part lands while it waits, which is what a release arriving
+	// does all the way through.
+	writeFile(t, filepath.Join(holder, "VTS_01_2.VOB"), strings.Repeat("x", 300))
+	release()
+	<-done
+
+	items := l.List(Query{Limit: 10}).Items
+	if len(items) != 1 || items[0].Size != 1200 {
+		t.Fatalf("got %d titles, the first of %d bytes; want one of 1200 — the parse ran before the lock", len(items), items[0].Size)
+	}
+}
+
+// And the walk names the same container the watcher does. The lock holds
+// nothing together if the two spell the key differently — a DVD folder is
+// named by the directory its VOBs are in on both sides, and a divergence
+// there would be silent, each side taking a lock nobody else wants.
+func TestTheWalkAndTheWatcherNameOneContainer(t *testing.T) {
+	root := t.TempDir()
+	holder := vobDisc(t, root, "Larkspur.Nights.2004.PAL.DVDR-GRP", map[string]int{"VTS_01_1.VOB": 900})
+	l := quietLib(root)
+	defer l.stopMemberReads()
+
+	// Held under the name the watcher's route derives (reindexDisc is given
+	// filepath.Dir of the VOB): the walk must stop at this same door.
+	release := enterContainer(holder)
+	walked := make(chan struct{})
+	go func() {
+		defer close(walked)
+		l.Scan(nil)
+	}()
+	waitAtTheDoor(t, holder)
+	release()
+	<-walked
+
+	if items := l.List(Query{Limit: 10}).Items; len(items) != 1 {
+		t.Fatalf("got %d items, want the one title", len(items))
+	}
+}
+
+// The reads pending on a library's containers are stopped when its
+// directories change, or when the watcher does. A timer armed two seconds
+// ago is the same kind of leftover as a settle walk armed two minutes ago:
+// left to fire it reads files that are no longer the library's.
+func TestStoppingDropsThePendingContainerReads(t *testing.T) {
+	l, other := quietLib(t.TempDir()), quietLib(t.TempDir())
+	defer other.stopMemberReads()
+	l.readMembersSoon("/m/set.rar", nil)
+	other.readMembersSoon("/m/other.rar", nil)
+	l.stopMemberReads()
+
+	containerReads.mu.Lock()
+	_, ours := containerReads.m[containerKey{l, "/m/set.rar"}]
+	_, theirs := containerReads.m[containerKey{other, "/m/other.rar"}]
+	containerReads.mu.Unlock()
+	if ours {
+		t.Error("a pending read outlived the library's directories")
+	}
+	if !theirs {
+		t.Error("another library's pending read was taken away with it")
 	}
 }

@@ -295,7 +295,8 @@ func (l *Library) Scan(addWatch func(dir string)) {
 	l.mu.RUnlock()
 	kept := make(map[string]fs.FileInfo, len(gone))
 	keptInside := make(map[string]struct{})
-	missing := make(map[string]struct{}) // the disk says there is nothing there
+	containersLeft := make(map[string]bool) // one answer per container, not per member
+	missing := make(map[string]struct{})    // the disk says there is nothing there
 	for _, p := range gone {
 		// Content that lives inside another file is asked about by its
 		// container. The path is the container's with the member's name
@@ -308,7 +309,19 @@ func (l *Library) Scan(addWatch func(dir string)) {
 		// parse that failed is no more a verdict than a directory that
 		// could not be listed.
 		if container, _, inside := strings.Cut(p, "\x00"); inside {
-			if info, err := os.Stat(container); err == nil && l.stillIndexable(container, info) {
+			// Asked once per container, not once per member: a set of
+			// eighty-nine volumes holding three hundred members is three
+			// hundred identical stats and three hundred walks of the root
+			// list, and this is the path that runs after a walk the disk
+			// went wrong under — which is exactly when it can least
+			// afford them.
+			ok, asked := containersLeft[container]
+			if !asked {
+				info, err := os.Stat(container)
+				ok = err == nil && l.stillIndexable(container, info)
+				containersLeft[container] = ok
+			}
+			if ok {
 				keptInside[p] = struct{}{}
 			}
 			continue
@@ -861,20 +874,56 @@ func (l *Library) readMembers(key containerKey) {
 	r.paths, r.running = nil, true
 	containerReads.mu.Unlock()
 
+	// The flag is put down whatever the read does, and that is not
+	// bookkeeping: a reader that left it standing would strand this
+	// container for the life of the process — every later pass would find
+	// it running, push the timer out another two seconds and read nothing,
+	// for ever, while the entry and its timer stayed in the map. Reading a
+	// file's tags is the one thing here that can die under the reader
+	// (tag.ReadFrom panics on some corrupt files), which is why enrichOne
+	// puts its own marks down through a defer as well.
+	defer func() {
+		containerReads.mu.Lock()
+		defer containerReads.mu.Unlock()
+		r.running = false
+		if r.paths != nil {
+			r.timer.Reset(containerQuiet) // more arrived while we were reading
+			return
+		}
+		r.timer.Stop()
+		if containerReads.m[key] == r {
+			delete(containerReads.m, key)
+		}
+	}()
 	for _, p := range paths {
 		l.enrichOne(context.Background(), PathID(p))
 	}
 	l.notify() // publish the metadata, not just the file list
+}
 
+// stopMemberReads drops the reads pending for this library's containers: the
+// directories have changed, or the watcher is stopping.
+//
+// A timer armed two seconds ago is the same kind of thing as a settle walk
+// armed two minutes ago — something the watcher started that outlives the
+// reason it was started for — and it is stopped for the same reason: after a
+// change of roots it would read files that are no longer the library's, and
+// after shutdown it would read them against a database that is closing. A
+// read already running is left to finish, as a settle walk already walking
+// is: its own tail then finds nothing pending and takes the entry out.
+func (l *Library) stopMemberReads() {
 	containerReads.mu.Lock()
-	r.running = false
-	if r.paths != nil {
-		r.timer.Reset(containerQuiet) // more arrived while we were reading
-	} else {
+	defer containerReads.mu.Unlock()
+	for key, r := range containerReads.m {
+		if key.lib != l {
+			continue
+		}
 		r.timer.Stop()
-		delete(containerReads.m, key)
+		r.paths = nil
+		if !r.running {
+			delete(containerReads.m, key)
+		}
 	}
-	containerReads.mu.Unlock()
 }
 
 // indexRarSet parses the volume set starting at first and indexes its stored
@@ -1044,6 +1093,13 @@ type containerHold struct {
 // enterContainer takes the container's lock and returns the release. The
 // entry is dropped when the last holder leaves, so a library of ten thousand
 // archives costs nothing between walks.
+//
+// Keyed by the path alone, where a pending read is keyed by the library as
+// well: this one is about the file on the disk, so two libraries over one
+// container are exactly the pair that must be held apart, and holding them
+// apart where nobody needed it costs a lock nobody is waiting on. Dropping
+// another library's pending read, by contrast, would be taking work away
+// from somebody it does not belong to, which is what the key there stops.
 func enterContainer(path string) func() {
 	containers.mu.Lock()
 	h := containers.held[path]
