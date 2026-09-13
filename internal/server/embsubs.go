@@ -20,6 +20,15 @@ package server
 // second pass over the same file. And it is **counted as streaming**, so
 // the thumbnailer and enrichment stand down while it reads — it is the
 // viewer's own playback this read is racing.
+//
+// Two more follow from the same cost. The read **outlives the request that
+// started it**, as a rewrap and a segmented conversion do: the <track> is
+// re-pointed on every seek, so the fetch in flight is abandoned, and tied to
+// that request the whole demux went with it with nothing admitted — each seek
+// threw away a pass over gigabytes and began another. And it **takes a slot**
+// (embSubReaders), because this is the ffmpeg here that reads the whole
+// container and it had no bound of any kind: two asks for different streams,
+// or for two films, were two unbounded passes at once on the one disk.
 
 import (
 	"bytes"
@@ -45,51 +54,93 @@ const embSubTimeout = 4 * time.Minute
 // pathological file cannot pin the lot.
 const embSubCacheMax = 16 << 20
 
+// embSubReaders is how many extractions may run at once. Every other ffmpeg
+// in this package takes a slot of some kind, and this is the one that reads
+// the *whole* container — so two concurrent asks for different streams of one
+// film, or for two films, were two unbounded passes over gigabytes each,
+// beside the playback they are for. Two rather than one: a second viewer
+// should not wait out a 4K demux, and the pair is what the thumbnailer allows
+// itself for the same disk. A slot of its own rather than the thumbnailer's,
+// which one extraction could hold for the whole of embSubTimeout — four
+// minutes of no tiles and no crop detection.
+const embSubReaders = 2
+
+// embSub is one extraction, and what came of it. The outcome is published on
+// the entry rather than only into the cache: a waiter has to be able to tell
+// "it failed" from "it has not happened yet", or every failure sends whoever
+// was parked off to read the container again.
+type embSub struct {
+	done chan struct{}
+	data []byte
+	err  error
+}
+
 type embSubs struct {
 	mu       sync.Mutex
 	cache    map[string][]byte
 	total    int
-	inflight map[string]chan struct{}
+	inflight map[string]*embSub
+	sem      chan struct{}
 }
 
 // extract returns the stream as WebVTT, reading the file only the first time.
+//
+// The read outlives the request that started it, exactly as a rewrap and a
+// segmented conversion do, and for the same reason: the player re-points its
+// <track> at a new ?shift= on every conversion reopen — every seek — so the
+// browser abandons the fetch in flight and the extraction was cancelled with
+// it, having admitted nothing. Nothing carried the work on for whoever asked
+// next, so each seek threw away a whole demux and began another, and a large
+// film being seeked through never finished one at all. Now the ask is what
+// *starts* the read; the asker waits on it, and if the asker leaves the read
+// goes on for the next one.
 func (s *Server) extractEmbSub(ctx context.Context, it library.Item, stream int) ([]byte, error) {
 	key := fmt.Sprintf("%s|%d|%d|%d", it.ID, it.ModTime, it.Size, stream)
-	for {
-		s.embsubs.mu.Lock()
-		if s.embsubs.cache == nil {
-			s.embsubs.cache = map[string][]byte{}
-			s.embsubs.inflight = map[string]chan struct{}{}
-		}
-		if v, ok := s.embsubs.cache[key]; ok {
-			s.embsubs.mu.Unlock()
-			return v, nil
-		}
-		if ch, ok := s.embsubs.inflight[key]; ok {
-			// Somebody is already reading the film for this; wait for them
-			// rather than reading it again beside them.
-			s.embsubs.mu.Unlock()
-			select {
-			case <-ch:
-				continue // the answer (or its failure) is settled; re-check
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
-		}
-		ch := make(chan struct{})
-		s.embsubs.inflight[key] = ch
-		s.embsubs.mu.Unlock()
-
-		data, err := s.runEmbSub(ctx, it, stream)
-		s.embsubs.mu.Lock()
-		delete(s.embsubs.inflight, key)
-		close(ch)
-		if err == nil {
-			s.embsubs.admit(key, data)
-		}
-		s.embsubs.mu.Unlock()
-		return data, err
+	s.embsubs.mu.Lock()
+	if s.embsubs.cache == nil {
+		s.embsubs.cache = map[string][]byte{}
+		s.embsubs.inflight = map[string]*embSub{}
+		s.embsubs.sem = make(chan struct{}, embSubReaders)
 	}
+	if v, ok := s.embsubs.cache[key]; ok {
+		s.embsubs.mu.Unlock()
+		return v, nil
+	}
+	e, ok := s.embsubs.inflight[key]
+	if !ok {
+		// Nobody is reading it: start one that belongs to no request.
+		e = &embSub{done: make(chan struct{})}
+		s.embsubs.inflight[key] = e
+		go s.fillEmbSub(context.WithoutCancel(ctx), it, stream, key, e)
+	}
+	s.embsubs.mu.Unlock()
+
+	select {
+	case <-e.done:
+	case <-ctx.Done():
+		// The reader carries on without us; whoever asks next gets it.
+		return nil, ctx.Err()
+	}
+	// A failure is the leader's answer and is given to everyone waiting on
+	// it: re-reading the container behind a pass that has just proved it
+	// cannot be read is the one thing that helps nobody. It is not
+	// remembered, though — the entry is gone, so a later ask deserves and
+	// gets a fresh attempt, which is the rule the Remuxer and the sessions
+	// keep too.
+	return e.data, e.err
+}
+
+// fillEmbSub does the reading and publishes what came of it, once.
+func (s *Server) fillEmbSub(ctx context.Context, it library.Item, stream int, key string, e *embSub) {
+	data, err := s.runEmbSub(ctx, it, stream)
+	s.embsubs.mu.Lock()
+	e.data, e.err = data, err
+	delete(s.embsubs.inflight, key)
+	if err == nil {
+		s.embsubs.admit(key, data)
+	}
+	s.embsubs.mu.Unlock()
+	close(e.done)
 }
 
 // admit stores an extraction under the bound, making room first: a cache
@@ -121,6 +172,15 @@ func (s *Server) runEmbSub(ctx context.Context, it library.Item, stream int) ([]
 	}
 	ctx, cancel := context.WithTimeout(ctx, embSubTimeout)
 	defer cancel()
+	// A slot first, and outside the cache's lock: the whole container is
+	// read for a hundred kilobytes of text, and several of those at once on
+	// one disk is the playback this read is meant to be racing gently.
+	select {
+	case s.embsubs.sem <- struct{}{}:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	defer func() { <-s.embsubs.sem }()
 	// The read competes with the playback of the very film it is for.
 	defer s.lib.StartStream()()
 

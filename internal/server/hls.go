@@ -81,6 +81,11 @@ const (
 	hlsFirstWait = 60 * time.Second
 )
 
+// errHLSClosed is what a conversion asked for during shutdown is told. There
+// is nothing left to run it: the context that would cancel it hangs off
+// Background, and the maps holding the only handle on it have been emptied.
+var errHLSClosed = errors.New("the server is shutting down")
+
 // HLS runs the segmented conversions and hands out their files.
 type HLS struct {
 	ffmpeg  string
@@ -92,6 +97,13 @@ type HLS struct {
 	sessions map[string]*hlsSession // by what was asked for, so it is reused
 	byID     map[string]*hlsSession // by the token in the path
 	seq      int64
+	// closed is set by Close and refused by session: a conversion started
+	// after the shutdown snapshot is one nothing will ever cancel, its
+	// context hanging off Background and the only cancel path being the map
+	// Close has already emptied. The ffmpeg then outlives the process and
+	// writes into a scratch directory nothing sweeps until a later run's
+	// Adopt. The Remuxer has always refused the same way.
+	closed bool
 }
 
 type hlsSession struct {
@@ -119,6 +131,11 @@ type hlsSession struct {
 	done    bool
 	err     error
 	used    int64 // for eviction: the sequence number of the last request
+	// bytes is what the directory held when it was last measured. It is
+	// kept here, under h.mu, so the figure the budget reads can be summed
+	// from the sessions that are live at the moment it is written rather
+	// than from a snapshot taken before the lock was dropped.
+	bytes int64
 }
 
 // hlsKeyFile names what a session's segments are a conversion of, so a later
@@ -156,11 +173,12 @@ func (h *HLS) Adopt() {
 		}
 		done := make(chan struct{})
 		close(done)
+		size := dirBytes(dir)
 		h.mu.Lock()
 		h.seq++
 		s := &hlsSession{
 			key: key, id: hex.EncodeToString(raw[:]), dir: dir,
-			cancel: func() {}, ready: done, used: h.seq,
+			cancel: func() {}, ready: done, used: h.seq, bytes: size,
 			// Wanted when it was last written, so the budget may take it
 			// straight away rather than protecting it for a window it did
 			// not earn.
@@ -169,7 +187,7 @@ func (h *HLS) Adopt() {
 		h.sessions[key] = s
 		h.byID[s.id] = s
 		h.mu.Unlock()
-		total += dirBytes(dir)
+		total += size
 		adopted++
 	}
 	if adopted > 0 {
@@ -226,6 +244,7 @@ func (h *HLS) Close() {
 		drop bool
 	}
 	h.mu.Lock()
+	h.closed = true
 	all := make([]closing, 0, len(h.sessions))
 	for _, s := range h.sessions {
 		all = append(all, closing{s, s.converting})
@@ -239,7 +258,13 @@ func (h *HLS) Close() {
 		if c.drop {
 			// Interrupted: nothing can carry on from where it stopped, and
 			// a half-written playlist is not worth keeping for a later run.
-			_ = os.RemoveAll(c.s.dir)
+			// A removal that fails is said out loud rather than swallowed:
+			// cancel only signals the ffmpeg, so a directory can gain a
+			// segment between the readdir and the rmdir, and what is left
+			// then is a directory no session names any more.
+			if err := os.RemoveAll(c.s.dir); err != nil {
+				h.log.Warn("could not remove a stopped conversion", "dir", c.s.dir, "err", err)
+			}
 		}
 		// Finished: left where it is, so the next run finds it rather than
 		// converting the same film again.
@@ -257,9 +282,15 @@ func (s *hlsSession) stopConverting() {
 
 // discard ends the conversion and takes its files with it. Only the budget
 // does this: files are kept until the space is needed.
-func (s *hlsSession) discard() {
+//
+// What could not be removed is handed back rather than dropped. cancel only
+// *signals* the ffmpeg, so a directory can gain a segment between the readdir
+// and the rmdir; what is left then is a directory no session names any more,
+// which no later measurement can see and nothing but a later run's Adopt will
+// clear. That is worth a line in the log.
+func (s *hlsSession) discard() error {
 	s.cancel()
-	_ = os.RemoveAll(s.dir)
+	return os.RemoveAll(s.dir)
 }
 
 // handleHLSStart begins (or rejoins) a conversion and serves its playlist,
@@ -519,6 +550,10 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 	key := fmt.Sprintf("%s|%d|%d|%.3f|%s|%s", it.ID, it.ModTime, it.Size, t, mode, audio)
 
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return nil, errHLSClosed
+	}
 	if s, ok := h.sessions[key]; ok {
 		h.seq++
 		s.used = h.seq
@@ -551,6 +586,16 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 	cctx, cancel := context.WithCancel(context.Background())
 
 	h.mu.Lock()
+	if h.closed {
+		// Shutdown happened while the directory was being prepared. Starting
+		// here would leave an ffmpeg nothing can reach: the snapshot Close
+		// cancelled has been taken, and this session would be in neither map
+		// it holds.
+		h.mu.Unlock()
+		cancel()
+		_ = os.RemoveAll(dir)
+		return nil, errHLSClosed
+	}
 	if s, ok := h.sessions[key]; ok {
 		// Somebody else made the same session while the directory was being
 		// prepared; theirs is the one everybody waits on.
@@ -641,7 +686,7 @@ func (h *HLS) reap(ctx context.Context, s *hlsSession) {
 		case <-t.C:
 			h.mu.Lock()
 			cur := s.used
-			_, live := h.sessions[s.key]
+			live := h.sessions[s.key] == s
 			converting := s.converting
 			h.mu.Unlock()
 			if !live || !converting {
@@ -673,63 +718,108 @@ func (h *HLS) reap(ctx context.Context, s *hlsSession) {
 // single one larger than the whole budget is left alone rather than killed
 // under whoever is watching it. That is a budget the operator set too small
 // for one film, and stopping playback is not the way to say so.
+//
+// What is published is summed from the sessions that are live when the lock
+// is retaken, never from the snapshot's own running total. Two accountants
+// overlap easily — the measuring is a ReadDir per session on the disk the
+// conversions are writing to — and the one whose snapshot was older used to
+// overwrite the other's corrected figure with a total that still counted
+// sessions it had since evicted. A stale measurement is only a moment out; a
+// stale *total* said gigabytes were on a disk that no longer held them, and
+// the Remuxer prunes its own rewraps on that same shared figure.
 func (h *HLS) account() {
 	// Measuring is a ReadDir per session, and doing it under the lock made
 	// every segment request wait on the disk the conversions are writing to.
 	// The sizes are a moment stale by the time the lock is retaken, which is
 	// fine: the budget is approximate by nature.
-	type aged struct {
-		s     *hlsSession
-		used  int64
-		bytes int64
-	}
 	h.mu.Lock()
-	order := make([]aged, 0, len(h.sessions))
+	order := make([]*hlsSession, 0, len(h.sessions))
 	for _, s := range h.sessions {
-		order = append(order, aged{s: s, used: s.used})
+		order = append(order, s)
 	}
 	h.mu.Unlock()
 
-	var total int64
-	for i := range order {
-		order[i].bytes = dirBytes(order[i].s.dir)
-		total += order[i].bytes
-	}
-	h.scratch.Report("hls", total)
-	if h.scratch.Excess() <= 0 || len(order) < 2 {
-		return
+	sizes := make([]int64, len(order))
+	for i, s := range order {
+		sizes[i] = dirBytes(s.dir)
 	}
 
-	// Files are kept until the space is needed; this is where it is needed.
-	slices.SortFunc(order, func(a, b aged) int { return cmp.Compare(a.used, b.used) })
 	now := time.Now()
 	var dropped []*hlsSession
 	h.mu.Lock()
-	for _, a := range order {
-		if h.scratch.Excess() <= 0 || len(h.sessions) < 2 {
-			break
+	for i, s := range order {
+		if h.sessions[s.key] == s {
+			s.bytes = sizes[i]
 		}
-		// A session that arrived after the snapshot has no business being
-		// evicted on its account.
-		if _, live := h.sessions[a.s.key]; !live {
-			continue
+	}
+	h.reportLocked()
+	if h.scratch.Excess() > 0 && len(h.sessions) >= 2 {
+		// Files are kept until the space is needed; this is where it is needed.
+		slices.SortFunc(order, func(a, b *hlsSession) int { return cmp.Compare(a.used, b.used) })
+		for _, s := range order {
+			if h.scratch.Excess() <= 0 || len(h.sessions) < 2 {
+				break
+			}
+			// The session under this key has to be the one that was
+			// measured, and not merely *a* session under it. A key vacated
+			// and taken again while the directories were being read left the
+			// guard satisfied by the newcomer, which was then deleted from
+			// the map on the strength of the old one's age and bytes — a
+			// live conversion, still reachable by its token and still
+			// writing, that no later measurement could see, no reaper
+			// managed and Close never cancelled. forget has always compared
+			// identity; this is the same test in the places that missed it.
+			if h.sessions[s.key] != s {
+				continue
+			}
+			// A session asked for recently is being watched, whatever the budget
+			// says: a player that has buffered ahead goes quiet, and deleting
+			// its segments would end the film it is in the middle of.
+			if now.Sub(s.last) < hlsKeepFor {
+				continue
+			}
+			h.dropLocked(s)
+			dropped = append(dropped, s)
+			h.reportLocked()
 		}
-		// A session asked for recently is being watched, whatever the budget
-		// says: a player that has buffered ahead goes quiet, and deleting
-		// its segments would end the film it is in the middle of.
-		if now.Sub(a.s.last) < hlsKeepFor {
-			continue
-		}
-		total -= a.bytes
-		delete(h.sessions, a.s.key)
-		delete(h.byID, a.s.id)
-		dropped = append(dropped, a.s)
-		h.scratch.Report("hls", total)
 	}
 	h.mu.Unlock()
 	for _, s := range dropped {
 		h.log.Info("discarded a conversion to stay within the scratch budget", "dir", s.dir)
-		s.discard()
+		if err := s.discard(); err != nil {
+			h.log.Warn("could not remove a discarded conversion", "dir", s.dir, "err", err)
+		}
+	}
+}
+
+// reportLocked publishes what the live sessions hold between them.
+//
+// Summed here rather than carried along: every route that changes what HLS
+// holds ends in this one place, so the shared figure cannot be left
+// describing a session that has been discarded, or missing one that finished
+// between two ticks of a reaper. It used to be written only from the reap
+// ticker, which returns the moment its session stops converting — so a
+// conversion that finished inside one tick was never counted at all, and
+// with nothing converting anywhere the figure stood still at whatever was
+// last measured while the disk went on filling. Called with the lock held.
+func (h *HLS) reportLocked() {
+	var total int64
+	for _, s := range h.sessions {
+		total += s.bytes
+	}
+	h.scratch.Report("hls", total)
+}
+
+// dropLocked takes a session out of both maps, and only where each still
+// names it: the token map and the key map are reached by different routes,
+// and removing an entry either of them no longer holds is how the two come to
+// disagree. Called with the lock held.
+func (h *HLS) dropLocked(s *hlsSession) {
+	if h.sessions[s.key] == s {
+		delete(h.sessions, s.key)
+	}
+	if h.byID[s.id] == s {
+		delete(h.byID, s.id)
 	}
 }
 
@@ -756,15 +846,18 @@ func dirBytes(dir string) int64 {
 // entry is what must not outlive it.
 func (h *HLS) forget(s *hlsSession) {
 	h.mu.Lock()
-	if cur, ok := h.sessions[s.key]; ok && cur == s {
-		delete(h.sessions, s.key)
-		delete(h.byID, s.id)
-	}
+	h.dropLocked(s)
 	s.converting = false
+	// What it was holding leaves the shared figure with it, or the budget
+	// goes on counting bytes that are about to be deleted and the Remuxer
+	// frees rewraps to make room for them.
+	h.reportLocked()
 	h.mu.Unlock()
 	// Nothing playable was produced (failIfEmpty guarantees it), so the
 	// directory holds only the key file and whatever ffmpeg half-wrote.
-	s.discard()
+	if err := s.discard(); err != nil {
+		h.log.Warn("could not remove a failed conversion", "dir", s.dir, "err", err)
+	}
 }
 
 // run is the conversion itself: the plan both converters share (convert.go)
@@ -790,12 +883,35 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 	h.mu.Lock()
 	s.converting = false
 	h.mu.Unlock()
+	// A run that was *stopped* rather than finished records nothing of its
+	// own — attempt's whole error block stands down while the context is
+	// done — so the gate used to open with no error on a conversion that had
+	// written nothing at all. Every waiter was told the session was ready
+	// and handed a playlist nothing had written; worse, with no failure
+	// recorded the entry stayed in the map and answered every later ask for
+	// that film at that resume point the same way, for the life of the
+	// process. Nothing playable is a failure to the caller whatever stopped
+	// it, and a session that did produce something is left alone by
+	// failIfEmpty as it always was.
+	stopped := ctx.Err()
+	if stopped == nil {
+		stopped = errors.New("the conversion produced nothing")
+	}
+	s.failIfEmpty(stopped)
 	s.finish()
 	if s.failure() != nil {
 		// The waiters have their error; a fresh ask deserves a fresh
 		// attempt rather than this one, cached.
 		h.forget(s)
+		return
 	}
+	// What it wrote is now all it will ever write, so this is the moment the
+	// budget's figure for it becomes true. Left to the reaper alone it never
+	// became true at all for a conversion that finished inside one 30 s
+	// tick — reap returns as soon as it sees the session stop converting —
+	// and with nothing converting anywhere the figure stood still while the
+	// disk went on filling.
+	h.account()
 }
 
 // hlsMaxAttempts bounds what one session may try. Each retry is bought by a
@@ -814,7 +930,15 @@ const (
 // attempt is one ffmpeg over the session: planned, run, and read for what
 // stopped it.
 func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) attemptOutcome {
-	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, aspects.has(it), h.log)
+	// Read once, and read again nowhere: this run either went through the
+	// repair or it did not, and the retry below is about that. Asked of the
+	// verdict a second time, the answer could be another goroutine's — a
+	// thumbnail of the same film, or a second conversion of it, noting the
+	// aspect between the plan and the failure — and the retry that would
+	// have worked was refused on the strength of a repair this run never
+	// made.
+	repaired := aspects.has(it)
+	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, repaired, h.log)
 	if err != nil {
 		s.fail(err)
 		h.forget(s)
@@ -848,7 +972,7 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 		// into the same session, whose waiters are still waiting on a first
 		// segment that has not been written. Only where the copy can be
 		// made — a file it cannot help would be attempted twice identically.
-		if aspectRefused(errBuf.String()) && !aspects.has(it) && repairable(h.ffmpeg, it) {
+		if aspectRefused(errBuf.String()) && !repaired && repairable(h.ffmpeg, it) {
 			aspects.note(it)
 			h.log.Info("converting again with the declared aspect put right", "path", it.Rel)
 			return attemptAgain
@@ -860,7 +984,7 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 		if plan.hardware {
 			hwRefused.note(it)
 			h.log.Info("converting on the processor from now on", "path", it.Rel)
-			if !s.playable() {
+			if !hasSegment(s.dir) {
 				return attemptAgain
 			}
 		}
@@ -920,25 +1044,38 @@ func (h *HLS) watchFirst(ctx context.Context, s *hlsSession) {
 		case <-s.ready:
 			return
 		case <-t.C:
-			body, err := os.ReadFile(filepath.Join(s.dir, "index.m3u8"))
-			if err != nil || !strings.Contains(string(body), ".ts") {
-				continue
-			}
-			// The name is in the playlist; the file has to be there too, or
-			// the player asks for something that is still being written.
-			for _, line := range strings.Split(string(body), "\n") {
-				line = strings.TrimSpace(line)
-				if !strings.HasSuffix(line, ".ts") {
-					continue
-				}
-				if _, err := os.Stat(filepath.Join(s.dir, line)); err == nil {
-					s.finish()
-					return
-				}
-				break
+			if hasSegment(s.dir) {
+				s.finish()
+				return
 			}
 		}
 	}
+}
+
+// hasSegment says the conversion has written something a player can start
+// on: a segment the playlist names that is actually on disk — the name alone
+// is not enough, or the player asks for a file that is still being written.
+//
+// It is a question about the artefact, and that is the point. Whether the
+// gate has been opened is a question about a watcher that ticks every 150 ms,
+// which is not the same thing: a run that died just after its first segment
+// was listed was judged empty by a gate that had not caught up yet, its error
+// recorded and its directory removed, where the same run 150 ms later served
+// the prefix it had written.
+func hasSegment(dir string) bool {
+	body, err := os.ReadFile(filepath.Join(dir, "index.m3u8"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasSuffix(line, ".ts") {
+			continue
+		}
+		_, err := os.Stat(filepath.Join(dir, line))
+		return err == nil
+	}
+	return false
 }
 
 // fail ends the session with an error, for waiters who have not been
@@ -955,7 +1092,8 @@ func (s *hlsSession) fail(err error) {
 	close(s.ready)
 }
 
-// playable says something has been produced that a player can start on.
+// playable says the gate has been opened — that the waiters have been let
+// through. What is on disk is hasSegment's question, not this one.
 func (s *hlsSession) playable() bool {
 	select {
 	case <-s.ready:
@@ -965,11 +1103,24 @@ func (s *hlsSession) playable() bool {
 	}
 }
 
-// failIfEmpty records an error only when nothing playable was produced —
-// decided under the same lock the watcher opens the gate under, so the two
-// cannot cross: an error recorded a moment after the first segment was
-// found would send a waiter away from a conversion that is playing.
+// failIfEmpty records an error only when nothing playable was produced.
+//
+// What settles that is the disk, not the gate. The gate is opened by a
+// watcher on a 150 ms tick, so a conversion that wrote a segment and then
+// died a few milliseconds later was judged by which of the two got there
+// first: the error was recorded, the waiters were sent away with a 503 and
+// forget removed a directory holding a playable prefix — where the same run,
+// one tick later, was served. The read is done before the lock is taken, and
+// it is safe there because ffmpeg has already exited by the time this is
+// asked: what is on disk cannot grow under the answer.
+//
+// The gate is still consulted, for the case it was always for: a waiter woken
+// by the first segment must not be sent away from a conversion that is
+// playing, so an error arriving after the gate has opened is not recorded.
 func (s *hlsSession) failIfEmpty(err error) {
+	if hasSegment(s.dir) {
+		return
+	}
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	if s.done {
