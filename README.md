@@ -122,6 +122,20 @@ Go binary with the TypeScript frontend embedded.
   What you open is read first — the page of the grid you are looking at,
   the album you just opened, the file you started playing — so metadata
   appears where your attention is instead of in scan order.
+  A reading is only ever written down against the bytes it was read from.
+  Reading a file takes time — a probe's own ceiling is half a minute — and a
+  download finishing inside that window leaves the reading describing the
+  part that had arrived, under an identity that never changes again: a
+  ninety-minute film carrying twelve minutes on its tile, in the length
+  sort, in the resume rule and in the offset its thumbnail is taken at, for
+  as long as the file sits there. Where the file moved under the reading,
+  the reading is discarded and the file read again. And a read that ran out of
+  time is not an answer either, so it is not written down as one — a film
+  whose probe was cut short on a busy or network-mounted disk would otherwise
+  carry no duration and no codecs in every listing from then on. It is left
+  alone for the rest of the run instead, one attempt per file, and looked at
+  afresh the next time the server starts: without that, every listing page
+  holding it asks again, at half a minute of probing apiece.
   **Hovering a tile says what the file is**: the codecs, the picture's size
   and frame rate for a film, the dimensions of a photograph, the format and
   average bitrate of a track. Those are read from the file's own header — a
@@ -240,7 +254,12 @@ Go binary with the TypeScript frontend embedded.
   every choice; picking a subtitle only changes which rendition the
   playlist marks default.
   Converted files are kept — until the space is needed, and across a restart
-  — so a film converted once is not converted again.
+  — so a film converted once is not converted again. A conversion that
+  *failed* is not kept: it is forgotten, so asking for the same film at the
+  same point again is a fresh attempt rather than the same error played back
+  for the life of the process. What a failed attempt did manage to write is
+  kept wherever it is playable, since starting over begins by clearing the
+  directory — worth doing only when nothing came of the last try.
 - **Soundtracks** — a film carrying several (a Nordic release with four
   languages, a disc with a commentary) gets a menu in the player: pick from
   it, or cycle with `a`. The choice
@@ -364,7 +383,17 @@ Go binary with the TypeScript frontend embedded.
   every track the music listing shows. One request — the server flattens the
   view into its tracks — and there is no limit worth the name: the whole
   library goes into the queue and is shuffled there, the queue panel drawing
-  a window of it rather than every row.
+  a window of it rather than every row. The server gathers it a page at a
+  time and every page has to come from one version of the library: an offset
+  names a row in a particular sorted result, and this library is written to
+  constantly by design — a download moves the version dozens of times a
+  second, and under the default order a file that merely grew moves in it.
+  Measured before that was checked, one collection came back with 3047
+  tracks in it of which 3004 were distinct, and rows at the far end were
+  never fetched at all. A collection that spanned a change is taken again
+  from the top, once; a library being written to continuously will move
+  under a third pass exactly as it moved under the second, and a page's
+  worth of drift in a million-row queue is the cheaper wrong.
 - **How the music sounds** — in the background, below everything else the
   server does and below you: it stands down for a few seconds whenever
   anybody asks this server for anything, so a page you are looking at is
@@ -372,7 +401,14 @@ Go binary with the TypeScript frontend embedded.
   windows from the middle of it) and described by fifty-six numbers: timbre, brightness,
   harmony, loudness and dynamics, tempo, pauses. Written down beside the
   thumbnails, read again only when the file changes, about a second of one
-  core per track. Three things are read off it:
+  core per track. A track is left alone until something is known
+  about it — its length, the windows being fractions of it, or simply that
+  the tag pass has already been through it, which is what lets a file whose
+  length nobody could measure be read from fixed marks instead; and a read
+  the clock ran out on is offered
+  again an hour later rather than written off for the run, which would have
+  left that track out of radio, out of the resemblances and out of its own
+  release's sound. Three things are read off it:
   - **Radio, and similar tracks.** The bar's radio button keeps the queue
     going with the tracks that sound most like the one playing, fetching a
     batch whenever fewer than a handful remain. It draws from a wider field
@@ -479,7 +515,16 @@ Go binary with the TypeScript frontend embedded.
   this removed 355 duplicate entries.
 - **Live library** — directories are scanned recursively and watched with
   inotify; new/changed/deleted files stream to the UI over server-sent events.
-  A periodic rescan (default 10 min) acts as a safety net.
+  A periodic rescan (default 10 min) acts as a safety net. What the kernel
+  reports is taken off it immediately and acted on behind it, because the
+  work behind a single event is not small — a recursive walk of a directory
+  moved in whole, or a re-read of every volume of an eighty-nine part set —
+  and for as long as that takes nothing is draining the queue. What the
+  kernel cannot queue it drops, and a dropped create is a file nobody will
+  ever be told about again. Subtitle files are reconciled like the media
+  they belong to, so one dropped beside a film after its directory had been
+  walked is kept and announced rather than swept away at the end of that
+  walk — which with `-rescan 0` meant for the rest of the run.
 - **One entry per record** — a release spread over `CD1`, `CD2` and `CD3`
   is one album, with its tracks running disc by disc rather than interleaved
   by track number, and named without the disc marker its tags carry. And a
@@ -601,6 +646,19 @@ being watched — being over a limit you chose is a smaller wrong than deleting
 a film out from under a viewer. A file too large for the whole budget is left
 to the segmented converter, which only holds what it has produced.
 
+What is being written counts towards the budget as well as what is already
+there — a copy in flight is bytes on the disk whether or not anything has
+measured them yet — since counting only the finished copies let two
+admissions in the same minute each conclude there was room: measured against
+a 10 MiB budget with two evictable copies of 3 MiB on disk, the directory
+reached 12 MiB, where counting what is coming frees one of them and holds at
+9. The segmented converter's share is re-totalled whenever what it holds
+changes — a conversion ending, an eviction, a failure — rather than only when
+its reaper next looks, so a conversion that starts and finishes between two
+ticks is no longer invisible to the budget. And a copy that lands just as the
+server is stopping is left where it is rather than deleted: it cost the whole
+length of the film, and the next run adopts it.
+
 `-exclude` matches the file or directory name when the pattern has no slash
 in it, and the whole path when it does.
 
@@ -698,7 +756,13 @@ Subtitles carried **inside** the file are offered alongside the sidecars —
 one menu, one numbering. That is how a television release ships its
 captions: no `.srt` beside the file, one MKV with the text muxed in. They
 are found by the same probe that lists the soundtracks, extracted once and
-cached, and served through the same conversions a sidecar gets.
+cached, and served through the same conversions a sidecar gets. The
+extraction reads the whole container for a hundred kilobytes of text, which
+settles two things about it. It outlives the request that asked for it: the
+player re-points its subtitle track at a new clock offset on every seek, so
+tied to that request each seek threw a whole pass away and began another, and
+a large film seeked through never finished one. And at most two run at once,
+this being the read here that goes through gigabytes.
 
 Subtitles go with a film, converted to SubRip on the way out, since that is
 the format sets read and WebVTT is not — sidecars and the tracks inside the
@@ -752,7 +816,36 @@ handed all speak IPv4, so a set reachable only over IPv6 is not found.
 
 A set that is off or in standby does not answer the search, so the button is
 absent until the television is on. That is not a fault to look for: the list
-is what answered, and nothing answered.
+is what answered, and nothing answered. A search a client gives up on is
+given up with it — the sockets are wound up there and then instead of running
+out their window against the next client — and what it had heard by that
+point is not written down as the answer, so the next client searches rather
+than being told the house has no televisions in it.
+
+**A search that misses a set has not lost it.** A reply is a datagram and a
+description is a fetch, either of which can go missing while the television
+carries on playing the film, and the picker's list is only ever what the last
+search actually found. So an id a client is already holding is resolved
+against every set this server has been told about: a television one round
+failed to see can still be paused, seeked and handed the next track. One that
+really is off fails the command instead, which is what the viewer is told
+about anyway.
+
+**Two people can reach for the same television**, and nothing here stops
+them: the set answers whoever spoke to it last, and somebody with the remote
+in their hand is assumed throughout. What this server does about it is make
+the newest press the one that drives. A second play request cancels the
+first, which stops talking to the set wherever it had got to and answers
+`409` rather than reporting a fault of a television that refused nothing. The
+claim is taken **before** the preparation rather than at the first command to
+the set, and that ordering is the whole of what it is worth: nearly all the
+waiting is above that first command — the probe, and, where the chosen
+soundtrack means a copy of the whole film, minutes of copying that the page
+does not cancel when it changes its mind. Claimed at the first command, the
+order the sets were taken in was the order the copies happened to finish in,
+so a film abandoned in favour of another could put itself on the set minutes
+later, at its own resume point. The copy is not thrown away; it goes on for
+whoever asks for it next.
 
 Note the posture, which is the same as the rest of this server: **there is no
 authentication**. Whoever can reach the port can start something playing on a
@@ -857,6 +950,26 @@ closed connection` means this server closed first; no entry at all means it
 did not. On the same network the server's own address bypasses the proxy
 entirely, which is the quickest way to separate the two.
 
+**Stopping takes five seconds, and with a page open it takes all five.**
+`shut down with connections still open` in the log at info level is that, and
+not a fault: the drain waits for the requests in flight without cancelling
+them, and one browser sitting on the library holds the event stream open
+until it is cut. The order is what matters for what survives. The server
+stops accepting, the requests in flight get their five seconds — a player
+watching a segmented conversion goes on being served out of it for the whole
+of them — and only then do the playback positions and the mirrored index
+write their last and the database close. So a position saved by a request
+answered during the drain is kept, where it used to be acknowledged to the
+browser and then dropped: both stores flushed and returned the instant the
+signal arrived, before the server had so much as been asked to stop.
+After them the analysis gets two seconds to notice it has been cancelled —
+`the analysis was still reading at shutdown` says it did not, which costs
+one track its vector and nothing else, since it is simply read again next
+run. It is a bound rather than a wait because the pass sits behind the
+first walk, which cannot be interrupted: waited for outright, a signal
+arriving during a cold start would hold the process open for the whole of
+that walk.
+
 **A release inside a rar set is missing.** With `-debug` the log says why,
 once per set and not per member or per rescan: `rar set holds members it
 cannot serve`, with how many and the reason — compressed (only stored
@@ -882,7 +995,14 @@ every access with an I/O error until it is unmounted and repaired; the rescan
 logs `scan error path=/mnt/… input/output error` every ten minutes while it
 lasts. The files on it stay in the listings on purpose: a root that fails to
 read is protected from reconciliation, so nothing is forgotten while the disk
-is away, and it all plays again the moment the mount answers.
+is away, and it all plays again the moment the mount answers. The tiles come
+back with it: a thumbnail that failed is remembered for ten minutes and no
+longer. Nothing in its key — the id, the modification time, the size, the
+width — changes when a disk returns, so a failure remembered for the life of
+the process left the files playing again under grey tiles until the server
+was restarted; ten minutes is long enough to damp the retry storm the memory
+is there for, since the grid asks again for every failed tile on every change
+to the library.
 
 ## Development
 
@@ -946,7 +1066,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/hls/{id}/index.m3u8?t=&mode=`   | The same conversion as HLS — what Safari plays; redirects into a session |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
 | `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
-| `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, found once and remembered |
+| `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
 | `GET /api/albums/{id}/zip`                | The release as one download                |
 | `GET /api/sprite/{id}`                    | Scrub sheet: ten frames across a video, taken by ten seeks (3.5 s for an 87-minute film) |
 | `GET /api/playlist.m3u?…`                 | The current query as an m3u                |
@@ -959,7 +1079,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET/PUT/DELETE /api/state/{id}`, `GET /api/state` | Playback positions, filtered by face and paths like everything else |
 | `GET /api/renderers`                      | The DLNA renderers on the network (`?fresh=1` searches again) |
 | `GET /api/renderers/{rid}`                | Where that set has got to: transport state, position, duration |
-| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one sidecar subtitle (`sub=off` for none) and one soundtrack |
+| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one sidecar subtitle (`sub=off` for none) and one soundtrack; 409 where another request has taken that set meanwhile — the newest press drives it and the older one stops talking to it |
 | `POST /api/renderers/{rid}/next/{id}?audio=` | Queue what follows on the set itself, so a track boundary costs no silence; 501 where the renderer will not |
 | `POST /api/renderers/{rid}/control`       | `{action: play\|pause\|stop\|seek\|volume, seconds, volume}` |
 | `GET /api/events`                         | Server-sent library change events        |

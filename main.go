@@ -64,6 +64,15 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 // something every few seconds, and one that is merely open asks for nothing.
 const uiQuiet = 5 * time.Second
 
+// analysisDrain is how long shutdown waits for the analysis to notice that
+// it has been cancelled. It is a bound rather than an outright wait because
+// the pass sits behind the first walk, which takes no context and cannot be
+// asked to stop: without one, a signal arriving during a cold start would
+// hold the process open for the length of the walk. Long enough for a
+// decode to reach its next check of the context, short enough that nobody
+// wonders whether the process has hung.
+const analysisDrain = 2 * time.Second
+
 func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address (port 0 picks a free one)")
 	dataDir := flag.String("data", "data", "directory for playback state and the default blob database")
@@ -201,6 +210,16 @@ func run(cfg config, log *slog.Logger) error {
 	// deferred close runs is a write to a closed database like any other.
 	// Closed unconditionally below, since the pass starts only after the
 	// first walk and may never start at all.
+	//
+	// **This one is waited for with a bound, where the two stores are waited
+	// for outright**, and the difference is what sits in front of it: the
+	// first walk, which takes no context and cannot be asked to stop. A
+	// signal during a cold start would otherwise hold the process open for
+	// the whole of it — a minute and a half on a large library — with
+	// nothing on screen to say why. Past the bound its own check of the
+	// context and bolt's refusal to write to a closed database are what
+	// cover the rest, which is a logged line rather than a lost vector: the
+	// track is simply read again next run.
 	analysisDone := make(chan struct{})
 	var db *blob.DB
 	if cfg.dbPath == "off" {
@@ -273,7 +292,11 @@ func run(cfg config, log *slog.Logger) error {
 		stopStores()
 		<-stateDone
 		<-persistDone
-		<-analysisDone
+		select {
+		case <-analysisDone:
+		case <-time.After(analysisDrain):
+			log.Info("the analysis was still reading at shutdown; its last vector may not have been stored")
+		}
 	}()
 	// What has been watched is part of what the listing filters on, so the
 	// library is given the positions the store just restored.

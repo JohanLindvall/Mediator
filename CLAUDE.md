@@ -81,9 +81,97 @@ pruned by the same live set (`LiveIDs`, nil for an empty index) right after
 it, and both run after **every** completed scan — the first, the periodic
 rescan and a change of roots — through one `pruneAll` in `main`; the
 periodic rescan used to skip both, so what a file left behind stayed until
-the next restart. Shutdown waits for the state store's final flush as it
-waits for the persist loop's, since either landing after the deferred
-`db.Close` is a write to a closed database. Items whose content lives inside another file — a rar
+the next restart.
+**A prune puts back what it took from under the watcher.** The live set is
+taken under a read lock and the deleting is a transaction over the whole
+database, and nothing orders those two against the watcher: a file indexed
+in between is not on the list, so a record the persist loop wrote inside
+that window was deleted a moment later — while the item was live in memory
+and no longer dirty, so nothing ever wrote it again and a restart served a
+library without that file until the next walk found it changed. Holding the
+index still for the length of a whole-database transaction costs more than
+the illness, so the late arrivals are simply written again
+(`remarkAfterPrune`): one put apiece on the next tick, and none at all on
+the ordinary run where the list was complete. The prune and that repair are
+**one function** (`pruneTo`, which `PruneDB` hands its list to), so a prune
+that has run is never without the repair — and it puts back *both* of the
+things a prune deletes that nothing else would rewrite. The index record is
+the one that matters; the metadata record has to go with it, because the
+index record carries "examined", so once it is back nothing ever asks to
+read that file again (`needsEnrich`) and the cached reading would be gone
+for as long as the file sat unchanged on disk — its key being the file's own
+mtime and size, which is what makes it worth keeping and also what would
+have made its loss permanent. It is rebuilt from the item, and only where
+the item is marked examined with its shape read at the current recipe: that
+is exactly the state a completed enrichment leaves, so nothing here can
+write down a verdict enrichment deliberately withheld.
+A prune walks **four** buckets, and the other two are deliberately not put
+back. Thumbnails need nothing, being made on demand. The **feature vector**
+cannot be: it is half a second to a second of decoding that only the
+analysis can redo, and the repair has nothing to rebuild it from — so a
+track indexed inside the prune's window loses its vector and is read again
+on the next pass, which is the one loss here that costs real work. It is
+bounded by the same window as the rest and self-healing, where a lost
+metadata record would not have been.
+**A walk and the prune that follows it are one operation** (`scanGate` in
+`main`, held at all three walk sites). The library serializes the walks
+themselves, but the prune is outside that: a second walk could start, index
+a newly added root and have its records written by the persist loop before
+the first walk's prune ran, which then deleted exactly those records for
+being absent from a set taken before they existed — one batch of index,
+metadata and thumbnail records, and with them the moment each of those files
+was first seen, which puts them at the top of the Added order as though they
+had arrived this morning. What the gate does not close is the window the
+*watcher* opens between the snapshot and the delete; that one is
+microseconds wide and wants the snapshot taken under the library's own scan
+lock, which is not reachable from `main`.
+**One id must never be in the dirty set and the removal set at once.** A
+flush hands bolt the puts and the deletions in one transaction, so the two
+together are a record written and then deleted — which is reachable in a
+single goroutine, a file unlinked and created again under the same name
+keeping its id, the id being the hash of the path: both halves of an atomic
+rename, of a directory moved away and back, of a file replaced in place. The
+fresh record was written and deleted in the same tick and both maps were
+cleared, so nothing ever wrote it again. Four things keep it out now.
+`markDirty` takes the id out of the removals, as `markRemoved` has always
+taken it out of the dirty set; `upsert`'s creation branch does the same,
+since that is the door a removed id comes back through; `flush` refuses to
+delete the record of an id the index still holds, which is the same
+guarantee at the point where the harm is done and also covers the error path
+that puts a removal back after the file has returned; and `SaveItems` and
+`PutPositions` apply the **removals before the puts**, so that where the two
+do meet the later intent — the write — is the one that survives.
+**Shutdown stops the stores after the handlers, not before them.** Both
+flush loops used to watch the signal's own context, which
+`signal.NotifyContext` cancels the instant the signal arrives, so by the
+time the HTTP server was so much as asked to drain both had run their final
+flush and returned: a position, a play, a verdict or an index change
+recorded by a handler still inside `ServeHTTP` landed in a dirty set with no
+flusher left alive — answered 200 to the caller and then dropped. They run
+on a `storeCtx` of their own now, cancelled after the drain, in one deferred
+stop-and-wait registered as soon as both loops exist and therefore *after*
+the deferred `db.Close`, LIFO being what then makes it run first; that also
+settles the error returns, which used to skip the drain altogether and close
+the database with the loops still running under it. The analysis goroutine
+is waited for there too (`analysisDone`), since it writes vectors to the
+same database on a beat of its own — cancelled by the same gesture that ends
+the watcher, but waited for here, a `PutFeatures` still in flight when the
+deferred close runs being a write to a closed database like any other.
+**That one wait is bounded** (`analysisDrain`, 2 s) where the two stores are
+waited for outright, and the difference is what sits in front of it: the
+pass runs at the end of the goroutine that did the first walk, and `Scan`
+takes no context at all. Waited for outright, a signal arriving during a
+cold start would hold the process open for the length of that walk — a
+minute and a half on a large library — with nothing on screen to say why.
+Past the bound, the pass's own check of the context and bolt's refusal to
+write to a closed database are what cover it, and what is lost is a logged
+line rather than a vector: the track is read again on the next run. How thorough that last write is still
+differs between the two stores: the state store looks again for what landed
+during its final commit (`flushFinal`, bounded by `finalFlushRounds` — two
+rounds settle what it is for and the third is slack, and the bound is what
+stops a database refusing every write from holding the shutdown open), where
+`PersistLoop` flushes exactly once on cancellation, so an index change
+recorded during *that* commit is dropped the same way. Items whose content lives inside another file — a rar
 member, a DVD title — are deliberately not persisted: their content is byte
 offsets into volumes or into an image, and stale offsets would serve garbage,
 so the scan re-derives them.
@@ -93,6 +181,50 @@ Scale invariants (measured at 150k files; keep them true):
 - `List` serves pages from a cached, per-(query, version) sorted result —
   only the first request of a new query or after a change pays the filter
   and sort. Never add per-request work that walks the index.
+  **`queryMu` covers that one cached result and nothing else** (`cachedQuery`).
+  It used to be held for the whole of `List` — the page copy and the counting
+  included — and a narrowed count walks the index and may ask for an album
+  build, which reads playlists off the disk; every listing in the process
+  passes through that one lock, so a request whose own answer was a cached
+  page of two hundred items queued behind a playlist scan. What comes back is
+  immutable once built, so reading it afterwards needs nothing but the index's
+  own read lock.
+  **A cache newer than the asker satisfies it**, and both caches that answer
+  per version say so with `<` rather than `!=` (`cachedQuery`, and
+  `perVersion.get` in `cache.go`, one rule rather than two — the listing's
+  watch version compares the same way). The version is read *before* the
+  cache's lock is taken, so two callers arriving either side of a bump ask
+  about different numbers; under equality the one holding the older number
+  rebuilt the whole filtered, sorted library behind the one that had just
+  built it, stamped the cache back to its own older number and sent the next
+  caller round again — up to one full rebuild per straddling caller, each
+  blocking the others on the cache's lock, which is precisely the repeated
+  rebuild the group version exists to stop while a disk is being written to
+  and the plain version is moving forty-five times a second. It is sound
+  because a build always reads the live index *after* it is stamped: what is
+  stored can be newer than its number and never older, so the cache is
+  under-labelled and never over-labelled. The other half of the obvious
+  repair — re-reading the version after the build and storing the later of
+  the two — is deliberately not done: `buildAlbums` copies under the read lock
+  and then works outside it, so a version bumped mid-build stamped onto that
+  list would serve genuinely stale data as current until the next bump.
+  And a listing reports **the stamp on the answer it was given**, not the
+  number that request happened to read: a listing satisfied by a build from a
+  later version holds that build's contents, and labelling it with the older
+  number has the client refetch for a change it already holds.
+  **The affinity is asked for above the index lock, wherever it is wanted.**
+  `affinities()` and the scaled vectors beneath it are lazy rebuilds of the
+  whole library — every analysed track measured against every verdict, about
+  half a second — so reaching them with the index lock held stops a waiting
+  writer and, through it, every reader queued behind. Two places did: `Get`,
+  which is the door every by-id request comes through and which the analysis
+  loop itself calls once per track, and `buildQuery`'s popular sort, which
+  asked from inside the comparison. Both ask above the lock now, which is the
+  rule a listing's `stamper` already followed — and `Get` stamps from one
+  `stamper()` rather than a per-item form, since warming the caches and then
+  stamping asks for the affinity twice and the warm ask is not free: it
+  compares the release verdicts by content, which is a walk of every analysed
+  track, paid twice on the hottest path in the server.
 - **How far things have been watched** is the library's (`watched.go`), not
   the state store's: a listing filters under the index's own lock and cannot
   be reaching into another store to do it. So the positions are pushed in —
@@ -113,7 +245,16 @@ Scale invariants (measured at 150k files; keep them true):
   somebody is watching a film. The two totals are cached per (version,
   watchVer) and computed from the watch map, which holds only what has ever
   been played, intersected with the index — positions outlive the files they
-  belong to until the next prune.
+  belong to until the next prune. The memo is validated in one critical
+  section and committed in another with the walk in between, so two
+  computations can overlap and the one that sampled the older pair can be the
+  one that commits last — never a wrong answer, both counters being read
+  before the map is copied and both only ever rising, but a stamp that goes
+  backwards is a memo every later caller mismatches and a walk paid again for
+  a number that was already right. `commitWatchTotals` refuses a stamp older
+  than the one committed; that both counters are monotonic is also what makes
+  "newer" answerable at the commit without holding `watchMu` across the
+  index's own lock, which is an ordering nothing else in the package takes.
 - `Counts` is O(1): per-kind totals are maintained by `upsert` and
   `dropItem` — the one door into the index and the one door out, so nothing
   else has to remember `countKind`; five places used to spell the removal
@@ -127,6 +268,38 @@ Scale invariants (measured at 150k files; keep them true):
   questions per page — its own totals and the search's — and a single slot
   missed on both, every page. It is cheaper
   than the listing's own walk: no sort, no copies, one integer per item.
+  **The three grouped lists are read before its own lock is taken.** Only the
+  albums were hoisted when this was first written, on the grounds that an
+  album build reads playlists off the disk; the performers and the genres are
+  grouped from the albums and were left inside, and they do not even need a
+  rebuild of their own to hurt — the grouped caches take their lock
+  unconditionally, so a narrowed count arriving while the broadcast loop
+  rebuilds waits for the whole of that build with the counts lock held, and
+  every other narrowed count in the process waits behind it.
+  **A hidden-item total is stamped with the version the walk saw**, never
+  with the one the caller asked about (`hiddenCounts`, `annotate.go`): those
+  are two lock acquisitions apart, and a change landing between them makes
+  the answer newer than the question — published under the older stamp it was
+  then handed to every other request still holding that version, which
+  subtracted a hidden set counted over one index from totals taken of
+  another. What the memo now saves is the walk for the callers holding the
+  version it was counted at; a caller holding an older one walks for itself,
+  which a walk of what the owner has marked can afford. Nothing checks that
+  the stamp does not go backwards and nothing needs to: `hiddenMu` is held
+  across the whole walk, so the walks are in a line, and the group version
+  only rises. What is left, and is a transient disagreement in **either**
+  direction inside one response, is that `Counts` reads its per-kind totals
+  and the version under one lock and comes here under another — an item
+  hidden in between makes the chip undercount, one that left the index in
+  between makes it overcount, and either way it settles half a second later.
+  The album chip is clamped at nought for a related reason: the audiobook
+  count and the album total are published by one build at two moments, so a
+  reader landing between them pairs one build's books with the last build's
+  releases, and on the first build of a library that holds any the last
+  build's total is nought — a chip reading "-7 albums". The honest repair is
+  to publish the pair together, which is a change in the build; reading the
+  two under the album lock was rejected outright, `Counts` being attached to
+  every listing response and never allowed to block behind an album build.
   Items are counted as items and albums and artists as collections, which is
   what each chip opens. `CountQuery` carries the artist as well as the
   search, because drilling into a performer narrows the view and the chips
@@ -189,7 +362,14 @@ Scale invariants (measured at 150k files; keep them true):
   request is waiting for it) and a slot from `probeSem`; it deliberately does **not** wait for playback to go quiet
   the way the background sweep does — this probe is what tells the player
   whether the browser can decode what it is already playing. Nothing is
-  written down when the context expires: interrupted is not answered.
+  written down when the context expires: interrupted is not answered — and
+  the same is true of ffprobe's own ceiling, which fires on a busy or
+  network-mounted disk while the caller's context is perfectly alive and
+  comes back looking exactly like a container with nothing to say
+  (`Probe.Interrupted`, and the enrichment paragraphs below). Nor is anything
+  written down about a file that is no longer the one that was probed: the
+  answer is stamped only where the identity it would be written under is the
+  identity that was read.
 - The album/artist endpoints send `ETag: W/"v<group version>.<watch version>"` +
   `Cache-Control: no-cache`, so browsers revalidate for free; `writeJSON`
   only defaults to no-store when the handler set no policy. The frontend
@@ -254,9 +434,28 @@ Change propagation is the core loop:
   do not exist yet. So `settleWalks` looks again at 5 s, 30 s and 2 min, the
   last deliberately minutes out — a set of archive volumes is not indexable
   until the last byte of the last volume has arrived, and a download takes as
-  long as it takes. `maxSettles` bounds the timers, since a tree moved in
-  wholesale is one Create per directory; past the cap they are left to the
-  rescan, which is what it is for.
+  long as it takes. `maxSettles` bounds the **re-walks outstanding**, not the
+  armed timers, since a tree moved in wholesale is one Create per directory
+  and counting only the timers would let a mass arrival put as many recursive
+  walks on the disk at once as it had directories; a slot is therefore held
+  until its walk is done, and past the cap the rest are left to the rescan,
+  which is what it is for. The timers are held on the `Watcher` (`armSettle`,
+  numbered rather than held by pointer, a timer not being able to name itself
+  to the callback it was created with) and dropped by `Reset` and when `Run`
+  returns, rather than left to fire minutes later over a tree that is no
+  longer the library's: the last of them is two minutes out and the
+  preferences can change in two minutes. `forget` says whether it took the
+  timer, since the callback and `stopSettles` both reach for it and only one
+  of them may hand the slot back; a callback that finds its record already
+  taken returns without walking, because stopped means stopped. A walk already
+  running is left to finish, nothing it can do being indexed or watched any
+  more. And **watches are refused outside the roots** (`AddDir`, and `rewalk`
+  skips such a subtree): both of the things that install watches outlive a
+  change of directories — a settle timer armed minutes ago, and a walk that
+  took its root list before the change — and `Reset` has run by then, so what
+  they installed was never removed again, an inotify watch and a wakeup apiece
+  for every event under a tree nothing indexes any more. `AddFile` has refused
+  such a path all along; this is the same refusal one door along.
   **A file that changed under its item forgets what was read from it**
   (`forgetContent`): the duration, the codecs, the shape, the soundtrack and
   caption lists, and the marks that say they were looked for. Both upserts
@@ -274,6 +473,39 @@ Change propagation is the core loop:
   reader for its duration — and dropped under the write lock after a
   recheck. A rar set or a disc image reconciles its members against the
   list it produced last time (`members`), not against the whole index.
+  **Content that lives inside another file is asked about by its container.**
+  Such a path is the container's with the member's name after a NUL, and the
+  syscall layer refuses any string holding one — so `os.Stat` there could only
+  ever answer EINVAL, and every rar member and DVD title the walk had not
+  reported was dropped without a question being asked. That covers the member
+  the watcher indexed after the walk passed its directory, and the set whose
+  parse failed this time round: a parse that failed is no more a verdict than
+  a directory that could not be listed. The question is asked **once per
+  container, not once per member** — three hundred members of an eighty-nine
+  volume set was three hundred identical stats, each walking the root list, on
+  the path that runs after a walk the disk went wrong under, which is exactly
+  when it can least afford them.
+  **An item younger than the walk is not dropped by that walk** when the disk
+  came back empty for it. The stats happen outside the lock — one syscall per
+  missing path and then the wait — so a path deleted and written again under
+  the same name was condemned by an answer about a file that is no longer the
+  one in the index. The walk stamps `startedAt` after `scanMu.Lock()` and
+  keeps an item whose `FirstSeen` is later, but **only where the stat found
+  nothing**: where the disk answered, the rules above have already decided,
+  and a path that has become a duplicate must still go however young it is.
+  Keeping such an item for one cycle is the deliberate cost; the next walk
+  drops it.
+  **Sidecars are reconciled the way items are.** They used to be swept on what
+  the walk itself saw and nothing else, so a caption the watcher indexed after
+  the walk passed its directory was deleted while it lay on disk — and since
+  the sweep set neither counter, no event went out to make the player look
+  again, so it stayed wrong until the next completed rescan and for good with
+  `-rescan 0`. The unseen ones are gathered under the read lock, asked about
+  the disk with no lock held, and dropped only when they are really gone or no
+  longer `UnderRoots` (a directory taken out of the preferences leaves its
+  files exactly where they were, and its sidecars have to go with its films).
+  A sidecar found, or lost, is a change to what the library holds and sets
+  both counters, which is what makes the closing notify fire.
   **Scans serialize** (`scanMu`): the rescan ticker starts counting at boot,
   so it can fire while a cold initial walk of a big library is still
   running, and a prefs change starts one of its own. Two walks at once each
@@ -281,12 +513,111 @@ Change propagation is the core loop:
   mis-detect as duplicates and files one walk indexed vanish under the
   other's reconciliation (self-healing on the next pass, which is exactly
   the kind of fault nobody can reproduce).
-  **The watcher's enrichment is debounced** (`enrichAfterQuiet`, 2 s): a
+  **The watcher's enrichment is debounced** (`enrichAfterQuiet`,
+  `enrichQuiet` 2 s — a variable only so the tests need not wait it out): a
   file being written — a torrent landing — emits a stream of Write events,
   and a tag-read goroutine per event was an unbounded number of readers on a
   file that was about to change again anyway. The read happens once, after
   the writer goes quiet, and still notifies when it lands, which is the
   watcher paths' publish contract.
+  **Every event arms a fresh timer** rather than resetting the one in the map.
+  `Reset` cannot tell a timer that is still waiting from one that has already
+  fired and is merely blocked on the mutex, so re-arming the second put a
+  timer nobody was tracking back on the clock: its firing deleted the entry
+  belonging to a live timer, the next event armed a second timer for the same
+  file, and the read landed while the writer was still going — the one thing
+  the debounce exists to stop, and self-sustaining for the length of the
+  burst. A timer that fires gives way when the map has moved on. A timer is a
+  cheap allocation; the invariant is not.
+  **Those reads are bounded, and they stand down for playback.** They used to
+  run the work themselves, one goroutine per file with no bound at all — and a
+  release moved in wholesale comes due all at once, which is that many tag
+  reads and ffprobes on the disk against the playback this tier is documented
+  to stand down for. Each takes a slot from a small process-wide gate first
+  (`enrichSlots`, `enrichWorkers` wide — four — process-wide rather than a library's
+  because the disk is one disk) and then waits for the disk to stop serving a
+  film (`standDownForPlayback`). The gate the background sweep is handed is a
+  callback `main` assembles, but its playback half is `Library.Streaming`, a
+  method on the library that needed no plumbing at all — which is why these
+  reads had no excuse for asking nothing. It is **bounded** where the sweep's
+  wait is not (`enrichBusyWait`, 30 s), and for a reason the sweep does not
+  have: this waiter is holding one of a handful of process-wide slots, so an
+  evening's viewing should delay a read rather than stop the watcher reading
+  anything at all. What going ahead costs is one file's tag read against a
+  film that has been playing for half a minute; what waiting for ever costs is
+  a library that never learns what arrived while somebody was watching.
+  **The event loop does not do the work.** fsnotify's inotify backend hands
+  events over on an unbuffered channel, so whoever consumes them is what keeps
+  the kernel's own queue drained — while the work behind one event is a
+  recursive walk of a directory moved in wholesale, or a reparse of every
+  volume of an eighty-nine part set. For as long as that took, nothing was
+  reading the descriptor, and what the kernel cannot queue it drops: a Create
+  nobody will ever report again. `Run` now does nothing but take events; one
+  worker does the work behind them **in the order they arrived** (a Create and
+  the Write that follows it must not be reordered), over a buffer of
+  `eventQueue` (4096) — generous rather than unbounded, since a full one still
+  blocks. Shutdown closes the queue and waits for the worker to put down
+  whatever it is holding, then stops the pending container reads, then the
+  settles, then closes the watcher — that order being what the defers spell,
+  since nothing may arm a read after the worker has gone; whatever is still queued is left undone,
+  which is what the old single-goroutine loop did too, draining thousands of
+  events inside a five-second shutdown being worse.
+  **Reading a container and reconciling what it holds is one
+  read-modify-write, and it is held per container** (`containers`,
+  `enterContainer` in `scan.go`). The read is the parse — every volume of a
+  set, or a disc's directory — and the reconcile is `indexStored`, which drops
+  whatever the last parse listed and this one did not. `Scan` takes `scanMu`,
+  but a watcher event and a settle timer take nothing at all, and two of those
+  over one container is the ordinary case while a release lands: the slower
+  parse finished last and reconciled its own older membership against the
+  newer one, dropping members the other had just indexed. Because a container
+  reparses on an event on any of its volumes, what put them back was the next
+  event — which for a set that had finished arriving never came, so a release
+  sat short of two of its files until the next completed rescan. **The whole
+  of it is held, not merely the reconcile**: serializing the write alone still
+  lets the older parse run last and install its own byte ranges and sizes over
+  the newer one's. The hold is keyed by the **path alone**, where a pending
+  member read is keyed by the library as well — this lock is about the file on
+  the disk, so two libraries over one container are exactly the pair that must
+  be held apart, and holding them apart where nobody needed it costs a lock
+  nobody is waiting on. The entry is refcounted and dropped when the last
+  holder leaves, so a library of ten thousand archives costs nothing between
+  walks, and the discipline is strictly container → `l.mu`: nothing calls
+  `enterContainer` under the index lock. **The walk and the watcher must name
+  a container the same way**, or the lock holds nothing together and each side
+  takes a door nobody else wants — a rar set is its first volume, a disc image
+  is itself, and a DVD folder is the directory its VOBs are in on both sides.
+  A divergence there would be silent, which is why it is tested rather than
+  merely written down.
+  **A container's members are read once the writer goes quiet**
+  (`readMembersSoon`/`readMembers`, `containerQuiet` 2 s — the same two
+  seconds the plain-file path waits). A watcher event on any volume of a set
+  used to start a detached goroutine that read every member of it; a set still
+  being written moves its newest volume's time, which is every member's time
+  here, so every event reported every member as changed. During a download
+  that is a goroutine many times a second, each running an ffprobe per member
+  over the loopback stream, none of them bounded, all of them on the disk
+  playback is reading from. There is now at most one read pending per
+  container and at most one running, however many events arrive, and the
+  newest membership is the one the pass reads. **The flag that says a pass is
+  running is put down through a defer**, and that is not bookkeeping: a reader
+  that left it standing would strand its container for the life of the process
+  — every later pass finds it busy, pushes the timer out another two seconds
+  and reads nothing, for ever, with the entry and its timer left in the map.
+  Reading a file's tags is the one thing here that can die under the reader
+  (`tag.ReadFrom` panics on corrupt files), which is why `enrichOne` puts its
+  own marks down through a defer as well.
+  **And those reads are stopped when the reason for them goes**
+  (`stopMemberReads`). A timer armed two seconds ago is the same kind of
+  leftover as a settle walk armed two minutes ago: left to fire after a change
+  of roots it reads files that are not the library's any more, and after
+  shutdown it reads them against a database that is closing. `Watcher.Reset`
+  and `Run`'s return drop them — per library, since another library's pending
+  read is not this one's to take away, which is what the library is doing in
+  the key. A read already running is left to finish, as a settle walk already
+  walking is; its own tail then finds nothing pending and takes the entry out.
+  In `Run` the drop is ordered after the worker has been drained, so nothing
+  can arm another behind it.
 - Every mutation calls `notify()` → version bump → `BroadcastLoop` coalesces
   bursts (400 ms) → subscribers get an `Event` → `/api/events` SSE →
   the frontend drops its page cache and refetches the visible window. Version
@@ -355,7 +686,12 @@ Change propagation is the core loop:
   times through the disc sort, `fillAlbum` and `markSpoken`, while an
   upsert or a tag read wrote them. It groups **copies** now (`cp := *it`
   under the read lock), which is a few megabytes per build against a race
-  on every field the card shows. The album sheet's tracks come through one
+  on every field the card shows — the playlist branch included, which was the
+  one place in the build still handing out the pointer: a playlist album is
+  read after the lock is dropped, its path parsed for the running order and
+  its name and time put on the card, while any upsert that sees the file grow
+  or repairs a path restored from a lossy record rewrites the live item under
+  it. The album sheet's tracks come through one
   stamper and one lock (`tracksOfAlbum`) rather than a `Get` apiece, which
   could rebuild the resemblance caches once per track while the analysis
   ran.
@@ -516,6 +852,57 @@ Change propagation is the core loop:
   nothing in it is dropped rather than kept empty. The tile carries the
   verdict beside the play count, because a listing ordered by something
   invisible looks wrong.
+  **What the owner did with an item is written twice, and the pair is one
+  turn** (`Server.owning`, `server.go`). The state store is the record; the
+  library keeps a copy for the listings to sort and filter under their own
+  lock. Both stores lock properly and neither could tell anything was wrong —
+  what was missing was any order between them, and the value carried across is
+  **absolute**: `Play` increments under the store's lock and hands back the
+  new total, so two plays of one track could take 1 and 2 from the store and
+  apply them the other way round, leaving the tile, the Popular ordering and
+  every collection total one play behind until the track was played again. The
+  same shape leaves a cleared position reading as finished and a withdrawn
+  verdict reading as a lit thumb. So one id's turn is held across both writes,
+  over 64 stripes (`ownerStripes`, FNV-1a over the id, which is hex — anything
+  cheaper than a hash puts whole neighbourhoods on one stripe); a mutex per id
+  would be a map to grow and prune for a lock held across two statements.
+  `handleStatePut`, `handlePlay`, `handleStateDelete` and `handleLike` all
+  take it. **A turn, a busy gate or a lock is released by `defer`, always** —
+  a panic under any of the calls between is recovered by net/http and the
+  handler simply ends, so a release written in a line of its own leaks for the
+  life of the process: a stream count never given back reads as "something is
+  playing" for ever (thumbnails collapsed to one job, enrichment paused, every
+  hover sheet refused), and a stripe left locked wedges every later save, play
+  and clear whose id hashes there, with goroutines piling up behind it. They
+  are deferred inside a closure rather than at function scope, which also
+  gives the turn back *before* the answer is written out: a stripe is not
+  something to hold while a reader takes its time.
+  **The owner's flags go through one lock of their own** (`flagStore`,
+  `annotate.go`), and deliberately not the index's — a commit and an fsync are
+  no reason to hold every listing still, and a flush of a cold enrichment pass
+  can leave bolt's writer busy for seconds. It does two things. It makes one
+  loader out of however many callers arrive together: the flag is set only
+  once the read is over, so every request of the first burst after a restart
+  read the whole bucket for itself and announced a change afterwards — a
+  version bump apiece, and with it the albums, the artists, the genres, the
+  shows, the narrowed counts and the affinity ranking discarded again for a
+  load that had already happened. `LoadFlags` takes that same lock, so a
+  startup step calling it as soon as the database is open — which its own
+  comment invites — cannot read the bucket beside a `SetFlags` writing to it.
+  And it holds `SetFlags` across the decision (taken under the index's lock)
+  and the `SaveFlags` that writes it down, so the database is written in the
+  order the values were settled in: without it two presses on one item — the
+  rotation button twice, a hide and an unhide — could reach bolt the other way
+  round, memory taking the press that held the index lock last and the
+  database taking the press that entered bolt last, with nothing on screen to
+  say so and the database being what comes back at the next restart. A load
+  that finds the work already done **drops what it read whole** rather than
+  merging it key by key, and that is not fussiness about a race: a withdrawal
+  is spelled as a *deletion*, from the map and from the database alike, so the
+  key a per-key merge would have to skip is not there to be seen — an absent
+  key reads as "never set", the old value goes back, and an item the owner had
+  just un-hidden is hidden again for the life of the process, with the
+  database saying the opposite and a restart disagreeing with both.
 - **How the music sounds is read, once, in the background** (`analyze.go`,
   `features.go`), as the fourth and lowest tier of background work: below
   playback, thumbnails and tag reading, one track at a time, only while
@@ -543,13 +930,86 @@ Change propagation is the core loop:
   read, where 250 unreadable files used to discard every cache for nothing.
   A database write that fails is logged and the vector kept in memory,
   where it used to poison the track as a decode failure.
+  **The memos do not go backwards.** The three feature caches are built with
+  no lock held, so two builders overlap whenever a vector or a verdict lands
+  between them, and the slower one installed its older answer over the newer:
+  nobody is served anything wrong, each snapshot being stamped with what it
+  was built from, but the next reader then mismatches the stamp and rebuilds
+  the lot again, which is the thundering herd the generations exist to
+  prevent. `putScaled`, `putAffinity` and `putSounds` install only over
+  something not newer. **The affinity is stale along three axes and only two
+  of them are numbers**: the verdicts and the vectors carry generations that
+  only rise, where the release verdicts are a map the album build replaces
+  wholesale with no ordering between two of them at all. Two builds tying on
+  both generations and reading different album builds is exactly the
+  interleaving this is about, so the third axis is answered the only way it
+  can be — a build whose release verdicts are no longer what the library holds
+  is stale on arrival, since the next reader's `sameMap` would miss it anyway,
+  and it is not installed at all rather than installed over something current.
+  Compared by content, like everything else about that map, and paid once per
+  build rather than once per reader.
+  **One reading of the release verdicts, where there used to be two.**
+  `Similar` filtered its candidates by which releases are speech and then
+  stamped what it handed back from a second, independent reading — so an album
+  build landing between the two handed back a track the answer had admitted as
+  music wearing the mark of speech. It takes the stamper's own set for both.
+  `affinities` had the same shape one layer down (`spokenWith` takes the
+  verdicts the caller already holds, rather than letting `spokenSet` read the
+  field again): the buckets could be kept apart by one album build and the
+  provenance name another, and because the staleness test is by content such
+  an answer becomes acceptable for good the day the verdicts happen to say
+  again what the stamp claims.
   restored at startup (`LoadFeatures`), pruned with the item, and never read
   twice for an unchanged file. Measured on the live library: 0.7-1.1 s per
   track, 22k tracks a working day of one core, once. `-analyze=false` turns
   it off; without ffmpeg it does nothing. A decode that fails is remembered for the run and not retried every
-  pass (the loop used to run ffmpeg on the same broken file every minute);
-  a cancellation is never remembered. A silent track's empty vector is
+  pass (the loop used to run ffmpeg on the same broken file every minute).
+  **A read that ran out of time is not a track that could not be read.**
+  `analyzeOne` bounds each track with ninety seconds of its own
+  (`analysisTimeout`, a var rather than a const only so a test can spend the
+  budget before the decode starts), so a decode that overruns comes back
+  carrying *that* budget's deadline while the pass's own context is still
+  live — and the switch, which asks the parent, fell through to `markFailed`.
+  That wrote the track off for the whole run: absent from the scaled vectors,
+  from every resemblance, from radio, from its release's sound, and from the
+  vote that decides whether a release is an audiobook. The pass tells the two
+  apart now — `errors.Is` against `DeadlineExceeded`/`Canceled`, checked
+  *after* the parent's own `Err`, so a shutdown still returns rather than
+  being written down — and calls `markInterrupted`, which records nothing but
+  a retry time on the features record (`analysisRetryAfter`, an hour) and
+  leaves the stamp and whatever vector was there alone. `needsAnalysis`
+  honours it, so the track is offered again once the wait is up rather than
+  written off for the run — and not every minute either, since ninety seconds
+  of ffmpeg per pass for ever is the hammering the failure memory exists to
+  stop. An interruption is still never a *verdict*; it is now remembered as
+  somewhere to wait. A silent track's empty vector is
   restored at startup as "analysed, nothing to say" rather than read again.
+  **A vector read from the wrong seconds used to be stamped as final.** The
+  windows are chosen from the duration, and a file the tag pass has not looked
+  at yet has none — which sent the read to the fixed marks meant for a file
+  whose length *cannot* be read at all. The vector is then stamped with the
+  file's mtime and size and nothing re-reads it until the file itself changes,
+  so a duration that was merely late fixed the wrong part of the track for
+  good. `readyForAnalysis` is the question — a measured length, or a file the
+  tag pass has examined — and it is asked at **both** doors: `analysisTodo`,
+  which is what the list is built from, and the pass itself. The first is what
+  keeps the loop resting: queued and then passed over, such a track kept the
+  list non-empty for ever, so the loop entered a pass every minute, logged a
+  start and a completion with nothing done, and — with something streaming —
+  waited two seconds at the busy gate for each track it was never going to
+  read. The second is a second look at a file that may have changed since the
+  list was built, a file that changed forgetting what was read from it
+  (`forgetContent`), its length included. It is deliberately not folded into
+  `needsAnalysis`: that predicate means "still to be read", which is a
+  different question and one several callers already ask.
+  **And the last vector of a run is not written to a closing database**, or
+  not usually: the write is skipped where the caller's context has already
+  gone. That is a narrowing and not a fix, and the comment beside it says so —
+  the cancellation can land a nanosecond later just as easily, and bolt then
+  refuses the write rather than corrupting anything, a transaction taking the
+  same locks `Close` does. The fix proper is shutdown waiting for this
+  goroutine as it waits for the persist loop and the state store, which is
+  what `analysisDone` in `main` now does.
   The three windows are described separately and their statistics merged
   (`extractFeaturesFrom`): concatenated, the frame straddling two windows
   was a spurious onset and a seam in the envelope the syllable and tempo
@@ -618,7 +1078,15 @@ Change propagation is the core loop:
   entries is a millisecond against the half second it saves.
   A listing page is stamped from one `stamper` — the counts, the verdicts,
   the resemblances and the release verdicts snapshotted once — rather than
-  seven locks per item, and so are the similar tracks and the queue.
+  seven locks per item, and so are the similar tracks, the queue and `Get`
+  itself; the per-item form it replaced is gone. **The lazy load of the
+  owner's flags belongs to `stamper()`**, since that is where a page of them
+  is about to be handed out and the one place it may run, every producer
+  building the stamper before taking the index lock. Three of the four
+  producers established the load and the album sheet did not: reached first on
+  a cold process — a shortlink straight to a release, or the zip — it answered
+  that nothing was hidden, favourite or turned, where the same request a
+  moment later answered properly.
   **Speech is kept apart everywhere.** `spoken.go` reads a score off the
   stored vector, so the rule can be tuned without analysing anything again,
   and the rule was set against real files rather than reasoned out: pauses
@@ -1112,10 +1580,80 @@ Change propagation is the core loop:
   `needsEnrich` keys off an `enriched` flag set whatever the outcome, so a
   file with no metadata is not re-read by every later pass; the flag is
   persisted, so restarts do not redo it either.
-- Enrichment must publish: `EnrichMeta` notifies in batches, and the
-  watcher paths (`AddFile`, `reindexRarSet`) notify **after** their
-  `enrichOne` goroutine finishes. Without that trailing notify the tags
-  reach the index but never the clients.
+  **A reading belongs to the bytes it was read from.** Enrichment snapshots
+  an item, reads the file — a probe's own ceiling is half a minute — and only
+  then writes back through `setMeta`, `setProbe` and the mark that says the
+  item has been examined, each of which looks the item up by id alone. A
+  download that finishes inside that window, or a release replaced under its
+  item, makes those writes land on different bytes than were read: `upsert`
+  has already called `forgetContent` and recorded the final size and time, so
+  the partial file's reading is written under the finished file's identity —
+  the one key that never changes again. The record is persisted and restored,
+  `needsEnrich` is false for ever after, and the tile, the length sort, the
+  resume rule and the thumbnail offset all read a twelve-minute figure for a
+  ninety-minute film. `EnsureCodecs` had the same hole and a worse
+  consequence, its `probed` flag being sticky and exactly what `forgetContent`
+  clears: a late answer re-armed it carrying the previous file's soundtracks
+  and captions, and the player drew a menu of languages the file does not
+  hold while the conversion mapped a stream that is not there. So every
+  commit goes through **`applyReading`**, which writes only while the item is
+  still the file the bytes came from and looks again afterwards — the check
+  and the write being two turns of the lock — forgetting what it just wrote
+  where the file moved under it (`unchangedSince`, `keptReading`); and the
+  record `EnsureCodecs` queues is written only where the identity it would be
+  stamped with is the identity that was probed.
+  **The mark that says a file has been read is not guarded the same way, and
+  must not be.** It is the one field here with no identity written beside it:
+  `needsEnrich` consults it, `blob.Item` carries it across a restart, and once
+  it is set nothing ever opens the file again. Every other stale reading is
+  caught by the next walk, the mtime having moved; this one is permanent — no
+  duration, no codecs and no shape, for ever, on a file nobody read. So
+  `markEnrichedIf` compares and writes under the **one** turn of the lock it
+  was already taking, where the others are content to look twice.
+  **What is forgotten has to be forgotten in both places, and not too much of
+  it.** `keptReading`'s `forgetContent` changes what is persisted, so it marks
+  the item dirty again: the write a moment earlier did mark it, and a persist
+  flush landing in between takes the dirty bit with it, leaving the polluted
+  record to survive the restart, which is the whole fault. And what the
+  *container* declares is not the file's to forget — `upsertStored` puts a DVD
+  title's own length back after its own `forgetContent` for exactly this
+  reason, and neither `setMeta` nor `setProbe` may restore it
+  (`declaresDuration`), so a disc title or an archived member caught here
+  showed no playing time at all until the next full rescan.
+  **A probe stopped by a deadline is not a file with nothing to say.**
+  ffprobe installs a ceiling of its own (`ffprobeTimeout` 30 s,
+  `ffprobePipeTimeout` 60 s — variables now, only so a test need not wait one
+  out), and a run it kills comes back indistinguishable from a container that
+  answered nothing while the caller's context is perfectly alive;
+  `ffprobeResult.cutShort` and `Probe.Interrupted` carry the difference up.
+  Refusing to write such a reading down is only half an answer, though:
+  `needsEnrich` stays true, so every listing page holding that film asks for
+  it again through `EnrichSoon`, four workers wide, at half a minute a time
+  for the life of the process. Marking it examined instead is not available —
+  that flag is persisted and restored, which is the permanent wrong verdict by
+  another route, and the `archiveProbeMissed` trick works only because
+  archived items are never persisted as index records. So it is remembered for
+  the run and keyed by identity, exactly as the converters remember a
+  declaration ffmpeg refused: **`enrichCutShort`**, one attempt per file per
+  run, a file replaced on disk being a different key, and a restart judging a
+  disk that has come back afresh. A run the **caller** abandoned is never
+  remembered — a request that gave up after 1.5 s says nothing about the file
+  — so the memory is fed only by `p.Interrupted && ctx.Err() == nil`.
+  **The cached reading lands before the shape is looked for.** In the
+  cache-hit branch the record's own title, performer and playing time are
+  committed at once, and again after the shape-fill probe: folding the two
+  together withheld everything the record already knew for the length of a
+  probe that is about the picture's size. A tile does not wait on a frame
+  rate.
+  **And a sweep that abandoned an item it had already taken off the channel
+  no longer reports that it reached the end of its list** — the feeder had
+  counted it, so the count was right and "media metadata loaded" was not.
+- Enrichment must publish: `EnrichMeta` notifies in batches, and the watcher
+  paths notify **after** the read finishes — `AddFile` through its debounced
+  timer, a container through the pass that reads its members
+  (`readMembers`). Without that trailing notify the tags reach the index but
+  never the clients, and it is the second of the two notifications a watcher
+  path owes, the first being the file list.
 - **A member the set holds but cannot serve is reported, not passed over.**
   A compressed member parses without error and yields nothing, so the set
   looks exactly like a release nobody ever walked — and the question "why is
@@ -1541,8 +2079,8 @@ Frontend (`web/src`, no framework, no runtime deps):
   video playback stalls for minutes. A load that produces no image is
   remembered and retried while its cell stays on screen (`retryThumbs`,
   also called on library changes): cells are no longer re-rendered just
-  because the library changed, so without a retry one failure left a
-  permanent grey tile. Renderers must not delete the `img` on error — the
+  because the library changed, so without a retry one failure left a grey
+  tile for as long as the failure is remembered (`negTTL`, ten minutes). Renderers must not delete the `img` on error — the
   retry needs it, and it is invisible without `.ok` anyway.
 - Track titles in the album panel lose the number the file carries
   (`withoutTrackNumber`, tested): the list numbers its rows already, so every
@@ -1655,6 +2193,27 @@ Frontend (`web/src`, no framework, no runtime deps):
   (`listFilters` in `query.ts`) that the grid, the m3u export and this all
   use. The bar words every outcome of an enqueue itself, since the sheet
   and the toolbar both stand over it.
+  **A paged collection wants one version throughout** (`collectPages`,
+  `server.go`, tested). An offset names a row in a particular filtered, sorted
+  result, and this library is written to constantly by design — a download
+  bumps the version dozens of times a second, and under the default order a
+  file that merely grew moves in it. A change between two pages therefore
+  re-sorted what the offsets referred to: the m3u export and queue-all came
+  out holding one track twice and missing another, and, the running total
+  being compared against a `Total` from a later snapshot, stopping short of
+  the end (measured: 3047 collected, of which 3004 were distinct). The version
+  each page answered at is checked now, and a collection that spanned two is
+  taken again from the top — **once, and then it is taken as it stands**. One
+  retry settles the case that can be settled from up here, a single change
+  landing in the middle of a collection; a library being written to
+  continuously will move under the second pass exactly as it moved under the
+  first, and a third costs a queue-all of a large library hundreds more
+  listings, each under the library's one query lock and so in front of every
+  other request in the server, for an answer no better than the second's. A
+  page's worth of drift in a million-row queue is the cheaper wrong. The
+  proper cure is a listing that can be held open across its pages, and it
+  belongs to the library: `List` clamps a limit to 500, so no caller of it can
+  ask for a snapshot however large a page it asks for.
 - **A new file starts where *it* was left, not where the last one was.**
   Until the element has been handed this file's source, `video.currentTime`
   still reads the previous file's position — and a container the browser
@@ -1716,9 +2275,40 @@ Frontend (`web/src`, no framework, no runtime deps):
   is and the safe way to be wrong is to trim less. The answer is a property
   of the file, so it is kept in the blob database stamped with mtime and size
   like a thumbnail — 0.7 s to find, 12 ms thereafter — and an empty answer is
-  stored too, "no borders here" costing exactly as much to discover. Two viewers
-  opening one film run one detection, not eight ffmpegs: the runs are
-  deduplicated per file and each seek takes the thumbnailer's slot, and the
+  stored too, "no borders here" costing exactly as much to discover — but only
+  where something actually looked. `detectCrop` answers `(box, measured)`, and
+  that second word is load-bearing: "there are no borders here" and "nothing
+  ever measured this file" are the same empty box, and the key never changes
+  again for a stable file. Every way out that never ran ffmpeg over a real
+  frame answers false — no ffmpeg on the machine, no duration to place the
+  samples by, an archived item with no loopback address to be read through,
+  and every sample failing — and a sample counts as a look only where
+  `cropdetect` printed a box, since it prints one for a borderless film too
+  and no box means nothing decoded. An interrupted run says nothing either.
+  Before that, a first open of a freshly scanned film wrote "this film has no
+  borders" for ever with no timing being unlucky: the player asks for the
+  borders *before* the item request that reads the length. Which is also why
+  the handler runs the same `probed` every other opening handler runs — and
+  **only where `it.Duration <= 0`**, since `EnsureCodecs` deduplicates nothing
+  in flight and `probeSem` holds two, so two callers asking about one film at
+  one moment both pass its "already probed" re-check and both spawn ffprobe;
+  the player asks for the borders and for the item in the same breath, so
+  probing unconditionally cost a second process per film opened for an answer
+  the item already carried.
+  Two viewers opening one film run one detection, not eight ffmpegs: the runs
+  are deduplicated per file and each seek takes the thumbnailer's slot. **The
+  dedup hands over the answer, not a channel close** — the in-flight entry
+  carries the box and an `ok` saying the leader finished, both filled under
+  the mutex before the channel closes — because the leader used to publish by
+  *storing*, so with `-db off`, or after a `PutCrop` that failed, every waiter
+  missed in the store, found the entry already gone and ran the same four
+  seeks again, which is exactly what the dedup exists to prevent; a leader
+  marked not-ok is not inherited, the next caller leading and looking again.
+  The detection also **announces itself to the background gate** now
+  (`Library.StartStream` for the run, the way the embedded-subtitle extraction
+  does): it borrows the thumbnailer's ffmpeg slot but said nothing, so the
+  analysis pass and the tag reader ran at full rate against four seeks a
+  viewer is waiting on. The
   frame size comes from the header reading where the library has it rather
   than from ffmpeg's log.
   Applying it is a scale about the element's centre, composed into the same
@@ -1882,7 +2472,15 @@ Frontend (`web/src`, no framework, no runtime deps):
   stored (`c`/`t` prefixes in one bucket, written in one transaction).
   Pressing the button twice means "give me that link", not "give me another
   name for it", and without the reverse index the database fills with
-  synonyms for one view.
+  synonyms for one view. **A mint is one operation** (`links.mintMu`), because
+  looking for an existing code and writing a new one are two steps over shared
+  state — a bucket in the database, or the in-memory maps — so two presses of
+  the button in the same moment both missed, both minted, and the second
+  overwrote the reverse index: two codes for one view, the older orphaned and
+  never handed out again, which is exactly the filling-with-synonyms the index
+  exists to prevent. It is always taken outside the index's lock, which the
+  memory path takes inside those calls; minting is a button press, so one at a
+  time costs nothing worth measuring.
   **The item is arrival state, not view state** (`i=`, and `al=` for a
   release). `readHash` reads them and `writeHash` never writes them, because
   an overlay is not a view — the thing behind it is — and a player that
@@ -2111,6 +2709,48 @@ speak IPv4, and a set reachable only over IPv6 is not found. The fetches
 go through one client with a dial timeout and a short idle life, since a
 set that has gone away should be given up on in seconds, and no more than
 `describeAtOnce` descriptions are in flight at once on a noisy network.
+  That fan-out is a **fixed pool fed from a channel** (`describeAll`) rather
+  than a goroutine per location with a gate in front of it: how many datagrams
+  arrive is decided by other hosts, and the one thing this process can keep
+  constant is how much of itself it spends on them — measured against two
+  hundred locations, the whole process spends about forty goroutines, which
+  is the pool plus what the HTTP client keeps per connection, where a
+  goroutine apiece would have been two hundred. How many distinct
+  locations are collected is deliberately **not** capped: a cap is a guess at
+  how many televisions a network may hold, and dropping a real renderer to
+  bound a case nobody has hit on a trusted LAN is the wrong trade.
+  **A cancelled search does not hold the network open.** The receive loop
+  folded only `ctx.Deadline()` into its socket deadline, and `Discover` is
+  called from handlers, whose context carries no deadline at all — so a viewer
+  who navigated away left a socket and a goroutine per interface running, and
+  the search mutex held against the next client, for an answer nobody was left
+  to read. `endReadsWhenDone` winds the deadline forward the moment the
+  context is cancelled, which is what a read already blocked in the kernel
+  notices, and hands back its own teardown; the caller's `defer conn.Close()`
+  is registered first, so LIFO leaves the watchdog no chance to set a deadline
+  on a socket that has gone.
+  **And a discovery whose caller went away is not an answer.** The describes
+  all fail at once on a dead context, so what comes back is an empty list that
+  says nothing about the network — and stamped fresh it was authoritative for
+  the whole TTL, an empty map being as non-nil as a full one, so the house had
+  no televisions in it for a minute. Nothing is written down where
+  `ctx.Err()` is set; the next asker searches again.
+  **A losing search does not make a set unaddressable.** A reply is a datagram
+  and a description is a fetch, either of which can be lost while the
+  television goes on playing the film, and the cache was replaced wholesale —
+  so every transport command, status poll and handover for that set answered
+  "no such renderer" until the stamp went stale. `casting.known` is every set
+  this process has been told about, refreshed by each search; the picker still
+  lists only what was just found, and an id a client is already holding
+  resolves against `known`. The cost, stated plainly: a set that really *has*
+  been switched off now waits the SOAP budget (45 s for `SetAVTransportURI`,
+  8 s for a status poll) and is reported as not answering, where it used to
+  404 at once — so the player says "Opening on …" for that long rather than
+  "no such renderer" immediately. That is the better failure: "did not answer"
+  is what the viewer is told about such a set anyway, and the alternative is a
+  film that cannot be paused. `known` is unbounded on purpose — it grows by
+  the number of distinct renderers on the network, a handful, and ids are
+  derived from the UDN, so a lease change mints none.
   **The address handed over is ours on the renderer's network**
   (`LocalIPFor`, the mirror of the loopback address the library uses for its
   own reads). Loopback names a server the television cannot see, and the
@@ -2261,6 +2901,43 @@ set that has gone away should be given up on in seconds, and no more than
   not accept the file", "would not start playing it", "did not answer in
   time", naming the set, with the SOAP fault itself in the log — a fault
   code on the screen said nothing to anybody.
+  **A cast claims the set before it prepares the film, not after.** A cast is
+  four steps — the URI, the confirmation that the set took it, play, and the
+  seek — and the last two were unconditional, so a second request landing in
+  the middle had its film played and seeked by the first: one viewer's resume
+  point applied to another viewer's film. The set itself cannot be owned;
+  somebody with the remote is assumed throughout and reconciled with by
+  polling. What can be arranged is that a superseded request on *this* side
+  stops talking to it: `castClaim` hands the set to the newest request and
+  cancels whatever was driving it, every SOAP call is built on that context,
+  and the loser issues nothing further. Nothing queues — waiting behind a slow
+  set's 45-second budget would be the worse failure — and the release is
+  guarded by a generation, so an older request's own `done()` cannot clear a
+  newer claim and leave the next request with nothing to take the set from.
+  **Where the claim is taken is the whole of what it is worth.** Nearly all
+  the waiting in a cast is *above* the first SOAP call: the probe, and, where
+  the viewer chose a soundtrack that cannot be said to a set, a copy of the
+  whole film with a budget of minutes that the page never cancels once it has
+  changed its mind. Claimed at the first SOAP call, the order the slot was
+  taken in was the order the *copies finished* in and not the order the
+  gestures were made in — cast a film that needs a copy, change your mind,
+  cast another, and the second plays and releases while the first finishes its
+  copy afterwards, finds the slot free, and puts the abandoned film on the set
+  at its own resume point, minutes later. The claim wraps the preparation now;
+  the copy carries on for whoever asks next, a production having always
+  outlived the request that started it.
+  **Every step asks whether it is still the one driving**, through one
+  `castTaken`, and that includes the two that used to blame the television: a
+  supersession landing during `showing` — six seconds of polling — answered
+  "did not accept the file", which is the exact mis-report the conflict exists
+  to end, and one landing during the seek was logged at debug and then
+  answered 200 for a film this request had not put on the set. There is a
+  check after the preparation as well (a copy already on disk returns at
+  once) and a last one before the answer, since every step can succeed and
+  still be overtaken. What a superseded request is told is **409 naming the
+  set**, never a 5xx: it is not a fault of the set's, the film the viewer
+  asked for last is the one now playing, and the page's own generation guard
+  discards the answer anyway.
   **A set that has not answered has not necessarily failed.** Measured on a
   television with another session already open, the reply to
   `SetAVTransportURI` did not come inside any budget worth waiting on —
@@ -2732,6 +3409,26 @@ re-queues grid thumbnail fetches. Keep this hierarchy in mind when adding any
 background I/O — on cold start (scan + enrichment + cold thumb cache) the
 disk is the bottleneck and playback must win.
 
+**The gate is held across the wait, not only the delivery.** A rewrap is a
+read of the whole film at disk speed with a viewer sitting in front of a
+percentage, and marked only once the file was open that whole stretch looked
+to the background work like an idle machine — a hover sheet or a tag pass
+going to the same disk. It is held on the request route (`handleRemux`) and
+in cast preparation, which is the one route where no delivery is in flight
+meanwhile to hold it instead; a production nobody is waiting on is still
+unmarked, since it outlives the request that started it. Two other things
+that race a viewer's own playback say so now where they used to say nothing:
+the border detection, which borrows the thumbnailer's ffmpeg slot, and the
+watcher's own debounced reads, which stand down for `Library.Streaming` like
+the sweep does — bounded, since they hold a process-wide slot while they
+wait (`enrichBusyWait`). The caption extraction already marked it and still
+does; what changed there is only that it no longer runs on the context of
+whoever asked first. Every one of
+those releases is a `defer`: a stream count that is never given back reads as
+"something is playing" for the life of the process, which is thumbnails
+collapsed to one job, enrichment paused and every hover sheet refused, for
+ever.
+
 **One library, several faces** (`internal/server/content.go`). A request
 carrying `X-Media-Content: music` (or `videos`, or `images`, or a
 comma-separated combination) is shown that and nothing else: not in listings,
@@ -2882,6 +3579,25 @@ command line, which seeds a first run rather than being the setting; with
 `/api/prefs` reports `persisted: false` rather than letting it look permanent.
 Directories nested inside another on the list are dropped (the enclosing one
 already walks them, and every file under one would be a duplicate of itself).
+
+**One change of the directories at a time**, and the serialization is in two
+places because the change is. The callback is several mutations of global
+state in a row — the stored list, the live list, the watches, a scan — and the
+comment saying "all of that is one operation" was true of one caller only:
+two PUTs interleaved could leave the database naming one set of directories
+while the index walked another, which nobody sees until the next restart
+quietly puts the other set back, and the dialog is then answered with the list
+that lost. There being no authentication here, there is no reason two clients
+cannot ask together. `main`'s `prefsMu` spans the two stores and the scan
+launch, and `Server.rootsMu` spans the callback and the read of the answer, so
+a request cannot report the set the other one applied; both are held for a
+short time, the scan itself being launched on a goroutine, and both are given
+back before the answer is written out. `watcher.Reset()` moved **inside** that
+queued scan, under the same `scanGate` the walk takes: done before it, a walk
+already running went on installing watches under the removed root behind the
+reset, and nothing ever took those away again — which is also why `AddDir`
+now refuses a path outside the roots, for the settle timers that cannot be
+reached this way.
 **A caller confined to part of the library is refused the preferences
 outright**, reading as well as writing. Changing them is the obvious half —
 it is the one call that could hand somebody the whole disk — but reading them
@@ -2987,7 +3703,10 @@ Serving details worth knowing before "fixing" them:
   the background-work gate. `HLS.run` re-ran ffmpeg into a directory still
   holding the failed attempt's segments, with no `-y`, so the retry that
   fires precisely when the engine died part-way was defeated by its own
-  leftovers: `clearSession` empties it first. `watchFirst` starts once per
+  leftovers: `clearSession` empties it first — and for that reason the whole
+  retry is refused where the last attempt left a segment behind, since
+  emptying the directory then deletes a prefix the waiters have already been
+  let through to (see the sessions above). `watchFirst` starts once per
   session rather than once per attempt, and the plan is closed before the
   next attempt so an abandoned repair pipe is killed rather than left
   blocked for the whole of the next conversion. The aspect retry is gated
@@ -3001,7 +3720,33 @@ Serving details worth knowing before "fixing" them:
   `haveFilter` memoises only a probe that succeeded: one transient failure
   of `ffmpeg -filters` used to disable the tone-map for the life of the
   process, which is the unplayable-HDR fault this whole file exists to
-  end.
+  end. **The reading happens with nothing held.** That lock is the process's
+  only gate on what a binary was built with and every conversion plan for a
+  wide-colour film comes through it, so reading `ffmpeg -filters` inside it
+  made the slowest binary on the machine the speed of all of them at once —
+  and because a reading that fails is deliberately not remembered, that queue
+  was paid afresh by every later HDR conversion rather than once; a binary on
+  a mount that had stopped answering held it for as long as the mount did. The
+  first asker registers the reading, runs it with nothing held and publishes
+  what came back, and anyone arriving meanwhile waits for that reading rather
+  than starting a second beside it; a waiter whose reading came back with
+  nothing is told no, the question having just been asked and answered "cannot
+  tell", and the next request looks again, which is what "asked again next
+  time" has always meant here. **The publish is deferred, and that is not
+  tidiness**: the follower's only way out of the wait is the leader closing
+  the channel — `haveFilter` is asked in the middle of planning a conversion
+  rather than on behalf of one request, so unlike the border detection's
+  follower it has no context to leave by — and a reading that did not return
+  normally would leave the channel open and every later asker for that binary
+  waiting on it for the life of the process, a panic here being survivable at
+  the cost of one connection, which is exactly what lets the leak outlive the
+  fault. `readFilters` bounds the reading with `hwProbeBudget`, the hardware
+  proof's own twenty seconds — it was the only child process in the package
+  with no context and no deadline — and sets `WaitDelay`, since `Output()`
+  waits for the pipe as well as for the child and a grandchild holding that
+  pipe open outlives the kill; here what it outlives is a reading everybody
+  else is queued behind. A budget that expires is a failure like any other and
+  is still not written down.
   Four backends are defined — VAAPI, QSV, NVENC, VideoToolbox — and **only
   VAAPI has been measured**. That is safe because of how one is chosen: each
   is *proved* by running a real conversion through it before it is ever used,
@@ -3128,6 +3873,29 @@ Serving details worth knowing before "fixing" them:
   cannot be read twice, a timeout or an unparsable document all leave the file
   exactly as it was, because being wrong the other way costs a film every
   frame re-encoded.
+  **One film is looked at once** (`reorderCache.claim`/`settle`, the
+  leader/follower shape the border detection and the caption extraction
+  already use). It was a bare check-then-act with a twenty-second ffprobe
+  between the miss and the write, and opening a film asks it from several
+  places at the same moment — the item endpoint, and behind it the rewrap or
+  the first playlist — so the same opening was read two or three times over,
+  against the disk the playback it is preparing is about to read from, with
+  the same line logged once per asker. A second asker waits for the first;
+  where the first came back with nothing the second looks for itself, that
+  silence belonging to whoever asked with the budget that ran out and not to
+  everyone behind them. What that costs is the opposite of what it saves and
+  is worth stating: unanswered looks are serialized, the follower running its
+  own twenty seconds after the leader rather than beside it. Every waiter
+  leaves on its own `ctx.Done()`, so nothing waits longer than its caller
+  allows — on `/api/remux` and `/api/hls` that is the client's own context —
+  and an answered look, the ordinary case, releases every follower at once
+  with the verdict. The serialized case is reachable only where the ffprobe
+  hangs on this file (no ffprobe, a pipe-only view and an unparsable document
+  all return immediately), which is precisely when one probe per asker against
+  the disk the playback is about to read from is the more expensive way to be
+  wrong. The look settles from a **defer** (`Server.look`), for the reason
+  `haveFilter` publishes from one, and its ffprobe carries `WaitDelay` for the
+  reason that reading does.
   It is applied at **all three places a picture is copied** — the rewrap
   (which answers 404, the thing the player already acts on), the piped
   soundtrack conversion, and the segmented one. The client cannot make this
@@ -3265,7 +4033,35 @@ Serving details worth knowing before "fixing" them:
   time it was started. Callers wait on their own context; the work carries on
   for whoever asks next. What is written is scratch — reproducible in seconds,
   so the database stays the one thing worth keeping or deleting.
-  `Remuxer.Close` cancels the rewraps still being written, so a restart does not leave an ffmpeg filling the scratch space behind it. Both converters share one working space and one budget (`scratch.go`,
+  `Remuxer.Close` cancels the rewraps still being written, so a restart does not leave an ffmpeg filling the scratch space behind it. **A copy is stoppable
+  from the moment it is published**: the context and its cancel are made in
+  `File`, under the lock and before the entry goes into the map. Published
+  first and cancelled later — which is what it was, the cancel being set by
+  the goroutine that may not have been scheduled yet — the map held a rewrap
+  with no cancel on it, exactly what `Close` skips, so a shutdown landing
+  there emptied the map and returned while ffmpeg went on copying a film into
+  the scratch directory under a context nothing would ever cancel, the one
+  thing `Close` exists to prevent. **And a copy that lands at shutdown is
+  kept, and is not offered**: folding "closed" into "failed" without recording
+  it released the waiters with a nil error and the path and then unlinked the
+  file, so the caller was handed a film being deleted underneath it and a
+  finished copy the next run's `Adopt` would have reused was destroyed after
+  costing the whole length of the film. The waiter is told `ErrNoRemux` — this
+  Remuxer no longer holds the entry, so nothing would keep the file from being
+  pruned under the response — and the file is left where it is, keyed by the
+  source's identity, for the next run to adopt.
+  **Copies in flight count towards the budget** (`Remuxer.pending`). Room was
+  reserved against the finished total alone, which a rewrap only joins once it
+  has finished, so two admissions in the same minute each measured a total
+  that left the other out: measured against a 10 MiB budget with two evictable
+  copies of 3 MiB on disk, the directory reached 12 MiB where counting what is
+  coming frees one of them and stays at 9. `File` prunes against the finished
+  total plus what is being written plus this film, and `produce` gives the
+  reservation back under the lock as it settles the books. What is still not
+  counted is what the segmented converter holds of the same shared budget —
+  `Scratch` has no total to ask for, only `Excess()`, which reads 0 in exactly
+  the case that matters.
+  Both converters share one working space and one budget (`scratch.go`,
   `-tmp` and `-tmp-max`), because the disk is one disk: each reports what it
   holds, asks whether the two of them are over, and frees its own least
   recently wanted. A finished rewrap is counted, and the budget pruned,
@@ -3273,7 +4069,16 @@ Serving details worth knowing before "fixing" them:
   its film ready and asked for the next one at once raced the accounting,
   and the older file was still on disk a moment after the newer one was
   there. The entry cannot prune itself — only finished files are candidates,
-  and it is not finished until `done` closes.
+  and it is not finished until `done` closes. That pruning **unlinks under the
+  lock**, deliberately: deferring the unlinks until after it — the shape the
+  segmented converter's accounting uses — would open a window in which a new
+  `File` for the same key re-creates the entry and starts writing the same
+  path, the name being derived from the item's identity rather than from the
+  entry, and the deferred unlink would then delete the copy that had just been
+  renamed into place. Holding the lock is what makes the removal atomic
+  against a new admission, and what it holds it for is a handful of `unlink`
+  calls: `File` refuses any source larger than the whole budget, so the
+  multi-gigabyte prune cannot arise.
   A source larger than the whole budget is left to the
   segmented converter, which holds only what it has produced so far; a
   segmented session larger than the budget on its own is left alone rather
@@ -3392,6 +4197,93 @@ Serving details worth knowing before "fixing" them:
   and work tied to the first request would be dead before the second. Live
   sessions are capped (least recently asked-for evicted), reaped after going
   quiet, and removed with their directories on shutdown.
+  **Whether a conversion produced anything is a question about the disk, not
+  about the ready gate.** The gate is opened by a watcher on a 150 ms tick, so
+  a run that wrote its first segment and died a few milliseconds later was
+  judged by whichever got there first: the error recorded, every waiter
+  answered 503, and `forget` removing a directory holding a prefix a player
+  could have started on. `hasSegment` — the segment the playlist names,
+  present on disk — is the one test now, and `failIfEmpty`, the hardware retry
+  and the watcher all ask it; `playable` is kept for what it always was, the
+  question about the gate, and the two are named apart in the comments.
+  `hasSegment` refuses an empty directory outright, since joined onto the
+  playlist's name that asks about `./index.m3u8`, which is whatever sits in
+  the process's working directory.
+  The opposite mistake sat one line along. A run the context *stopped* — the
+  converting cap taking its slot, the reaper giving up on it, shutdown —
+  records nothing of its own, because `attempt`'s whole error block stands
+  down while the context is done, so the gate used to open with no error at
+  all on a session that had written nothing: the waiters were told it was
+  ready and handed a playlist nothing had written, and with no failure
+  recorded the entry stayed in the map and answered every later ask for that
+  film at that resume point the same way for the life of the process — the
+  poisoned key `forget` exists to prevent. `run` records a failure before
+  opening the gate wherever nothing playable exists: the context's own error,
+  else "the conversion produced nothing".
+  **A verdict is recorded once**, as the gate is opened once. That sentence is
+  the last word and not the first: the attempt that died records what ffmpeg
+  actually complained of, and `failIfEmpty` stands down where a verdict is
+  already written, or every failure a viewer was shown read "the conversion
+  produced nothing" whatever had really stopped it. `fail` and `finish` have
+  always been decided-once; this is the same rule in the place that had
+  stopped being.
+  **A retry begins by wiping what the last attempt wrote**, so it is only ever
+  worth having where that was nothing. An attempt that had let its waiters
+  through to a segment and then learnt something — the aspect refusal, the
+  graphics engine written off — could have that segment deleted under them,
+  and the gate being already open meant nothing recorded a failure and
+  `forget` never ran: the key then answered for that film at that resume point
+  with an empty directory for good. The test is in `run`, before the clear,
+  rather than in either retry branch, so every retry comes through it whatever
+  taught it something and a third branch added later inherits the guarantee.
+  The aspect verdict is still *noted* where it is learnt, so a later
+  conversion of the same film starts through the repair; it is only the wipe
+  that is refused. **And the aspect verdict is read once per attempt**: it is
+  process-wide and the thumbnailer writes it too, so a tile of the same film
+  noting the repair between this run's plan and its failure refused the retry
+  that would have worked. `attempt` reads it into a local before planning
+  (`startOverWithAspect`, shared with the piped converter and tested on its
+  own) and the retry asks what *this* run actually did.
+  **The scratch figure is summed from the sessions that are live when it is
+  written** (`reportLocked`, off a `bytes` kept on each session), never from a
+  snapshot total taken before the lock was dropped. Published only from the
+  reap ticker, it was never written at all for a conversion that finished
+  inside one 30 s tick — reap returns the moment its session stops converting
+  — and with nothing converting anywhere it stood still at whatever was last
+  measured while the disk went on filling. It is written now wherever what is
+  held changes: the end of a run, an eviction, a forget. That also settles the
+  lost update between two accountants, the one whose snapshot was older
+  overwriting the other's corrected total with a figure that still counted
+  sessions it had since evicted — and the Remuxer prunes its own rewraps on
+  that same shared figure. What `reportLocked` sums is what each session was
+  last *measured* to hold, which is a moment stale by nature and is nothing at
+  all for a session younger than its reaper's first tick, so a caller that can
+  afford a measurement takes one: `forget` calls `account` after the discard,
+  measured rather than merely reduced, or a failed conversion would leave the
+  budget told that a conversion writing to the disk right then was not there.
+  A ReadDir per session is what a failed conversion can afford and what a
+  segment request cannot, which is why the measuring is where it is.
+  **Eviction compares the session, not the key.** A key vacated and taken
+  again while the directories were being read left the guard satisfied by the
+  newcomer, which was then deleted from the map on the strength of its
+  predecessor's age and bytes — a live conversion, still reachable by its
+  token, that no later measurement could see, no reaper managed and `Close`
+  never cancelled. `dropLocked` removes a session only from the entries that
+  still name it, in both maps, and the reaper's own liveness test compares
+  identity too. `forget` has always done this; this is the same test in the
+  places that missed it.
+  **And HLS gained the `closed` flag the Remuxer has always had.** A session
+  created after the shutdown snapshot is one nothing can cancel — its context
+  hangs off `Background` and both maps holding it have been emptied — so its
+  ffmpeg outlives the process and writes into a scratch directory nothing
+  sweeps until a later run's `Adopt`. `session` checks on both sides of the
+  out-of-lock directory work and answers `errHLSClosed`, cancelling and
+  removing what it had prepared. `discard` also hands back what it could not
+  remove rather than dropping it: `cancel` only *signals* the ffmpeg, so a
+  directory can gain a segment between the readdir and the rmdir, and what is
+  left then is a directory no session names any more. Both callers log it —
+  `account` and `forget`; `Close` removes its own directories rather than
+  coming through here.
 - **Every handler that serves an opening probes the same way** (`probed`,
   `server.go`): the soundtracks, the embedded captions and the codecs come
   from the probe `EnsureCodecs` runs, and the subtitle listing, the cast, the
@@ -3508,7 +4400,25 @@ Serving details worth knowing before "fixing" them:
   reopen, which is every seek, and the shift is arithmetic applied to the
   cached cues. It is **deduplicated**, a second ask waiting on the first
   rather than reading the film beside it. And it is **counted as
-  streaming**, since the read races the viewer's own playback. Everything
+  streaming**, since the read races the viewer's own playback.
+  Two more follow from the same cost. The read **belongs to no request**: the
+  `<track>` is re-pointed on every seek, so the fetch in flight is abandoned,
+  and tied to that request the whole demux went with it having admitted
+  nothing — each seek threw away a pass over gigabytes and began another, and
+  a large film seeked through never finished one. The ask now starts a reader
+  on a context detached from the requester (the existing `embSubTimeout` still
+  bounds it), the asker waits on it, and the outcome — data or error — is
+  published on the in-flight entry before it is closed, so a waiter can tell a
+  failure from a wait; the entry is still deleted, so a later ask is a fresh
+  attempt rather than a cached refusal. And it **takes a slot of its own**
+  (`embSubReaders`, 2): this is the one ffmpeg in the package that reads the
+  *whole* container and the only one that had no bound of any kind, so two
+  asks for different streams were two unbounded passes over gigabytes at once,
+  beside the playback they are for. Two rather than one so a second viewer
+  does not wait out a 4K demux, and a slot of its own rather than the
+  thumbnailer's, which one extraction could hold for the whole of
+  `embSubTimeout` — four minutes of no tiles and no border detection.
+  Everything
   downstream is a sidecar's path: the same WebVTT out, the same SRT for a
   television, the same `?shift=` — whose parser takes ffmpeg's hour-less
   timestamps as readily as a sidecar's full ones.
@@ -3522,7 +4432,31 @@ Serving details worth knowing before "fixing" them:
 - **Shutdown cuts transfers in flight.** `httpSrv.Shutdown` is given five
   seconds, so restarting the server ends any download that is running. That
   is worth knowing before reading a truncated transfer as a bug: check the
-  restart times first.
+  restart times first. **Running the budget out is ordinary, and is said so**:
+  `Shutdown` waits for active requests and does not cancel their contexts, and
+  `handleEvents` blocks until its own request context is done, so a single
+  browser left open on the library holds the drain for the whole five seconds.
+  The line is logged at Info rather than Warn — it is what explains why an
+  exit took five seconds, not a report of a fault. Cancelling request contexts
+  from a wrapper in `main` would end the event streams promptly and would also
+  cut a film mid-transfer at the first instant instead of the fifth second,
+  which is the worse trade.
+  **The drain used to wait on this process's own reads.** For archived content
+  the converters' ffmpeg reads its input from this server's `/api/stream`,
+  which is an ordinary in-flight request and exactly what `Shutdown` waits for
+  — so the drain was waiting on work that only the code after the drain would
+  release, and spent its whole five seconds whenever an archived film was
+  being converted with nobody watching it. The **rewrapper** is therefore
+  closed before the drain, the defer left as an idempotent backstop: a copy
+  still being written is unplayable in any case and `Close` takes its `.part`
+  with it, so ending it early costs a viewer nothing. The **segmented
+  converter is deliberately not**: `HLS.Close` deletes the directory of every
+  session still converting, and during the drain a viewer's player is still
+  asking for segments out of it, so closing it first answers them 404 for the
+  five seconds they would otherwise have played. What that wants is the
+  session's ffmpeg ended with its files kept — `hlsSession.stopConverting`,
+  which has no exported way in — so until there is one, a converting archived
+  film still spends the drain's budget.
 - With `-debug` every request is logged as it finishes (`access.go`): method,
   path, status, bytes sent, duration, and the range that was asked for. That
   log answers the one question no other hop in the chain can — how much of
@@ -3594,7 +4528,61 @@ Serving details worth knowing before "fixing" them:
   therefore report a canceled request *as* cancellation and not fold it into
   ErrNoThumb. The grid cancels routinely (a recycled cell, an overlay taking
   the screen), so getting that wrong turns one badly timed scroll into a grey
-  tile that lasts as long as the process. Images are pure Go
+  tile that lasts as long as the process.
+  **The failure memory has a lifetime** (`negTTL`, ten minutes; `neg` is a map
+  of key to time and `recentlyFailed` forgets an entry past it). It is a
+  retry-storm guard and not a verdict: the grid re-asks for every failed tile
+  on every change to the library, which is every few seconds while anything is
+  being written, so the memory has to be there — but it must not outlive its
+  reason. A mount that stops answering fails every item under it at once (EIO
+  out of `OpenItem` for a still, no frame at all for a film, neither of them a
+  cancellation), and nothing in the key changes when the disk comes back: the
+  files played again, as the index deliberately keeps them, while their tiles
+  stayed grey until a restart.
+  **The answer is published before the entry saying somebody is working on it
+  is dropped.** The other order left a window — a few instructions for a
+  failure, a bolt `Batch` with an fsync in it for a success — in which the
+  store held nothing, the negative cache held nothing and the in-flight map
+  held nothing, so a request arriving inside it led a second full generation
+  of a key that had just been answered: an ffmpeg seek, or ten of them over a
+  volume set, beside whatever is playing. The embedded-subtitle dedup one file
+  along has always done it this way.
+  **One budget per item, not one per attempt.** A plain video's tile takes
+  `plainThumbItemTimeout` (60 s) once, after the ffmpeg slot, with the
+  per-seek `plainThumbTimeout` (30 s) hanging off it — four offsets and the
+  repair behind them each opened a fresh thirty seconds, so a single tile could
+  hold half this process's ffmpeg capacity for two and a half minutes, in an
+  app whose priority order puts thumbnails below the playback they take the
+  disk from. The archived path has always had one. **The still generations get
+  a budget too**, and they are the ones with no process for a deadline to
+  kill: an image and a soundtrack's artwork run under the single background
+  slot while anything is playing, so one slow read held every other tile and
+  every scrub sheet in the process. Both are wrapped in `stillThumbTimeout`
+  (60 s) and `encodeResized` reads through a `ctxReader`, since `io.ReadAll`
+  consults nothing. What that bounds is the *slow* read and not the wedged one
+  — a read already blocked in the kernel returns when it returns, and nothing
+  inside a process can say otherwise; the comment states that limit rather
+  than claiming a cure.
+  **And every one of those budgets is reported as a deadline, never as a
+  verdict.** The keys these things are written under never change again for a
+  stable file — `(id, mtime, size, width)` for a tile, served immutable for a
+  year — so anything a run that ran out of time writes down is permanent and
+  out of reach of everything short of deleting the database. Four generators
+  were folding an expiry into "nothing here": `fromAudio`, which keeps no
+  error from the embedded picture or any cover candidate (rightly, a cover
+  that will not decode being no reason to stop looking at the rest of the
+  directory) and answered a bare `ErrNoThumb`, so once it had a budget that
+  became a negative-cached verdict on the release; the aspect-repair copy
+  (`repairedFrame`), which reported its own thirty seconds as "no frame" and
+  wrote the film off for the run, where a copy that merely *failed* still
+  answers nothing at all, that being a property of the file;
+  `fromArchivedVideo`, which tested the budget before the sentinel, so
+  `errSeekProducedNothing` — which means nothing outside that file — was being
+  cached as a verdict on the member, and a frame that arrived just as the
+  budget expired was thrown away; and `makeSprite`, below. Each answers a
+  wrapped `DeadlineExceeded` now, which is what `runFrame` has always
+  answered, and which keeps the result out of both the store and the negative
+  cache. Images are pure Go
   (EXIF orientation via the minimal parser in `exif.go` — orientation formulas
   are covered by tests); video frames require `ffmpeg` on PATH (optional at
   runtime, present in the Docker image) and go through a temp file because
@@ -3668,6 +4656,16 @@ Serving details worth knowing before "fixing" them:
   names the parameter in every wording; every other way a conversion can
   die is left alone, or an unreadable file would be copied through a repair
   for ever.
+  **But whether *this* attempt went through the repair is the attempt's own
+  memory, not the shared verdict.** The verdict is process-wide and the
+  thumbnailer writes it too, so a tile of the same film noting the repair
+  between this run's plan and its failure answered the guard for us: the one
+  start-over that would have worked was refused because somebody else had
+  already noted what we were about to note, and the viewer was told the
+  conversion had failed over a film the very next request converted. Both
+  converters seed a run-local `repaired` from the verdict once and never
+  re-read it, and the decision is one function
+  (`startOverWithAspect(stderr, repaired, canRepair)`, tested on its own).
   Whether a frame came out decides the outcome, not ffmpeg's exit status:
   it exits 0 having written nothing when the seek overran its input, and
   non-zero once the frame is safely out when a piped prefix ends under it.
@@ -3741,6 +4739,19 @@ Serving details worth knowing before "fixing" them:
   timestamp — the client derives each frame's moment from the duration
   alone. That takes a **slot per offset**: appending only the frames that
   came back did exactly that shift, and `tileSprite` is tested with a gap.
+  **The sheet reads its own budget, not only the viewer's** (`spriteTimeout`
+  90 s, `archiveSpriteTimeout` 3 min, both vars now so a test can shorten
+  them, as `plainThumbTimeout` already was). An expiry part way through the
+  ten seeks used to come out as whatever had been gathered: with a frame or
+  two, a sheet whose remaining cells are painted black, stored and served
+  immutable; with none, `ErrNoThumb`, remembered as a failure. Both answer a
+  wrapped `DeadlineExceeded` now — but **only where the sheet is short of a
+  frame**, since an expiry landing on or just after the tenth seek has cost
+  nothing and refusing there would spend all ten seeks again on the next
+  hover. The per-frame `spriteFrameTimeout` is deliberately still allowed to
+  leave a gap: a black cell is older, not wrong, where refusing the sheet
+  would redo ten seeks for ever on any film with one moment the disk was slow
+  over.
   `spriteFrameWidth` is 320 because the sheet is now what a **hover preview**
   animates, not only what the seek bar shows in a corner, and 160 upscaled to
   a grid tile is a smear. `spriteCacheWidth` moved with it: it is a slot in
@@ -3808,12 +4819,41 @@ Serving details worth knowing before "fixing" them:
   there is one file to back up and one file to delete for a clean slate. It
   is held in memory (both hot paths want it there: `Get` as playback starts,
   `All` served whole to the client) and flushed debounced, writing only the
-  ids that changed since the last flush in one transaction; `Flush()` is
-  called on shutdown. With `-db off` there is nowhere to put them, so they
+  ids that changed since the last flush in one transaction. With `-db off`
+  there is nowhere to put them, so they
   last the run and are not written down — a JSON file beside the database
   would be the second store this arrangement exists to avoid. Positions are
   the owner's data, not the file's: no `(mtime, size)` stamp, and `Prune`
   drops them only for items the index no longer has.
+  **The last flush looks again.** `Flush` clears the dirty set before its
+  transaction on purpose: a position saved while the commit is in flight
+  belongs to the next flush. At shutdown there is no next flush, so that write
+  — the last position of the last thing played — was simply dropped. `Run`
+  ends with `flushFinal`, which writes and looks again while anything remains,
+  bounded by `finalFlushRounds` (3: two rounds to settle what it is for and
+  one of slack). The bound is the point — a database refusing every write
+  re-marks what it could not save, and an unbounded loop would hold the
+  shutdown open for as long as the disk stayed broken, which ends in the
+  process being killed rather than stopped, losing more than the write it was
+  waiting on.
+  **A failed flush no longer resurrects a superseded removal.** `Flush` clears
+  its maps and lets go of the lock before its transaction, so while the
+  removal of an item is in flight the owner can start playing that item again.
+  The recovery put back everything it had taken, which left the id in `dirty`
+  and `removed` at once — a state no other path here can produce — and the
+  next flush then asked the database to write the record and delete it in one
+  commit. `restore` honours what happened meanwhile: a removal whose id has
+  since been marked dirty is dropped. The other direction needs no guard, and
+  the reason is `Flush`'s own existence check — a put whose record has since
+  been deleted is skipped there and never reaches the write.
+  The store writes through a **one-method `writer` interface** rather than
+  holding the database directly, and that is for the failure path: what it
+  does when a write fails, and what it does about a position saved while that
+  write was in flight, is precisely the behaviour that was wrong, and a
+  database that works cannot be made to exercise it. The nil check in `Load`
+  moved out of the struct literal with a note — a nil pointer placed in an
+  interface field is an interface that is not nil, and every "no database"
+  test would then take the writing path and dereference nothing.
 - The database also carries an **epoch**, minted when the file is created
   (`blob.initEpoch`) and served by `GET /api/info`. The client puts it in
   every thumbnail and sprite URL. Without it, deleting the database changed
@@ -3855,6 +4895,46 @@ mechanical rule: node resolves imports exactly as written, so a module the
 tests load may only *runtime*-import with an explicit `.ts` extension
 (`allowImportingTsExtensions` is on for tsc); type-only imports erase and
 need nothing.
+
+## Testing an ordering, which is not testing a race
+
+A concurrency fault cannot be pinned by throwing goroutines at it: a test that
+only *usually* fails against the unfixed code is a test that has quietly
+stopped protecting, and two of the first stress tests written here went green
+against the code they were meant to catch, one of them needing a hundred and
+fifty runs to fail once. So each one holds one side still instead.
+
+Where the window is a moment between a read and a write, the window is opened
+on purpose. `enrich.go` carries two seams, `afterRead` and `beforeWrite` —
+nil in production, called before any lock is taken — which are the two moments
+every guard there exists to close: between reading a file and asking whether
+it is still that file, and between that answer and the write itself. They are
+two rather than one so a test can open exactly the one it is about; a
+download finishing inside either is otherwise a once-in-a-thousand-arrivals
+affair, and a guard deleted along with its seam would leave a test passing for
+having tested nothing. `analysisTimeout` and `plainThumbTimeout` and their
+neighbours are vars for the same reason — a budget spent up front is how a
+test proves that running out of time is not a verdict — and `probeFilters`,
+`casting.discover` and the state store's `writer` interface stand in for a
+child process, a network and a database that works, none of which can be made
+to fail on command.
+
+Where the claim is about a **lock scope**, which cannot be observed from
+outside at all, the test takes the lock the slow work would be waiting on,
+sets the slow work going, and samples whether the lock that must have been
+released still is. The sampling is one-sided — with the scopes right the
+sampled lock is never taken, with them wrong it is taken within microseconds
+— but a handshake before the call proves only that the goroutine reached the
+*call*, and one descheduled for the length of the window leaves the sampler
+watching a lock nobody was going to take: a false pass, and a silent one.
+`waitParkedIn` therefore opens the window only once the runtime's own account
+of where every goroutine is shows one parked inside the function under test,
+and fails if none ever is. That dump is the only rendezvous available; a mutex
+tells nobody it has waiters.
+
+And every fix on this branch was checked by reverting it and watching its test
+go red. That is the only evidence that a test of an interleaving tests
+anything, and it is worth repeating for the next one.
 
 ## Server-complete, UI-pending
 
