@@ -535,7 +535,8 @@ type ffprobeResult struct {
 // set, across as many volumes as the header spans, off a disk that may be
 // busy with playback — hence the longer ceiling. A request-scoped caller
 // passes its own, shorter deadline and gets the process killed with it.
-const (
+// Variables rather than constants only so a test need not wait a ceiling out.
+var (
 	ffprobeTimeout     = 30 * time.Second
 	ffprobePipeTimeout = 60 * time.Second
 )

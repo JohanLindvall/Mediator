@@ -2,6 +2,7 @@ package library
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -198,6 +199,107 @@ var enrichQuiet = 2 * time.Second
 // disk is one disk.
 var enrichSlots = make(chan struct{}, enrichWorkers)
 
+// enrichBusyWait bounds how long one of those reads stands down for playback.
+var enrichBusyWait = 30 * time.Second
+
+// standDownForPlayback waits for the disk to stop serving a film before the
+// watcher's read of a file goes ahead.
+//
+// Enrichment sits below playback in this app's priority order and the
+// background sweep yields to exactly that; the watcher's own reads asked
+// nothing at all, and they had no excuse — the gate the sweep is handed is a
+// callback main assembles, but its playback half is Library.Streaming, which
+// is a method on the library and needs no plumbing whatever.
+//
+// It is bounded where the sweep's wait is not, and for a reason the sweep
+// does not have: this waiter is holding one of the handful of process-wide
+// slots above, so an evening's viewing would stop the watcher reading
+// anything at all rather than merely reading it later. What going ahead costs
+// is one file's tag read or one probe against a film that has been playing
+// for half a minute; what waiting for ever costs is a library that never
+// learns what arrived while somebody was watching.
+func (l *Library) standDownForPlayback() {
+	deadline := time.Now().Add(enrichBusyWait)
+	for l.Streaming() {
+		left := time.Until(deadline)
+		if left <= 0 {
+			return
+		}
+		time.Sleep(min(500*time.Millisecond, left))
+	}
+}
+
+// enrichCutShort remembers a file whose probe was killed by a ceiling of
+// ffprobe's own, for the run and keyed by identity — the same shape of memory
+// the converters keep of a declaration ffmpeg refused, and with the same
+// rule: a file replaced on disk is a different key, and a restart judges it
+// afresh at the cost of one attempt.
+//
+// Being stopped is not a fact about the file, so nothing may be written down.
+// But neither can the file simply be left to the next pass: needsEnrich stays
+// true, and every listing page holding it asks for it again through
+// EnrichSoon — which on a disk that has gone slow is half a minute of ffprobe
+// per page for the life of the process, four workers wide. Marking it
+// examined instead is not available: that flag is persisted and restored, so
+// it would be exactly the permanent wrong verdict this file exists to
+// prevent. One attempt per file per run is the middle ground — this process
+// lets it alone, the next start gets to try, and a disk that has come back is
+// read properly.
+type cutShortMemory struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+var enrichCutShort cutShortMemory
+
+// cutShortKey is a file's identity for what is remembered about it in this
+// process: the id, and the size and time that change when the file does.
+func cutShortKey(it Item) string {
+	return it.ID + "|" + strconv.FormatInt(it.ModTime, 10) + "|" + strconv.FormatInt(it.Size, 10)
+}
+
+func (c *cutShortMemory) note(it Item) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		c.seen = map[string]bool{}
+	}
+	c.seen[cutShortKey(it)] = true
+}
+
+func (c *cutShortMemory) has(it Item) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.seen[cutShortKey(it)]
+}
+
+// afterRead and beforeWrite are the two windows the guards below exist to
+// close, and they are two rather than one so that a test can open exactly the
+// one it is about. afterRead is the moment between reading a file and asking
+// whether it is still the file that was read; beforeWrite is the moment
+// between that answer and the write itself, which is where the check and the
+// write being two turns of the lock lets a replaced file wear the old bytes'
+// reading after all. A download finishing, or a release replaced, in either
+// of them is what puts one file's reading onto another file. Both are nil in
+// production and set only by a test, that being the one way to make the
+// window happen on purpose rather than once in a thousand arrivals.
+var (
+	afterRead   func(id string)
+	beforeWrite func(id string)
+)
+
+func readWindow(id string) {
+	if afterRead != nil {
+		afterRead(id)
+	}
+}
+
+func writeWindow(id string) {
+	if beforeWrite != nil {
+		beforeWrite(id)
+	}
+}
+
 // enrichAfterQuiet enriches one item once its file has stopped changing.
 //
 // The watcher calls this for every Create and Write it sees, and a file
@@ -242,6 +344,7 @@ func (l *Library) enrichAfterQuiet(id string) {
 		// rather than putting a reader per file on the disk (enrichSlots).
 		enrichSlots <- struct{}{}
 		defer func() { <-enrichSlots }()
+		l.standDownForPlayback()
 		l.enrichOne(context.Background(), id)
 		l.notify()
 	})
@@ -252,6 +355,7 @@ func (l *Library) enrichAfterQuiet(id string) {
 // snapshot was read from. Identity here is what upsert compares and what the
 // metadata cache is keyed by: the size and the modification time.
 func (l *Library) unchangedSince(id string, snap Item) bool {
+	readWindow(id)
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	it, ok := l.items[id]
@@ -275,6 +379,19 @@ func (l *Library) keptReading(id string, snap Item) bool {
 	}
 	if it.ModTime != snap.ModTime || it.Size != snap.Size {
 		it.forgetContent()
+		// What the container declares is not the file's to forget:
+		// upsertStored puts it back after its own forgetContent for the same
+		// reason, and neither setMeta nor setProbe may restore it
+		// (declaresDuration), so a DVD title or an archived member caught
+		// here would show no playing time at all until the next full rescan.
+		if it.declaresDuration() {
+			it.Duration = it.stored.durationMs
+		}
+		// And forgetContent changes what is persisted. The write that marked
+		// this item dirty a moment ago may already have been flushed, taking
+		// the dirty bit with it — without this the polluted record survives
+		// the restart, which is the whole of what is being prevented here.
+		l.markDirty(id)
 		return false
 	}
 	return true
@@ -286,9 +403,45 @@ func (l *Library) applyReading(id string, snap Item, tm tagMeta, p Probe) bool {
 	if !l.unchangedSince(id, snap) {
 		return false
 	}
+	writeWindow(id)
 	l.setMeta(id, tm, p.DurationMs)
 	l.setProbe(id, p)
 	return l.keptReading(id, snap)
+}
+
+// markEnrichedIf records that an item's metadata has been looked for, and
+// only where the item is still the file that was looked at.
+//
+// The compare and the write are one turn of the lock, deliberately, where the
+// other guards here are content to look twice. `enriched` is the one field
+// with no identity of its own written beside it: needsEnrich reads it,
+// blob.Item carries it across a restart, and nothing ever reads the file
+// again once it is set. So a mark landing in the gap between a check and a
+// write — upsert having called forgetContent in between — is permanent in a
+// way no other stale field here is: no duration, no codecs and no shape, for
+// ever, on a file nobody has read.
+func (l *Library) markEnrichedIf(id string, snap Item) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	it, ok := l.items[id]
+	if !ok || it.ModTime != snap.ModTime || it.Size != snap.Size {
+		return
+	}
+	if !it.enriched || it.shape < shapeVersion {
+		it.enriched, it.shape = true, shapeVersion
+		l.markDirty(id)
+	}
+}
+
+// probeOfMeta is what a cached record says about a file, in the shape the
+// index takes it in. Probed stays false: a record read back out of the
+// database is not a probe that ran in this process.
+func probeOfMeta(m blob.Meta) Probe {
+	return Probe{
+		DurationMs: m.Duration,
+		VCodec:     m.VCodec, ACodec: m.ACodec,
+		Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
+	}
 }
 
 // enrichOne fills in tags (audio) and duration (audio + video) for one item,
@@ -318,60 +471,79 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	// changes for a stable file, so it would be permanent.
 	interrupted := false
 	defer func() {
-		if !interrupted && l.unchangedSince(id, it) {
-			l.markEnriched(id)
+		if !interrupted {
+			l.markEnrichedIf(id, it)
 		}
 	}()
+	if enrichCutShort.has(it) {
+		// A ceiling of ffprobe's own already stopped a read of these bytes in
+		// this run. Trying again costs another half minute of a disk that has
+		// gone slow, on the request path that asked; the next start gets to
+		// try instead (enrichCutShort).
+		interrupted = true
+		return
+	}
 
 	if db := l.metaDB; db != nil {
 		if m, ok := db.GetMeta(it.ID, it.ModTime, it.Size); ok && !archiveProbeMissed(it, m) {
+			cached := tagMeta{
+				title: m.Title, artist: m.Artist, album: m.Album,
+				genre: m.Genre, track: m.Track, year: m.Year,
+			}
+			// What the record already holds goes in first and at once. The
+			// shape-fill probe below can run for half a minute, and nothing
+			// it learns is needed to put a title under a tile: committing
+			// the two together withheld the cached title, performer and
+			// playing time for the whole length of a probe that is about the
+			// picture's size.
+			if !l.applyReading(id, it, cached, probeOfMeta(m)) {
+				return
+			}
 			// A record written before there was anywhere to keep the shape
 			// knows nothing about it, and to begin with the whole library is
 			// such records. Reading it is a header apiece — cheap enough to
 			// do once, and written down so that it is only ever once.
-			unread, cut := m.Shape < shapeVersion, false
-			if unread {
-				// Only where it answered. A record may already carry a shape
-				// that came from a probe, and the native reader says nothing
-				// about the containers it does not know — overwriting with
-				// that silence would throw away what was already known.
-				if w, h, codec, fps := shapeOf(it, m.VCodec); w > 0 {
-					m.Width, m.Height, m.FPS, m.VCodec = w, h, fps, codec
-				} else if m.VCodec == "" {
-					m.VCodec = codec
-				}
-				if m.ACodec == "" {
-					m.ACodec = soundtrackOf(it)
-				}
-				// A container with no native reader here — Matroska, AVI, the
-				// transport streams — keeps its shape where only ffprobe can
-				// reach it. That is a process per file, which is why nothing
-				// here does it by the page; but it is a process per file
-				// *once*, against a record that will be read for the life of
-				// the library, and the alternative is a listing that knows
-				// how big some of its films are.
-				if it.Kind == KindVideo && m.Width == 0 {
-					p := ProbeMedia(ctx, it)
-					cut = p.Interrupted
-					if p.Width > 0 {
-						m.Width, m.Height, m.FPS = p.Width, p.Height, p.FPS
-						if m.VCodec == "" {
-							m.VCodec = p.VCodec
-						}
-						if m.ACodec == "" {
-							m.ACodec = p.ACodec
-						}
+			if m.Shape >= shapeVersion {
+				return
+			}
+			cut := false
+			// Only where it answered. A record may already carry a shape
+			// that came from a probe, and the native reader says nothing
+			// about the containers it does not know — overwriting with
+			// that silence would throw away what was already known.
+			if w, h, codec, fps := shapeOf(it, m.VCodec); w > 0 {
+				m.Width, m.Height, m.FPS, m.VCodec = w, h, fps, codec
+			} else if m.VCodec == "" {
+				m.VCodec = codec
+			}
+			if m.ACodec == "" {
+				m.ACodec = soundtrackOf(it)
+			}
+			// A container with no native reader here — Matroska, AVI, the
+			// transport streams — keeps its shape where only ffprobe can
+			// reach it. That is a process per file, which is why nothing
+			// here does it by the page; but it is a process per file
+			// *once*, against a record that will be read for the life of
+			// the library, and the alternative is a listing that knows
+			// how big some of its films are.
+			if it.Kind == KindVideo && m.Width == 0 {
+				p := ProbeMedia(ctx, it)
+				// Cut short by a ceiling of ffprobe's own, the caller
+				// still waiting — which is a different thing from the
+				// caller having given up, and the only one of the two
+				// worth remembering.
+				cut = p.Interrupted && ctx.Err() == nil
+				if p.Width > 0 {
+					m.Width, m.Height, m.FPS = p.Width, p.Height, p.FPS
+					if m.VCodec == "" {
+						m.VCodec = p.VCodec
+					}
+					if m.ACodec == "" {
+						m.ACodec = p.ACodec
 					}
 				}
 			}
-			if !l.applyReading(id, it, tagMeta{
-				title: m.Title, artist: m.Artist, album: m.Album,
-				genre: m.Genre, track: m.Track, year: m.Year,
-			}, Probe{
-				DurationMs: m.Duration,
-				VCodec:     m.VCodec, ACodec: m.ACodec,
-				Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
-			}) {
+			if !l.applyReading(id, it, cached, probeOfMeta(m)) {
 				return
 			}
 			// A probe that was cut short says nothing about the file, and
@@ -380,12 +552,14 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 			// as much as the caller's deadline — the two come back looking
 			// exactly alike, which is why the probe now says which it was
 			// rather than leaving it to be guessed from empty fields.
-			if unread {
-				if interrupted = ctx.Err() != nil || cut; !interrupted {
-					m.Shape = shapeVersion
-					l.queueMeta(it.ID, m)
-				}
+			if cut {
+				enrichCutShort.note(it)
 			}
+			if interrupted = ctx.Err() != nil || cut; interrupted {
+				return
+			}
+			m.Shape = shapeVersion
+			l.queueMeta(it.ID, m)
 			return
 		}
 	}
@@ -431,7 +605,13 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	// result no different to look at. Note this is narrower than `!p.Probed`,
 	// which is also false when no ffprobe was needed at all — a native parser
 	// answered — and those results must still be written down.
-	interrupted = ctx.Err() != nil || p.Interrupted
+	cut := p.Interrupted && ctx.Err() == nil
+	if cut {
+		// One attempt per file per run: nothing is written down, and nothing
+		// re-reads it until the next start (enrichCutShort).
+		enrichCutShort.note(it)
+	}
+	interrupted = ctx.Err() != nil || cut
 	if !l.applyReading(id, it, tm, p) {
 		return
 	}
@@ -532,6 +712,7 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 	if !l.unchangedSince(id, it) {
 		return
 	}
+	writeWindow(id)
 	// An empty answer is still an answer, and recording it is the point: the
 	// alternative is spawning ffprobe again on the next request forever. But
 	// only an answer counts — no ffprobe on PATH, an unreadable member or a
