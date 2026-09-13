@@ -209,6 +209,14 @@ type Remuxer struct {
 	mu      sync.Mutex
 	entries map[string]*remuxEntry
 	total   int64
+	// pending is what the copies still being written are expected to come
+	// to. Without it a rewrap in flight was counted nowhere until it
+	// finished, so two admissions in the same minute each measured a total
+	// that left the other out and each concluded there was room: measured
+	// against a 10 MiB budget with two evictable copies of 3 MiB on disk,
+	// the directory reached 12 MiB where counting what was coming would
+	// have freed one of them and stayed at 9.
+	pending int64
 	seq     int64
 	closed  bool
 }
@@ -229,7 +237,10 @@ type remuxEntry struct {
 	// cancel stops the ffmpeg writing this file. Close calls it: a rewrap
 	// runs on its own context so a hung-up requester does not kill it, and
 	// without this a shutdown left it writing into scratch until its
-	// timeout.
+	// timeout. It is put here before the entry is published, so that there
+	// is no instant in which the map holds a copy nothing can stop; an
+	// entry adopted from an earlier run has none and needs none, its work
+	// having finished in another process.
 	cancel context.CancelFunc
 }
 
@@ -473,20 +484,34 @@ func (r *Remuxer) File(ctx context.Context, it library.Item, audio string, kind 
 		return r.wait(ctx, e)
 	}
 	// Make room before writing rather than after: the point of a budget is
-	// that it is not exceeded, and a rewrap is the size of the film. The
-	// lock is already held here, which is why this is the locked form.
+	// that it is not exceeded, and a rewrap is the size of the film. What is
+	// already being written counts towards it — see pending — since a copy
+	// in flight is bytes on the disk whether or not anybody has stat'd them
+	// yet. The lock is already held here, which is why this is the locked
+	// form.
 	if limit := r.scratch.Limit(); limit > 0 {
-		r.pruneLocked(r.total + it.Size - limit)
+		r.pruneLocked(r.total + r.pending + it.Size - limit)
 	}
 	r.seq++
 	e := &remuxEntry{
 		path: filepath.Join(dirs, remuxName(it, track, kind)), want: it.Size,
 		used: r.seq, last: time.Now(), done: make(chan struct{}),
 	}
+	// The means to stop the copy is on the entry before the entry is
+	// published, because Close cancels what it finds and skips what has no
+	// cancel on it. Made here rather than in produce, which is a goroutine
+	// that may not have been scheduled yet: a Close landing in that window
+	// found an entry it could not stop, emptied the map and returned, and
+	// the copy went on writing a film into the scratch directory under a
+	// context nothing would ever cancel — the one thing Close exists to
+	// prevent.
+	work, stop := context.WithTimeout(context.Background(), remuxTimeout)
+	e.cancel = stop
 	r.entries[key] = e
+	r.pending += it.Size
 	r.mu.Unlock()
 
-	go r.produce(it, track, kind, key, e)
+	go r.produce(work, stop, it, track, kind, key, e)
 	return r.wait(ctx, e)
 }
 
@@ -534,17 +559,15 @@ func (r *Remuxer) wait(ctx context.Context, e *remuxEntry) (string, error) {
 	}
 }
 
-// produce runs the rewrap and publishes the entry.
-func (r *Remuxer) produce(it library.Item, track int, kind remuxKind, key string, e *remuxEntry) {
+// produce runs the rewrap and publishes the entry. The context and the means
+// to stop it are made by File, under the lock and before the entry is
+// published, so that Close can never meet an entry it cannot stop.
+func (r *Remuxer) produce(ctx context.Context, stop context.CancelFunc, it library.Item, track int, kind remuxKind, key string, e *remuxEntry) {
 	// Written beside the real name and moved into place at the end, so a run
 	// that is interrupted leaves something obviously unfinished rather than a
 	// truncated film under a name the next run would trust.
 	part := e.path + ".part"
-	ctx, cancel := context.WithTimeout(context.Background(), remuxTimeout)
-	defer cancel()
-	r.mu.Lock()
-	e.cancel = cancel
-	r.mu.Unlock()
+	defer stop()
 	e.err = r.run(ctx, it, track, kind, part)
 	if e.err == nil {
 		e.err = os.Rename(part, e.path)
@@ -564,23 +587,39 @@ func (r *Remuxer) produce(it library.Item, track int, kind remuxKind, key string
 	// a moment after the newer one was ready. This entry cannot prune
 	// itself: only finished files are candidates, and it is not finished
 	// until done closes below.
+	wrote := e.err == nil // the copy is on disk under its real name
 	r.mu.Lock()
-	failed := e.err != nil || r.closed
-	if failed {
-		// A failure is not remembered: the player has already moved on to
-		// the converter, and a later ask deserves a fresh attempt rather
-		// than a cached refusal.
-		delete(r.entries, key)
-	} else {
+	r.pending -= e.want
+	closed := r.closed
+	if wrote && !closed {
 		r.total += e.size
 		r.scratch.Report("remux", r.total)
 		// The written file is rarely exactly the size predicted, so the
 		// budget is checked again against what it really came to.
 		r.pruneLocked(r.scratch.Excess())
+	} else {
+		// A failure is not remembered: the player has already moved on to
+		// the converter, and a later ask deserves a fresh attempt rather
+		// than a cached refusal.
+		delete(r.entries, key)
 	}
 	r.mu.Unlock()
+	if wrote && closed {
+		// The copy landed as the server was shutting down. Two things follow,
+		// and neither used to happen. The waiter is told there is nothing
+		// here rather than being handed the path with a nil error: this
+		// Remuxer no longer holds the entry, so nothing would keep the file
+		// from being pruned under the response, and the caller used to race
+		// the unlink that followed for a film it had been told was ready.
+		// And the file itself is left where it is, which Close promises —
+		// a finished rewrap is keyed by the source's identity, so the next
+		// run adopts it instead of converting the same film again. It used
+		// to be deleted here, which threw away a copy that had just cost the
+		// whole length of the film.
+		e.err = ErrNoRemux
+	}
 	close(e.done)
-	if failed {
+	if !wrote {
 		os.Remove(e.path)
 	}
 }

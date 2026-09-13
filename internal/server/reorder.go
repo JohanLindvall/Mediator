@@ -60,6 +60,12 @@ const (
 type reorderCache struct {
 	mu   sync.Mutex
 	seen map[string]bool
+	// looking is the look in flight, by key. Opening a film fires several
+	// requests at once — the item, the rewrap or the playlist — and each of
+	// them asks this question about the same file, so without it the same
+	// ffprobe ran two or three times over, against the very disk the
+	// playback it is preparing is about to read from.
+	looking map[string]chan struct{}
 }
 
 func (c *reorderCache) get(key string) (bool, bool) {
@@ -78,6 +84,41 @@ func (c *reorderCache) put(key string, v bool) {
 	c.seen[key] = v
 }
 
+// claim answers where the film has been judged, and otherwise either hands
+// the caller the job — a nil channel — or the look already in flight, to
+// wait on rather than run a second one beside it.
+func (c *reorderCache) claim(key string) (v, known bool, wait chan struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if v, ok := c.seen[key]; ok {
+		return v, true, nil
+	}
+	if ch, running := c.looking[key]; running {
+		return false, false, ch
+	}
+	if c.looking == nil {
+		c.looking = map[string]chan struct{}{}
+	}
+	c.looking[key] = make(chan struct{})
+	return false, false, nil
+}
+
+// settle writes down what the look found and releases whoever waited on it.
+// A look that could not finish is released without a verdict: nothing is
+// remembered, and whoever was waiting looks again with a budget of their
+// own, which is what "interrupted is not answered" means here.
+func (c *reorderCache) settle(key string, v, answered bool) {
+	if answered {
+		c.put(key, v)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ch, ok := c.looking[key]; ok {
+		delete(c.looking, key)
+		close(ch)
+	}
+}
+
 // mustReencode reports a picture that cannot be handed to a browser by
 // copying — or played as it is, which is a copy by another route — however
 // playable its codec is.
@@ -87,24 +128,40 @@ func (c *reorderCache) put(key string, v bool) {
 // budget, or the conversion with its own — looks again. It used to be
 // cached as an acquittal, which with the short budget an item fetch gives
 // it would have excused a film for the life of the process.
+//
+// One look at a time per film, too. Opening a film asks this from more than
+// one place at once — the item endpoint, and behind it the rewrap or the
+// first playlist — and each of them used to start an ffprobe of its own on
+// the same opening, log the same line and write down the same verdict. A
+// second asker waits for the first instead, and where the first came back
+// with nothing it looks for itself, since that answer belongs to whoever
+// asked with the budget that ran out and not to everyone behind them.
 func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 	if it.Kind != library.KindVideo || it.VCodec == "" {
 		return false
 	}
 	key := itemKey(it)
-	if v, ok := s.reorder.get(key); ok {
-		return v
+	for {
+		v, known, wait := s.reorder.claim(key)
+		if known {
+			return v
+		}
+		if wait != nil {
+			select {
+			case <-wait:
+				continue // settled, or nothing to settle; ask again
+			case <-ctx.Done():
+				return false
+			}
+		}
+		v, answered := reorderUnderstated(ctx, it)
+		s.reorder.settle(key, v, answered)
+		if answered && v {
+			s.log.Info("picture must be re-encoded rather than copied",
+				"path", it.Rel, "why", "the stream reorders further than it declares")
+		}
+		return answered && v
 	}
-	v, answered := reorderUnderstated(ctx, it)
-	if !answered {
-		return false
-	}
-	s.reorder.put(key, v)
-	if v {
-		s.log.Info("picture must be re-encoded rather than copied",
-			"path", it.Rel, "why", "the stream reorders further than it declares")
-	}
-	return v
 }
 
 // reorderUnderstated runs the look itself. answered says the file was read

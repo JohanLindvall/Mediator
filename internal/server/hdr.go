@@ -19,6 +19,7 @@ package server
 // expected to say.
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"sync"
@@ -43,7 +44,13 @@ const tonemapSoftware = "zscale=t=linear:npl=100," +
 var (
 	filtersMu  sync.Mutex
 	filterSets = map[string]map[string]bool{} // by ffmpeg path
+	filterRuns = map[string]chan struct{}{}   // the reading in flight, by path
 )
+
+// probeFilters is a variable so the tests can put two askers in the order
+// that matters — one inside the reading, one arriving behind it — without a
+// real ffmpeg and without sleeping to get there.
+var probeFilters = readFilters
 
 // haveFilter reports whether this ffmpeg was built with a filter, asked once
 // and remembered. The software tone-map needs zscale, which is libzimg and
@@ -56,22 +63,70 @@ var (
 // cached as an empty list for the life of the process, which turned the
 // tone-map off for every film after it and reproduced the very fault this
 // file exists to fix. Keyed by path, since the answer is the binary's.
+//
+// **The reading happens with nothing held**, and that is the shape of the
+// rest of it. This lock is the process's only gate on the answer and every
+// conversion plan for a wide-colour film comes through it, so holding it
+// across a child process made the slowest ffmpeg on the machine the speed
+// of all of them at once — and since a failure is deliberately not
+// remembered, that queue was paid afresh by every later HDR conversion
+// rather than once. A binary on a mount that had stopped answering held it
+// for as long as the mount did. So the first asker registers the reading,
+// runs it with the lock released, and publishes what came back; anyone
+// arriving meanwhile waits for that reading rather than starting a second
+// one beside it.
+//
+// A waiter whose reading came back with nothing is told no rather than
+// looking again itself: the question has just been asked and answered
+// "cannot tell", and asking it again in the same instant would spend
+// another process on the same silence. The next request looks again, which
+// is what "asked again next time" has always meant here.
 func haveFilter(ffmpeg, name string) bool {
 	if ffmpeg == "" {
 		return false
 	}
 	filtersMu.Lock()
-	defer filtersMu.Unlock()
-	set, ok := filterSets[ffmpeg]
-	if !ok {
-		out, err := exec.Command(ffmpeg, "-hide_banner", "-filters").Output()
-		if err != nil {
-			return false // asked again next time
-		}
-		set = parseFilters(string(out))
+	if set, ok := filterSets[ffmpeg]; ok {
+		filtersMu.Unlock()
+		return set[name]
+	}
+	if wait, running := filterRuns[ffmpeg]; running {
+		filtersMu.Unlock()
+		<-wait // bounded by the reader's own budget, below
+		filtersMu.Lock()
+		set, ok := filterSets[ffmpeg]
+		filtersMu.Unlock()
+		return ok && set[name]
+	}
+	wait := make(chan struct{})
+	filterRuns[ffmpeg] = wait
+	filtersMu.Unlock()
+
+	set, ok := probeFilters(ffmpeg)
+	filtersMu.Lock()
+	if ok {
 		filterSets[ffmpeg] = set
 	}
-	return set[name]
+	delete(filterRuns, ffmpeg)
+	close(wait)
+	filtersMu.Unlock()
+	return ok && set[name]
+}
+
+// readFilters asks the binary what it was built with. It is bounded like
+// every other child process here — hwProbeBudget is the neighbouring one —
+// because listing filters reads no media and answers in milliseconds, so a
+// run that does not is a binary that has stopped answering and nothing
+// should wait on it for ever. A budget that expires is not an answer, and
+// like any other failure it is not written down.
+func readFilters(ffmpeg string) (map[string]bool, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), hwProbeBudget)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-filters").Output()
+	if err != nil {
+		return nil, false
+	}
+	return parseFilters(string(out)), true
 }
 
 // parseFilters reads the names out of `ffmpeg -filters`, one per line after
