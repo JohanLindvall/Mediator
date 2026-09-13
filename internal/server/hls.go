@@ -796,12 +796,16 @@ func (h *HLS) account() {
 //
 // Summed here rather than carried along: every route that changes what HLS
 // holds ends in this one place, so the shared figure cannot be left
-// describing a session that has been discarded, or missing one that finished
-// between two ticks of a reaper. It used to be written only from the reap
-// ticker, which returns the moment its session stops converting — so a
-// conversion that finished inside one tick was never counted at all, and
-// with nothing converting anywhere the figure stood still at whatever was
-// last measured while the disk went on filling. Called with the lock held.
+// describing a session that has been discarded. What it sums is what each
+// live session was last *measured* to hold, which is a moment stale by
+// nature and is nothing at all for a session younger than its reaper's first
+// tick — so a caller that can afford a measurement takes one (account) and
+// the others accept the approximation the budget has always been. It used to
+// be written only from the reap ticker, which returns the moment its session
+// stops converting — so a conversion that finished inside one tick was never
+// counted at all, and with nothing converting anywhere the figure stood
+// still at whatever was last measured while the disk went on filling.
+// Called with the lock held.
 func (h *HLS) reportLocked() {
 	var total int64
 	for _, s := range h.sessions {
@@ -858,6 +862,14 @@ func (h *HLS) forget(s *hlsSession) {
 	if err := s.discard(); err != nil {
 		h.log.Warn("could not remove a failed conversion", "dir", s.dir, "err", err)
 	}
+	// And then the figure is measured rather than merely reduced. What was
+	// published a moment ago is a sum of what each session was last measured
+	// to hold, and a session younger than its reaper's first tick has been
+	// measured at nothing — so a forget in that window would leave the
+	// budget told that a conversion writing to the disk right now is not
+	// there. Measuring is a ReadDir per session, which a failed conversion
+	// can afford; it is the segment requests that could not.
+	h.account()
 }
 
 // run is the conversion itself: the plan both converters share (convert.go)
@@ -870,7 +882,17 @@ func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64
 		case attemptAbandoned:
 			return
 		case attemptAgain:
-			if attempt < hlsMaxAttempts {
+			// A retry begins by wiping what the last attempt wrote, so it
+			// is only ever worth having where that was nothing. An attempt
+			// that left a playable prefix behind is served as it stands:
+			// throwing it away to try again is how a session ends up in
+			// the map with an empty directory — the gate already opened on
+			// the segment that has just been deleted, so nothing records a
+			// failure and forget never runs, and that key answers for the
+			// film at that resume point for the life of the process. This
+			// is the one place it has to be true: every retry branch comes
+			// through here, whatever taught it something.
+			if attempt < hlsMaxAttempts && !hasSegment(s.dir) {
 				// The failed attempt's output goes first: ffmpeg will not
 				// write over a playlist it finds, and its stale segments
 				// would count towards the progress and the budget.
@@ -1063,6 +1085,13 @@ func (h *HLS) watchFirst(ctx context.Context, s *hlsSession) {
 // recorded and its directory removed, where the same run 150 ms later served
 // the prefix it had written.
 func hasSegment(dir string) bool {
+	if dir == "" {
+		// A session with no directory has written nothing. Joining nothing
+		// onto the playlist's name asks about ./index.m3u8, which is
+		// whatever happens to sit in the process's working directory — an
+		// answer about a different file entirely.
+		return false
+	}
 	body, err := os.ReadFile(filepath.Join(dir, "index.m3u8"))
 	if err != nil {
 		return false
@@ -1123,7 +1152,13 @@ func (s *hlsSession) failIfEmpty(err error) {
 	}
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
-	if s.done {
+	// Decided once, as fail and finish are. The attempt that died records
+	// what ffmpeg actually said; run then asks again at the end of the loop
+	// with a sentence of its own, for the runs that recorded nothing at all,
+	// and the second must not paint over the first. "exit status 1" with the
+	// converter's own complaint behind it is worth reading; "the conversion
+	// produced nothing" is only worth having where there is nothing better.
+	if s.done || s.err != nil {
 		return
 	}
 	s.err = err

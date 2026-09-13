@@ -201,3 +201,136 @@ func TestNoSessionStartsAfterClose(t *testing.T) {
 		t.Errorf("a refused conversion left %d directories behind", len(entries))
 	}
 }
+
+// A verdict is recorded once. The attempt that died records what ffmpeg
+// actually said; run asks again at the end of the loop with a sentence of
+// its own, for the runs that recorded nothing at all. The second must not
+// paint over the first, or every failure a viewer is shown reads "the
+// conversion produced nothing" whatever the converter complained of.
+func TestTheFirstVerdictIsTheOneKept(t *testing.T) {
+	dir := t.TempDir() // no playlist: nothing playable was written
+	s := &hlsSession{dir: dir, ready: make(chan struct{})}
+	s.failIfEmpty(errTest)
+	s.failIfEmpty(errOther)
+	if s.failure() != errTest {
+		t.Errorf("failure = %v, want the verdict the attempt recorded", s.failure())
+	}
+}
+
+// A session with no directory has written nothing. Joined onto the
+// playlist's name, an empty directory asks about whatever sits in the
+// process's own working directory — an answer about a different file.
+func TestNoDirectoryIsNoSegment(t *testing.T) {
+	dir := t.TempDir()
+	writeSession(t, dir, true, true, 8)
+	t.Chdir(dir)
+	if hasSegment("") {
+		t.Error("a session with no directory was answered about the working directory")
+	}
+}
+
+// aspectFake is a converter that writes a playable prefix and then refuses
+// on the declared shape of the file's pixels — the shape of an attempt that
+// has something to show and something to learn from. It writes only once, so
+// a second attempt leaves the directory as it found it.
+func aspectFake(t *testing.T, dir string) string {
+	t.Helper()
+	script := filepath.Join(dir, "ffmpeg")
+	body := fmt.Sprintf(`#!/bin/sh
+for a; do out="$a"; done
+n=0
+[ -e %[1]q ] && n=$(cat %[1]q)
+n=$((n+1))
+echo $n > %[1]q
+if [ "$n" = 1 ]; then
+  d=$(dirname "$out")
+  : > "$d/seg00000.ts"
+  printf '#EXTM3U\n#EXTINF:4,\nseg00000.ts\n' > "$out"
+fi
+echo "Value -11.666667 for parameter 'pixel_aspect' out of range" >&2
+exit 1
+`, filepath.Join(dir, "runs"))
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// A retry begins by wiping what the last attempt wrote, so it is only ever
+// worth having where that was nothing. An attempt that left a playable
+// prefix and something to learn from used to have the prefix deleted under
+// the waiters it had already let through: the gate was open, so nothing
+// recorded a failure, forget never ran, and that key answered for the film
+// at that resume point with an empty directory for the life of the process.
+func TestARetryNeverWipesAPlayablePrefix(t *testing.T) {
+	base := t.TempDir()
+	h := NewHLS(aspectFake(t, base), nil, NewScratch(base, 0), testLog())
+	defer h.Close()
+
+	dir := filepath.Join(base, "session")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	it := library.Item{
+		ID: "aaaaaaaaaaaaaaaa", Kind: library.KindVideo, VCodec: "h264",
+		Path: filepath.Join(base, "in.mkv"), ModTime: 1, Size: 1,
+	}
+	s := &hlsSession{
+		key: "k", id: "aaaa", dir: dir, ready: make(chan struct{}),
+		cancel: func() {}, converting: true, last: time.Now(),
+	}
+	h.sessions["k"] = s
+	h.byID["aaaa"] = s
+
+	h.run(context.Background(), s, it, 0, true, "")
+
+	if !hasSegment(dir) {
+		t.Error("the retry threw away the prefix the waiters had been let through to")
+	}
+	if err := s.failure(); err != nil {
+		t.Errorf("failure = %v, want a conversion with a playable prefix to be served", err)
+	}
+	h.mu.Lock()
+	_, live := h.sessions["k"]
+	h.mu.Unlock()
+	if !live {
+		t.Error("the session with a playable prefix was forgotten")
+	}
+}
+
+// Forgetting a session measures what is left rather than subtracting what
+// went. The figure is a sum of what each session was last measured to hold,
+// and a session younger than its reaper's first tick has been measured at
+// nothing — so a forget in that window told the budget that a conversion
+// writing to the disk right now was not there, and the Remuxer frees its own
+// rewraps on that same figure.
+func TestForgetMeasuresWhatIsLeft(t *testing.T) {
+	base := t.TempDir()
+	scratch := NewScratch(base, 1)
+	h := NewHLS("", nil, scratch, testLog())
+
+	live := filepath.Join(base, "hls", "live")
+	writeSession(t, live, true, true, 200)
+	kept := &hlsSession{
+		key: "live", id: "aaaa", dir: live, ready: make(chan struct{}),
+		last: time.Now(), cancel: func() {},
+	}
+	h.sessions["live"] = kept
+	h.byID["aaaa"] = kept
+
+	failed := filepath.Join(base, "hls", "failed")
+	writeSession(t, failed, false, false, 0)
+	gone := &hlsSession{
+		key: "failed", id: "bbbb", dir: failed, ready: make(chan struct{}),
+		last: time.Now(), cancel: func() {},
+	}
+	h.sessions["failed"] = gone
+	h.byID["bbbb"] = gone
+
+	h.forget(gone)
+
+	if want := dirBytes(live) - 1; scratch.Excess() != want {
+		t.Errorf("excess = %d after a forget, want %d — the conversion still on the disk counted",
+			scratch.Excess(), want)
+	}
+}
