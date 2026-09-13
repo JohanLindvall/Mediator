@@ -2,6 +2,8 @@ package library
 
 import (
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,10 +15,50 @@ import (
 // takes the lock the slow work would be waiting on, sets the slow work
 // going, and then asks whether the lock that must have been released still
 // is. The asking is a sampling window rather than a rendezvous — there is no
-// way to be told that a goroutine has reached a blocking acquire — but the
+// way to be *told* that a goroutine has reached a blocking acquire — but the
 // property is one-sided: with the scopes right the sampled lock is never
 // taken at all, and with them wrong it is taken within microseconds and held
 // for as long as the test cares to look.
+//
+// The window is opened only once the watched goroutine is known to be parked
+// inside the code under test (waitParkedIn). Without that these pass
+// vacuously: the handshake below says the goroutine reached the line before
+// the call, and a goroutine descheduled for the length of the window would
+// leave the sampler looking at a lock nobody was ever going to take. A test
+// that can quietly stop protecting is worse than no test, and the failure
+// would be silent — so the one thing that can be read from outside, the
+// runtime's own account of where every goroutine is, is read.
+
+// waitParkedIn waits until some goroutine is blocked inside the named
+// function. The stack dump is the only rendezvous available: a mutex tells
+// nobody it has waiters, and a handshake before the call proves only that
+// the goroutine reached the call.
+func waitParkedIn(t *testing.T, fn string) {
+	t.Helper()
+	buf := make([]byte, 1<<20)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		n := runtime.Stack(buf, true)
+		for n == len(buf) { // filled exactly means it was probably cut short
+			buf = make([]byte, 2*len(buf))
+			n = runtime.Stack(buf, true)
+		}
+		for _, g := range strings.Split(string(buf[:n]), "\n\ngoroutine ") {
+			head, _, ok := strings.Cut(g, "\n")
+			if !ok || !strings.Contains(g, fn) {
+				continue
+			}
+			// "[running]" is this test's own dump; "[runnable]" is a
+			// goroutine with work left to do. Anything else is parked, and
+			// parked inside fn is what the window needs.
+			if !strings.Contains(head, "[running]") && !strings.Contains(head, "[runnable]") {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("nothing ever blocked inside %s: the window would have proved nothing", fn)
+}
 
 // heldFree samples a mutex for a while and fails if it is ever held. The
 // goroutine it is watching is blocked for the whole of the window by a lock
@@ -127,13 +169,11 @@ func TestNarrowedCountsWaitForAGroupedBuildWithTheirLockFree(t *testing.T) {
 	l.artists.mu.Lock()
 
 	done := make(chan struct{})
-	started := make(chan struct{})
 	go func() {
 		defer close(done)
-		close(started)
 		l.CountsFor(CountQuery{Search: "tribute"})
 	}()
-	<-started
+	waitParkedIn(t, "library.(*Library).CountsFor(")
 
 	heldFree(t, "the counts lock", l.counts.mu.TryLock, l.counts.mu.Unlock)
 
@@ -156,13 +196,11 @@ func TestAListingCountsWithTheQueryLockFree(t *testing.T) {
 	l.counts.mu.Lock()
 
 	done := make(chan struct{})
-	started := make(chan struct{})
 	go func() {
 		defer close(done)
-		close(started)
 		l.List(Query{Search: "tribute"})
 	}()
-	<-started
+	waitParkedIn(t, "library.(*Library).List(")
 
 	heldFree(t, "the listing lock", l.queryMu.TryLock, l.queryMu.Unlock)
 
@@ -187,13 +225,11 @@ func TestGetRebuildsTheResemblancesOutsideTheIndexLock(t *testing.T) {
 	l.featMu.Lock() // the analysis publishing, or another rebuild in flight
 
 	done := make(chan struct{})
-	started := make(chan struct{})
 	go func() {
 		defer close(done)
-		close(started)
 		l.Get(id)
 	}()
-	<-started
+	waitParkedIn(t, "library.(*Library).Get(")
 
 	heldFree(t, "the index lock", l.mu.TryLock, l.mu.Unlock)
 
@@ -214,13 +250,11 @@ func TestPopularSortTakesItsSnapshotsOutsideTheIndexLock(t *testing.T) {
 	l.featMu.Lock()
 
 	done := make(chan struct{})
-	started := make(chan struct{})
 	go func() {
 		defer close(done)
-		close(started)
 		l.List(Query{Sort: "popular"})
 	}()
-	<-started
+	waitParkedIn(t, "library.(*Library).buildQuery(")
 
 	heldFree(t, "the index lock", l.mu.TryLock, l.mu.Unlock)
 
@@ -242,5 +276,29 @@ func TestAlbumChipIsNeverNegative(t *testing.T) {
 	l.spokenAlbums.Store(int32(l.albums.total() + 3))
 	if c := l.Counts(); c.Albums < 0 {
 		t.Fatalf("albums chip reads %d", c.Albums)
+	}
+}
+
+// The listing cache is the same rule as the grouped ones: the version is
+// read before its lock, so two listings whose reads straddle a bump ask
+// about different numbers, and under equality the one holding the older
+// number rebuilt the whole filtered, sorted library behind the one that had
+// just built it and stamped the cache back to its own older number — which
+// sent the next caller round again, and the next.
+func TestListingCacheAcceptsANewerBuild(t *testing.T) {
+	l := libForCounts(t)
+	l.ensureFlags()
+	q := Query{Search: "tribute"}
+
+	newer := l.cachedQuery(q, 6)
+	older := l.cachedQuery(q, 5)
+	if older != newer {
+		t.Fatal("an older asker rebuilt a listing that had just been built")
+	}
+	if l.lastQuery.version != 6 {
+		t.Fatalf("the cache was stamped back to %d", l.lastQuery.version)
+	}
+	if again := l.cachedQuery(q, 6); again != newer {
+		t.Fatal("the caller at the newer version had to build it a second time")
 	}
 }

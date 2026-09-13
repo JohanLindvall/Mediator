@@ -534,25 +534,34 @@ func PathID(path string) string {
 // Get returns a copy of the item with the given ID.
 func (l *Library) Get(id string) (Item, bool) {
 	l.ensureFlags()
-	// Asked for before the index lock is taken, because withFlags reads two
-	// caches that rebuild themselves when they are stale rather than
-	// answering with what they have: the scaled vectors and the affinity,
-	// together about half a second over a library of this size. Asked for
-	// the first time under the read lock — which is every Get after a
-	// verdict, after a release verdict moves, or after the analysis
-	// publishes — that half second is a read lock held against every writer,
-	// and a waiting writer stops every reader behind it. It is the rule a
-	// listing already follows by building its stamper before the lock; this
-	// is the same rule at the door every by-id request comes through, and
-	// the lowest tier of background work is among them, once per track.
-	l.affinities()
+	// The snapshots are taken before the index lock, which is the rule a
+	// listing already follows and is here for the same reason: what stamps
+	// an item reads two caches that rebuild themselves when they are stale
+	// rather than answering with what they have — the scaled vectors and
+	// the affinity, together about half a second over a library of this
+	// size. Reached for the first time under the read lock — which is every
+	// Get after a verdict, after a release verdict moves, or after the
+	// analysis publishes — that half second is a read lock held against
+	// every writer, and a waiting writer stops every reader behind it. This
+	// is the door every by-id request comes through, the lowest tier of
+	// background work among them, once per track.
+	//
+	// It is the stamper rather than withFlags for the same accounting.
+	// Warming the caches and then calling withFlags would ask for the
+	// affinity twice — and the warm ask is not free: it compares the
+	// release verdicts by content, which is a walk of the whole map. One
+	// ask and a copy of the owner's own play and verdict maps — which hold
+	// only what has ever been played or judged — is less work than two
+	// walks of every analysed track, and it is the one spelling of the
+	// stamping rather than a second.
+	st := l.stamper()
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	it, ok := l.items[id]
 	if !ok {
 		return Item{}, false
 	}
-	return l.withFlags(*it), true
+	return st.stamp(*it), true
 }
 
 // rel computes the display path for an absolute path: the base name of the
@@ -669,6 +678,13 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 	// re-dirties an item a later walk finds unchanged: the item stayed in
 	// the index with no mirrored record, which is exactly the warm start
 	// the mirror exists to give.
+	//
+	// One door onto the same state is still open and is not this file's:
+	// when a write fails, flush puts every id it was carrying back into
+	// both sets, and an item re-created while that write was in flight
+	// lands in the pair again. The guard belongs there — re-add a removal
+	// only for an id the index no longer holds — and is noted here because
+	// this is where the invariant is written down.
 	delete(l.removed, id)
 	l.markDirty(id)
 	return true, false, false
@@ -1193,18 +1209,32 @@ type queryResult struct {
 }
 
 // cachedQuery answers with the filtered, sorted result for this query,
-// building it where the one kept answers another question or another
+// building it where the one kept answers another question or an older
 // version. The seed belongs in that comparison as much as the sort key
 // does: rebuilding a shuffle for page two would deal a different hand.
+//
+// The versions are compared with `<` and not with `!=`, which is the rule
+// perVersion.get follows and for the same reason. The caller reads the
+// version before this lock is taken, so two listings whose reads straddle a
+// bump arrive asking about different numbers — and under equality the one
+// holding the older number rebuilt the whole filtered, sorted library
+// behind the one that had just built it, stamped the cache back to its own
+// older number, and sent the next caller round again. The plain version
+// moves forty-five times a second while a disk is being written to and
+// every client refetches on the same event, so straddling listings are the
+// ordinary case exactly when the rebuild costs most. A stamp at or past
+// what the asker wants satisfies it, which is sound because the build reads
+// the live index after it is stamped: what is stored is never older than
+// its number, only newer.
 func (l *Library) cachedQuery(q Query, version int64) *queryResult {
 	l.queryMu.Lock()
 	defer l.queryMu.Unlock()
 	res := l.lastQuery
-	if res == nil || res.version != version ||
+	if res == nil || res.version < version ||
 		// A position is saved every few seconds while something plays, so it
 		// gets a counter of its own: only a query that filters on watching
 		// has to be rebuilt when one moves.
-		(q.Watch != "" && res.watchVer != l.watchVersion()) ||
+		(q.Watch != "" && res.watchVer < l.watchVersion()) ||
 		res.kind != q.Kind || res.kinds != q.Kinds || res.watch != q.Watch ||
 		res.played != q.Played || res.series != q.Series || res.season != q.Season ||
 		res.paths != q.Paths || res.search != q.Search ||
@@ -1252,6 +1282,11 @@ func (l *Library) List(q Query) Result {
 	// once built, so reading it afterwards needs nothing but the index's own
 	// read lock.
 	res := l.cachedQuery(q, version)
+	// What is reported is the stamp on the answer, not the number this
+	// request happened to read: a listing satisfied by a build from a later
+	// version has that build's contents, and telling the client the older
+	// number would have it refetch for a change it already holds.
+	version = res.version
 
 	total := len(res.items)
 	end := min(q.Offset+q.Limit, total)
