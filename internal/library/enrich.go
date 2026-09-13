@@ -3,6 +3,7 @@ package library
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dhowden/tag"
@@ -70,6 +71,12 @@ func (l *Library) enrichAll(ctx context.Context, todo []string, busy func() bool
 	l.enriching.Add(1)
 	defer l.enriching.Add(-1)
 	jobs := make(chan string)
+	// A worker that gives up while waiting for higher-priority work to
+	// finish is already holding an id: it is off the channel, no other
+	// worker can see it, and the feeder has counted it. Reporting the pass
+	// complete would then be a completion report covering files nothing
+	// ever looked at.
+	var dropped atomic.Bool
 	var wg sync.WaitGroup
 	for range enrichWorkers {
 		wg.Add(1)
@@ -79,6 +86,7 @@ func (l *Library) enrichAll(ctx context.Context, todo []string, busy func() bool
 				for busy != nil && busy() {
 					select {
 					case <-ctx.Done():
+						dropped.Store(true)
 						return
 					case <-time.After(500 * time.Millisecond):
 					}
@@ -101,7 +109,7 @@ feed:
 	}
 	close(jobs)
 	wg.Wait()
-	return fed == len(todo)
+	return fed == len(todo) && !dropped.Load()
 }
 
 // needsEnrich reports whether an item still has to be looked at. The flag is
@@ -175,38 +183,127 @@ func (l *Library) EnrichNow(ctx context.Context, ids []string) bool {
 	return true
 }
 
+// enrichQuiet is how long a file has to stop changing before the watcher's
+// read of it goes ahead. A variable only so the tests need not wait it out.
+var enrichQuiet = 2 * time.Second
+
+// enrichSlots bounds how many of those reads run at once.
+//
+// The watcher can touch a whole release at a stroke — measured, a torrent
+// client made thirteen files four milliseconds apart, and a tree moved in
+// wholesale is every file in it — and one timer per file meant one goroutine
+// per file the moment they all came due: that many tag reads and ffprobes on
+// the disk at once, against the playback this tier is documented to stand
+// down for. It is a process-wide bound rather than a library's because the
+// disk is one disk.
+var enrichSlots = make(chan struct{}, enrichWorkers)
+
 // enrichAfterQuiet enriches one item once its file has stopped changing.
 //
 // The watcher calls this for every Create and Write it sees, and a file
 // being written — a torrent landing, a copy in progress — emits a stream of
 // Write events: one goroutine reading tags per event put an unbounded number
 // of readers on a file that was about to change again anyway. Each event
-// resets the timer instead, so the read happens once, shortly after the
-// writer goes quiet — and it still publishes, which is the watcher paths'
-// contract (the trailing notify below).
+// pushes the read back instead, so it happens once, shortly after the writer
+// goes quiet — and it still publishes, which is the watcher paths' contract
+// (the trailing notify below).
+//
+// Every event arms a *fresh* timer rather than resetting the one in the map,
+// and a timer that fires gives way when the map has moved on. Reset cannot
+// tell a timer that is still waiting from one that has already fired and is
+// merely blocked on this mutex, and re-arming the second put a timer nobody
+// was tracking back on the clock: its eventual firing deleted the entry
+// belonging to a live timer, the next event armed a second one for the same
+// file, and the read landed while the writer was still going — the very
+// thing the debounce exists to stop, and self-sustaining once started. A
+// timer is a cheap allocation; the invariant is not.
 func (l *Library) enrichAfterQuiet(id string) {
-	const quiet = 2 * time.Second
 	l.enrichDebMu.Lock()
 	defer l.enrichDebMu.Unlock()
-	if t, ok := l.enrichDeb[id]; ok {
-		t.Reset(quiet)
-		return
+	if old, ok := l.enrichDeb[id]; ok {
+		old.Stop() // a no-op where it has already fired; the check below settles that
 	}
 	if l.enrichDeb == nil {
 		l.enrichDeb = make(map[string]*time.Timer)
 	}
-	l.enrichDeb[id] = time.AfterFunc(quiet, func() {
+	var t *time.Timer
+	t = time.AfterFunc(enrichQuiet, func() {
 		l.enrichDebMu.Lock()
+		if l.enrichDeb[id] != t {
+			// A later event owns this file now, and its timer will do the
+			// read. Leaving the entry alone is the whole point: deleting
+			// one that belongs to a live timer is what orphaned it.
+			l.enrichDebMu.Unlock()
+			return
+		}
 		delete(l.enrichDeb, id)
 		l.enrichDebMu.Unlock()
+		// A release arriving all at once comes due all at once; wait a turn
+		// rather than putting a reader per file on the disk (enrichSlots).
+		enrichSlots <- struct{}{}
+		defer func() { <-enrichSlots }()
 		l.enrichOne(context.Background(), id)
 		l.notify()
 	})
+	l.enrichDeb[id] = t
+}
+
+// unchangedSince reports whether the item under id is still the file the
+// snapshot was read from. Identity here is what upsert compares and what the
+// metadata cache is keyed by: the size and the modification time.
+func (l *Library) unchangedSince(id string, snap Item) bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	it, ok := l.items[id]
+	return ok && it.ModTime == snap.ModTime && it.Size == snap.Size
+}
+
+// keptReading looks again after a reading has been written and reports
+// whether it belongs to the file that is there now.
+//
+// The check before the write and the write itself are two turns of the lock,
+// so a file replaced in between would be left wearing the old bytes'
+// reading. Looking once more closes that: what upsert would have forgotten
+// is forgotten here instead, and the caller learns that nothing it read is
+// worth writing down.
+func (l *Library) keptReading(id string, snap Item) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	it, ok := l.items[id]
+	if !ok {
+		return false
+	}
+	if it.ModTime != snap.ModTime || it.Size != snap.Size {
+		it.forgetContent()
+		return false
+	}
+	return true
+}
+
+// applyReading writes one file's reading into the index — and only onto the
+// file it was read from. It reports whether it stuck.
+func (l *Library) applyReading(id string, snap Item, tm tagMeta, p Probe) bool {
+	if !l.unchangedSince(id, snap) {
+		return false
+	}
+	l.setMeta(id, tm, p.DurationMs)
+	l.setProbe(id, p)
+	return l.keptReading(id, snap)
 }
 
 // enrichOne fills in tags (audio) and duration (audio + video) for one item,
 // consulting the metadata cache before touching the file. ctx is the caller's
 // and bounds the probe: EnrichNow runs inside a request that is waiting.
+//
+// Everything below is read from the bytes the snapshot names, and reading
+// them takes as long as it takes — a probe's own ceiling is half a minute.
+// A download can finish, or a release be replaced, inside that; upsert then
+// forgets what was read from the old bytes, and this reading, written back
+// afterwards, would put the partial file's duration, codecs and tags onto
+// the finished one under the finished one's mtime and size — the one key
+// that never changes again, so the wrong answer would outlive every later
+// pass and every restart. Hence every commit here goes through
+// applyReading: a reading of bytes that are gone is not written down.
 func (l *Library) enrichOne(ctx context.Context, id string) {
 	it, ok := l.Get(id)
 	if !ok || (it.Kind != KindAudio && it.Kind != KindVideo && it.Kind != KindImage) {
@@ -214,28 +311,26 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	}
 	// Mark the item examined whatever the outcome, so a file with nothing to
 	// read is not re-read by every later pass — but only if we actually got
-	// to look. The probe now takes the caller's context, and a request that
-	// gave up (the priority wait is 1.5 s) or a shutdown mid-sweep must not
-	// leave "examined, nothing there" behind: that verdict is persisted under
-	// a key that never changes for a stable file, so it would be permanent.
+	// to look, and only at the file that is there now. The probe takes the
+	// caller's context, and a request that gave up (the priority wait is
+	// 1.5 s) or a shutdown mid-sweep must not leave "examined, nothing
+	// there" behind: that verdict is persisted under a key that never
+	// changes for a stable file, so it would be permanent.
 	interrupted := false
 	defer func() {
-		if !interrupted {
+		if !interrupted && l.unchangedSince(id, it) {
 			l.markEnriched(id)
 		}
 	}()
 
 	if db := l.metaDB; db != nil {
 		if m, ok := db.GetMeta(it.ID, it.ModTime, it.Size); ok && !archiveProbeMissed(it, m) {
-			l.setMeta(id, tagMeta{
-				title: m.Title, artist: m.Artist, album: m.Album,
-				genre: m.Genre, track: m.Track, year: m.Year,
-			}, m.Duration)
 			// A record written before there was anywhere to keep the shape
 			// knows nothing about it, and to begin with the whole library is
 			// such records. Reading it is a header apiece — cheap enough to
 			// do once, and written down so that it is only ever once.
-			if m.Shape < shapeVersion {
+			unread, cut := m.Shape < shapeVersion, false
+			if unread {
 				// Only where it answered. A record may already carry a shape
 				// that came from a probe, and the native reader says nothing
 				// about the containers it does not know — overwriting with
@@ -256,7 +351,9 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 				// the library, and the alternative is a listing that knows
 				// how big some of its films are.
 				if it.Kind == KindVideo && m.Width == 0 {
-					if p := ProbeMedia(ctx, it); p.Width > 0 {
+					p := ProbeMedia(ctx, it)
+					cut = p.Interrupted
+					if p.Width > 0 {
 						m.Width, m.Height, m.FPS = p.Width, p.Height, p.FPS
 						if m.VCodec == "" {
 							m.VCodec = p.VCodec
@@ -266,18 +363,29 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 						}
 					}
 				}
-				// A probe the context killed says nothing about the file, and
-				// writing the reading down would make that silence permanent:
-				// the key never changes for a stable file.
-				if interrupted = ctx.Err() != nil; !interrupted {
+			}
+			if !l.applyReading(id, it, tagMeta{
+				title: m.Title, artist: m.Artist, album: m.Album,
+				genre: m.Genre, track: m.Track, year: m.Year,
+			}, Probe{
+				DurationMs: m.Duration,
+				VCodec:     m.VCodec, ACodec: m.ACodec,
+				Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
+			}) {
+				return
+			}
+			// A probe that was cut short says nothing about the file, and
+			// writing the reading down would make that silence permanent:
+			// the key never changes for a stable file. Its own ceiling counts
+			// as much as the caller's deadline — the two come back looking
+			// exactly alike, which is why the probe now says which it was
+			// rather than leaving it to be guessed from empty fields.
+			if unread {
+				if interrupted = ctx.Err() != nil || cut; !interrupted {
 					m.Shape = shapeVersion
 					l.queueMeta(it.ID, m)
 				}
 			}
-			l.setProbe(id, Probe{
-				VCodec: m.VCodec, ACodec: m.ACodec,
-				Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
-			})
 			return
 		}
 	}
@@ -290,7 +398,13 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 		// A still has no probe, no tags and no playing time. Its size is the
 		// whole of what there is to learn, and it is in the header.
 		w, h, _, _ := shapeOf(it, "")
+		if !l.unchangedSince(id, it) {
+			return
+		}
 		l.setProbe(id, Probe{Width: w, Height: h, Probed: true})
+		if !l.keptReading(id, it) {
+			return
+		}
 		l.queueMeta(it.ID, blob.Meta{
 			MTime: it.ModTime, Size: it.Size, Width: w, Height: h, Shape: shapeVersion,
 		})
@@ -312,13 +426,15 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 		}
 	}
 	// Whatever the probe managed to read is still worth having in memory, but
-	// a probe the context killed says nothing about the file. Note this is
-	// narrower than `!p.Probed`, which is also false when no ffprobe was
-	// needed at all — a native parser answered — and those results must still
-	// be written down.
-	interrupted = ctx.Err() != nil
-	l.setMeta(id, tm, p.DurationMs)
-	l.setProbe(id, p)
+	// a probe that was cut short says nothing about the file — cut short by
+	// the caller's deadline, or by ffprobe's own ceiling, which leaves a
+	// result no different to look at. Note this is narrower than `!p.Probed`,
+	// which is also false when no ffprobe was needed at all — a native parser
+	// answered — and those results must still be written down.
+	interrupted = ctx.Err() != nil || p.Interrupted
+	if !l.applyReading(id, it, tm, p) {
+		return
+	}
 	if interrupted {
 		return
 	}
@@ -406,6 +522,16 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 	if ctx.Err() != nil {
 		return // interrupted, not answered: leave it to be tried again
 	}
+	// And not a word about a file that is no longer the one that was probed.
+	// `probed` is sticky — it is exactly what forgetContent clears when the
+	// bytes change — so writing this answer onto a replaced file would re-arm
+	// the flag carrying the old file's soundtracks, captions, shape and
+	// colour, and spend the new file's one second chance on content nobody
+	// read: a soundtrack menu offering languages the file does not hold, and
+	// a conversion mapping a stream that is not there.
+	if !l.unchangedSince(id, it) {
+		return
+	}
 	// An empty answer is still an answer, and recording it is the point: the
 	// alternative is spawning ffprobe again on the next request forever. But
 	// only an answer counts — no ffprobe on PATH, an unreadable member or a
@@ -432,10 +558,17 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		HDR:    out.hdr,
 		Probed: out.answered,
 	})
+	if !l.keptReading(id, it) {
+		return
+	}
 	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 && !out.hdr {
 		return // nothing to write down, and nothing changed on the item
 	}
-	if fresh, ok := l.Get(id); ok {
+	// The record is keyed by the file's identity, and it has to be this
+	// file's: stamped with a replaced file's mtime and size it would read as
+	// a sound reading of bytes it never saw, under a key that never changes
+	// again for a stable file.
+	if fresh, ok := l.Get(id); ok && fresh.ModTime == it.ModTime && fresh.Size == it.Size {
 		// The whole record, the shape included. This write replaces whatever
 		// the eager pass queued under the same id, and one that left the
 		// picture's size and its reading marker out put every film that had

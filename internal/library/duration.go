@@ -57,6 +57,16 @@ type Probe struct {
 	// missing duration is not evidence that nobody has looked. See
 	// EnsureCodecs, which would otherwise re-probe on every request.
 	Probed bool
+
+	// Interrupted records that the run was cut short rather than finishing
+	// with nothing to say. The two come back looking exactly alike — every
+	// field empty — and the caller must not confuse them: a reading nobody
+	// was allowed to finish, written down as "looked, found nothing", is
+	// permanent, the cache key never changing again for a stable file. The
+	// caller's own deadline is only half of it; ffprobe installs a ceiling
+	// of its own (ffprobeTimeout), which fires on a busy or network-mounted
+	// disk while the caller's context is still perfectly alive.
+	Interrupted bool
 }
 
 // probePrefix and probePrefixVideo bound the FALLBACK probe: the piped
@@ -131,12 +141,14 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 		if p.DurationMs == 0 {
 			switch {
 			case !it.Archived():
-				p.DurationMs = sane(ffprobe(ctx, it.Path, nil).durationMs)
+				out := ffprobe(ctx, it.Path, nil)
+				p.DurationMs, p.Interrupted = sane(out.durationMs), out.cutShort
 			case LoopbackURL(it) != "":
 				// A member in a container nothing here parses natively: the
 				// loopback URL is a seekable view of it, and the probe reads
 				// its tail the way it does a film's.
-				p.DurationMs = sane(probeItem(ctx, it).durationMs)
+				out := probeItem(ctx, it)
+				p.DurationMs, p.Interrupted = sane(out.durationMs), out.cutShort
 			}
 		}
 		return p
@@ -155,8 +167,11 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 	p.DurationMs = sane(out.durationMs)
 	// Only an answer counts as having looked. A run that never happened —
 	// no ffprobe on PATH, the member unreadable, the caller's deadline —
-	// leaves the item exactly as unexamined as it was.
+	// leaves the item exactly as unexamined as it was, and a run that a
+	// deadline cut off says so rather than leaving the caller to read its
+	// empty fields as a verdict.
 	p.Probed = out.answered
+	p.Interrupted = out.cutShort
 	return p
 }
 
@@ -505,6 +520,12 @@ type ffprobeResult struct {
 	// no ffprobe on PATH, an unreadable member, a deadline — which must not
 	// be written down as a verdict (see Probe.Probed).
 	answered bool
+	// cutShort records that a deadline ended the run — the caller's, or the
+	// ceiling below, which fires on a disk that has gone slow while the
+	// caller's context is still alive. Not answering and being stopped are
+	// the same empty result to look at, and the caller has to tell them
+	// apart: only one of them is a fact about the file (see Probe.Interrupted).
+	cutShort bool
 }
 
 // ffprobe timeouts, which are a ceiling on top of ctx and never an extension
@@ -551,9 +572,15 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	cmd := exec.CommandContext(ctx, probe, args...)
 	cmd.Stdin = stdin
 	// A reader that is not an *os.File is copied to the child on a goroutine,
-	// and Wait blocks on that goroutine — so a read wedged on a slow volume
-	// would hold this enrichment worker long after the process was killed.
-	// WaitDelay gives up on the copy shortly after the process is gone.
+	// and Wait blocks on that goroutine. WaitDelay closes the parent's pipe
+	// ends shortly after the process is gone, which frees a copier parked in
+	// a *write* — ffprobe having stopped reading the prefix without exiting.
+	// It does not free one parked in a *read*: closing a pipe cannot
+	// interrupt a read of the archive underneath it, so a volume whose device
+	// has stopped answering — hanging rather than returning an error — still
+	// holds this worker. Nothing here can bound that; it takes a reader that
+	// can be abandoned, and the same device wedges nativeDuration before
+	// ffprobe is ever started.
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
 	if err != nil {
@@ -563,11 +590,11 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 		// else that went wrong (no process, a pipe that broke) is no answer.
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || len(out) == 0 {
-			return ffprobeResult{}
+			return ffprobeResult{cutShort: ctx.Err() != nil}
 		}
 	}
 	if ctx.Err() != nil {
-		return ffprobeResult{} // killed, not answered
+		return ffprobeResult{cutShort: true} // killed, not answered
 	}
 
 	var parsed struct {
