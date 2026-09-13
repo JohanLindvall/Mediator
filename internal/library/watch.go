@@ -20,6 +20,13 @@ type Watcher struct {
 
 	mu      sync.Mutex
 	settles int // re-walks outstanding, so a mass move cannot spawn timers without end
+	// The timers behind those re-walks, so that a change of directories can
+	// stop them rather than leave them to fire minutes later over a tree
+	// that is no longer the library's (see armSettle). Numbered rather than
+	// held by pointer: a timer cannot name itself to the callback it was
+	// created with without being read before it has been assigned.
+	timers     map[int64]*time.Timer
+	nextSettle int64
 }
 
 // settleWalks is when a newly created directory is walked again.
@@ -51,12 +58,23 @@ func NewWatcher(lib *Library) (*Watcher, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Watcher{lib: lib, fsw: fsw}, nil
+	return &Watcher{lib: lib, fsw: fsw, timers: map[int64]*time.Timer{}}, nil
 }
 
 // AddDir installs a watch on a single directory. Errors (e.g. inotify limits)
 // are logged, not fatal — the periodic rescan still picks changes up.
+//
+// A directory outside the roots is refused, because the two things that
+// install watches both outlive a change of directories: a settle timer armed
+// minutes ago, and a walk that took its root list before the change. Reset
+// has run by then, so whatever they install afterwards is never removed
+// again — inotify watches, and a wakeup apiece for every event under a tree
+// nothing indexes any more. AddFile has refused such a path all along; this
+// is the same refusal one door along.
 func (w *Watcher) AddDir(dir string) {
+	if !w.lib.UnderRoots(dir) {
+		return
+	}
 	if err := w.fsw.Add(dir); err != nil {
 		w.lib.log.Warn("watch failed", "dir", dir, "err", err)
 	}
@@ -69,6 +87,7 @@ func (w *Watcher) AddDir(dir string) {
 // directory would keep reporting it, and the watcher would put back exactly
 // what the scan had just taken out.
 func (w *Watcher) Reset() {
+	w.stopSettles()
 	for _, dir := range w.fsw.WatchList() {
 		if err := w.fsw.Remove(dir); err != nil {
 			w.lib.log.Debug("unwatch failed", "dir", dir, "err", err)
@@ -76,9 +95,37 @@ func (w *Watcher) Reset() {
 	}
 }
 
+// eventQueue is how many events wait here while the work behind them is done.
+//
+// fsnotify's inotify backend hands events over on an unbuffered channel, so
+// whoever consumes them is what keeps the kernel's own queue drained — and
+// the work behind one event is not small: a recursive walk of a directory
+// moved in wholesale, or a reparse of every volume of an eighty-nine part
+// set, which is seconds of disk while the writer that caused it goes on
+// emitting events. For as long as that takes, nothing is reading the inotify
+// descriptor, and what the kernel cannot queue it drops — a Create that
+// nobody will ever report again. So Run does nothing but take events, and
+// one worker does the work behind them in the order they arrived. The queue
+// is generous rather than unbounded: a full one still blocks, but it is
+// thousands of events of slack rather than none.
+const eventQueue = 4096
+
 // Run processes filesystem events until ctx is done.
 func (w *Watcher) Run(ctx context.Context) {
 	defer w.fsw.Close()
+	defer w.stopSettles()
+	events := make(chan fsnotify.Event, eventQueue)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.work(ctx, events)
+	}()
+	// Wait for the worker to put down whatever it is holding, which is what
+	// this goroutine did for itself when it did the work as well.
+	defer func() {
+		close(events)
+		<-done
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -87,12 +134,32 @@ func (w *Watcher) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			w.handle(ev)
+			select {
+			case events <- ev:
+			case <-ctx.Done():
+				return
+			}
 		case err, ok := <-w.fsw.Errors:
 			if !ok {
 				return
 			}
 			w.lib.log.Warn("watcher error", "err", err)
+		}
+	}
+}
+
+// work does what each event asks for, one at a time and in the order they
+// arrived: a Create and the Write that follows it must not be reordered.
+func (w *Watcher) work(ctx context.Context, events <-chan fsnotify.Event) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			w.handle(ev)
 		}
 	}
 }
@@ -139,10 +206,56 @@ func (w *Watcher) walkNew(dir string) {
 		if !w.claimSettle() {
 			return
 		}
-		time.AfterFunc(d, func() {
-			defer w.releaseSettle()
-			w.rewalk(dir)
-		})
+		w.armSettle(d, dir)
+	}
+}
+
+// armSettle schedules one re-walk and keeps hold of its timer.
+//
+// The last of these is two minutes out, and the preferences can change in
+// two minutes: a timer armed before a root was removed used to fire after
+// Reset had dropped every watch and walk the removed tree, installing
+// watches on it that nothing would ever remove again. Nothing under it is
+// indexed — AddFile and AddDir both refuse a path outside the roots — but
+// the watches and the work their events cause stay for the life of the
+// process.
+func (w *Watcher) armSettle(after time.Duration, dir string) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.nextSettle++
+	id := w.nextSettle
+	// The callback waits on this lock until the timer has been recorded,
+	// so it can never find its own slot missing.
+	w.timers[id] = time.AfterFunc(after, func() {
+		w.forget(id)
+		w.rewalk(dir)
+	})
+}
+
+// forget releases the slot a fired or stopped re-walk held.
+func (w *Watcher) forget(id int64) {
+	w.mu.Lock()
+	_, held := w.timers[id]
+	delete(w.timers, id)
+	w.mu.Unlock()
+	if held {
+		w.releaseSettle()
+	}
+}
+
+// stopSettles drops every re-walk still outstanding: the directories have
+// changed, or the watcher is stopping. A walk already running is left to
+// finish, since nothing it can do is indexed or watched any more.
+func (w *Watcher) stopSettles() {
+	w.mu.Lock()
+	armed := make(map[int64]*time.Timer, len(w.timers))
+	for id, t := range w.timers {
+		armed[id] = t
+	}
+	w.mu.Unlock()
+	for id, t := range armed {
+		t.Stop()
+		w.forget(id)
 	}
 }
 
@@ -170,6 +283,11 @@ func (w *Watcher) rewalk(dir string) {
 		}
 		if d.IsDir() {
 			if strings.HasPrefix(d.Name(), ".") && p != dir {
+				return filepath.SkipDir
+			}
+			if !w.lib.UnderRoots(p) {
+				// A settle timer armed before the preferences changed, and
+				// the tree it was armed over is not the library's any more.
 				return filepath.SkipDir
 			}
 			if w.lib.excluded(p) {

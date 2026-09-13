@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -57,6 +58,10 @@ func Classify(path string) Kind {
 func (l *Library) Scan(addWatch func(dir string)) {
 	l.scanMu.Lock()
 	defer l.scanMu.Unlock()
+	// When this walk began, so that reconciliation can tell an item the
+	// watcher put there while the walk was elsewhere from one the walk
+	// simply did not find. See the drop loop below.
+	startedAt := time.Now().UnixMilli()
 	seen := make(map[string]struct{}, 1024)
 	seenSubs := make(map[string]struct{}, 64)
 	// DVD folders already folded into titles: every VOB in one names the
@@ -126,10 +131,19 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				return nil
 			}
 			if IsSubtitle(path) {
-				// Attachments to videos, not library items of their own.
+				// Attachments to videos, not library items of their own —
+				// but a new one is a change like any other, and saying so
+				// is what makes the closing notify fire. A walk that found
+				// nothing but a caption used to publish nothing at all, so
+				// an open player went on offering the list it was given.
 				seenSubs[path] = struct{}{}
+				dir := filepath.Dir(path)
 				l.mu.Lock()
+				before := len(l.subsByDir[dir])
 				l.addSub(path)
+				if len(l.subsByDir[dir]) != before {
+					changed, held = true, true
+				}
 				l.mu.Unlock()
 				return nil
 			}
@@ -215,22 +229,56 @@ func (l *Library) Scan(addWatch func(dir string)) {
 		}
 	}
 
-	// Drop subtitle files that disappeared while we were not looking.
-	l.mu.Lock()
-	for dir, paths := range l.subsByDir {
-		kept := paths[:0]
+	// Drop subtitle files that disappeared while we were not looking — and
+	// only those. What this walk saw is not the whole of what is on disk:
+	// the watcher indexes a sidecar the moment it lands, so one that arrived
+	// after the walk passed its directory is in subsByDir and in no
+	// seenSubs. Sweeping on that alone took the captions off a film that
+	// had them, with no change event to make the player look again, until
+	// the next completed rescan — and for good with -rescan 0. So the
+	// unseen ones are asked about on disk, the way the items below have
+	// always been: gathered under the read lock, checked with no lock held.
+	// Still on disk is not the whole test either — a directory taken out of
+	// the preferences leaves its files exactly where they were, and its
+	// sidecars have to go with its films, which is what UnderRoots is for.
+	l.mu.RLock()
+	var lostSubs []string
+	for _, paths := range l.subsByDir {
 		for _, p := range paths {
-			if _, ok := seenSubs[p]; ok || underAny(failed, p) {
-				kept = append(kept, p)
+			if _, ok := seenSubs[p]; !ok && !underAny(failed, p) {
+				lostSubs = append(lostSubs, p)
 			}
 		}
-		if len(kept) == 0 {
-			delete(l.subsByDir, dir)
-		} else {
-			l.subsByDir[dir] = kept
-		}
 	}
-	l.mu.Unlock()
+	l.mu.RUnlock()
+	goneSubs := make(map[string]struct{})
+	for _, p := range lostSubs {
+		if _, err := os.Stat(p); err == nil && l.UnderRoots(p) && !l.excluded(p) {
+			continue // still there, and still ours
+		}
+		goneSubs[p] = struct{}{}
+	}
+	if len(goneSubs) > 0 {
+		l.mu.Lock()
+		for dir, paths := range l.subsByDir {
+			kept := paths[:0]
+			for _, p := range paths {
+				if _, gone := goneSubs[p]; !gone {
+					kept = append(kept, p)
+				}
+			}
+			if len(kept) == 0 {
+				delete(l.subsByDir, dir)
+			} else {
+				l.subsByDir[dir] = kept
+			}
+		}
+		l.mu.Unlock()
+		// A caption leaving is a change to what the library holds. Without
+		// saying so the closing notify might not fire at all, and a player
+		// that had been told about the file would never be told it went.
+		changed, held = true, true
+	}
 
 	// Drop index entries whose files disappeared while we were not looking.
 	// The candidates are gathered under the read lock and the disk is asked
@@ -246,11 +294,34 @@ func (l *Library) Scan(addWatch func(dir string)) {
 	}
 	l.mu.RUnlock()
 	kept := make(map[string]fs.FileInfo, len(gone))
+	keptInside := make(map[string]struct{})
+	missing := make(map[string]struct{}) // the disk says there is nothing there
 	for _, p := range gone {
+		// Content that lives inside another file is asked about by its
+		// container. The path is the container's with the member's name
+		// after a NUL, and the syscall layer refuses any string holding
+		// one — so os.Stat here could never answer anything but EINVAL,
+		// and every rar member and DVD title the walk had not reported was
+		// dropped without a question being asked. That is the ordinary
+		// state of a container the watcher indexed after the walk passed
+		// its directory, and of one whose parse failed this time round: a
+		// parse that failed is no more a verdict than a directory that
+		// could not be listed.
+		if container, _, inside := strings.Cut(p, "\x00"); inside {
+			if info, err := os.Stat(container); err == nil && l.stillIndexable(container, info) {
+				keptInside[p] = struct{}{}
+			}
+			continue
+		}
 		// Still on disk, but the walk passed it over deliberately — a
 		// sample beside its release, or a second path to a file already
 		// indexed — so it does not belong in the index any more.
-		if info, err := os.Stat(p); err == nil && l.stillIndexable(p, info) {
+		info, err := os.Stat(p)
+		if err != nil {
+			missing[p] = struct{}{}
+			continue
+		}
+		if l.stillIndexable(p, info) {
 			kept[p] = info
 		}
 	}
@@ -260,8 +331,23 @@ func (l *Library) Scan(addWatch func(dir string)) {
 		if !ok {
 			continue // gone already, by the watcher's hand
 		}
+		if _, ok := keptInside[p]; ok {
+			continue // its container is still there; see above
+		}
 		if info, ok := kept[p]; ok && !l.heldElsewhere(p, info) {
 			continue // still exists (e.g. race with watcher), keep it
+		}
+		// The disk said there was nothing there, and the item is younger
+		// than this walk: the watcher put it in while the walk was
+		// elsewhere — a path deleted and written again under the same name,
+		// or one that landed in a directory already passed — and the stat
+		// above, one syscall per missing path and then the wait for this
+		// lock, asked about a file that is no longer the one in the index.
+		// Only where the disk came back empty: where it answered, the rules
+		// above have already decided, and a path that has become a
+		// duplicate of another must still go however young it is.
+		if _, empty := missing[p]; empty && it.FirstSeen > startedAt {
+			continue
 		}
 		l.dropItem(it)
 		changed = true
@@ -695,13 +781,100 @@ func (l *Library) reindexContainer(container string, index func() ([]string, boo
 	if !changed {
 		return
 	}
-	go func() {
-		for _, p := range paths {
-			l.enrichOne(context.Background(), PathID(p))
-		}
-		l.notify() // publish the metadata, not just the file list
-	}()
+	l.readMembersSoon(container, paths)
 	l.notify()
+}
+
+// containerQuiet is how long a container must go without an event before its
+// members are read. The same two seconds the plain-file path waits.
+var containerQuiet = 2 * time.Second
+
+// containerKey names one container of one library. The library is part of it
+// so that two libraries in one process — which is to say the tests — cannot
+// take each other's pending reads away.
+type containerKey struct {
+	lib  *Library
+	path string
+}
+
+// containerRead is the metadata read pending for one container: at most one
+// waiting and at most one running, however many events arrive.
+type containerRead struct {
+	timer   *time.Timer
+	paths   []string // the members the next pass will read
+	running bool
+}
+
+var containerReads = struct {
+	mu sync.Mutex
+	m  map[containerKey]*containerRead
+}{m: map[containerKey]*containerRead{}}
+
+// readMembersSoon arranges for a container's members to be read once the
+// writer has gone quiet, one container's worth at a time.
+//
+// A watcher event on any volume of a set reparses the whole set, and a set
+// still being written moves its newest volume's modification time — which is
+// every member's, here — so every event reported every member as changed.
+// Each one then started a detached goroutine that read every member again:
+// during a download that is a goroutine many times a second, each running an
+// ffprobe per member over the loopback stream, none of them bounded by
+// anything, all of them on the disk the playback at the top of the priority
+// order is reading from. The plain-file path was given enrichAfterQuiet for
+// exactly this reason; this is the same rule at the container's granularity,
+// since a container's members are parsed and read as one batch.
+func (l *Library) readMembersSoon(container string, paths []string) {
+	key := containerKey{l, container}
+	containerReads.mu.Lock()
+	defer containerReads.mu.Unlock()
+	r := containerReads.m[key]
+	if r == nil {
+		r = &containerRead{}
+		containerReads.m[key] = r
+	}
+	r.paths = paths // the newest membership is the one worth reading
+	if r.timer != nil {
+		r.timer.Reset(containerQuiet)
+		return
+	}
+	r.timer = time.AfterFunc(containerQuiet, func() { l.readMembers(key) })
+}
+
+// readMembers reads one container's members, in order, and publishes what it
+// learned — the second of the two notifications a watcher path owes, the
+// first being the file list.
+func (l *Library) readMembers(key containerKey) {
+	containerReads.mu.Lock()
+	r := containerReads.m[key]
+	if r == nil {
+		containerReads.mu.Unlock()
+		return
+	}
+	if r.running {
+		// A pass is reading this container already. Let it finish and look
+		// again rather than put a second reader on the same volumes.
+		r.timer.Reset(containerQuiet)
+		containerReads.mu.Unlock()
+		return
+	}
+	paths := r.paths
+	r.paths, r.running = nil, true
+	containerReads.mu.Unlock()
+
+	for _, p := range paths {
+		l.enrichOne(context.Background(), PathID(p))
+	}
+	l.notify() // publish the metadata, not just the file list
+
+	containerReads.mu.Lock()
+	r.running = false
+	if r.paths != nil {
+		r.timer.Reset(containerQuiet) // more arrived while we were reading
+	} else {
+		r.timer.Stop()
+		delete(containerReads.m, key)
+	}
+	containerReads.mu.Unlock()
 }
 
 // indexRarSet parses the volume set starting at first and indexes its stored
@@ -709,6 +882,7 @@ func (l *Library) reindexContainer(container string, index func() ([]string, boo
 // members' virtual paths (for scan reconciliation) and whether anything
 // changed.
 func (l *Library) indexRarSet(first string) (paths []string, changed bool) {
+	defer enterContainer(first)()
 	entries, skipped, err := parseRarSet(first)
 	// What the set holds but cannot be served, and why. A compressed member
 	// is the common one and it is invisible from outside: the set parses,
@@ -813,6 +987,7 @@ func discsInside(container string, entries []*storedEntry) []*storedEntry {
 // ranges derived from the container rather than anything stored, so every
 // scan re-derives them.
 func (l *Library) indexDisc(container string, dir bool) (paths []string, changed bool) {
+	defer enterContainer(container)()
 	entries, err := discEntries(container, dir)
 	if err != nil {
 		l.log.Debug("disc parse failed", "path", container, "err", err)
@@ -835,6 +1010,60 @@ func (l *Library) indexDisc(container string, dir bool) (paths []string, changed
 		}
 	}
 	return l.indexStored(container, entries, mt)
+}
+
+// containers serializes "read a container and reconcile what it holds" per
+// container.
+//
+// Reading it is the parse — every volume of a set, or a disc's directory —
+// and reconciling is indexStored below, which drops whatever the last parse
+// listed and this one did not. Those are one read-modify-write and nothing
+// used to hold them together: Scan takes scanMu, but a watcher event and a
+// settle timer take nothing at all, and two of those over one container are
+// the ordinary case while a release lands. The slower parse then finished
+// last and reconciled its own older membership against the newer one,
+// dropping members the other had just indexed — and, because a container
+// reparses on an event on any of its volumes, what put them back was the
+// next event, which for a set that had finished arriving never came. What
+// that left was a release missing two of its files until the next completed
+// rescan.
+//
+// The whole of it is held, not merely the reconcile: serializing the write
+// alone still lets the older parse run last and install its own byte ranges
+// and sizes over the newer one's.
+var containers = struct {
+	mu   sync.Mutex
+	held map[string]*containerHold
+}{held: map[string]*containerHold{}}
+
+type containerHold struct {
+	mu   sync.Mutex
+	refs int
+}
+
+// enterContainer takes the container's lock and returns the release. The
+// entry is dropped when the last holder leaves, so a library of ten thousand
+// archives costs nothing between walks.
+func enterContainer(path string) func() {
+	containers.mu.Lock()
+	h := containers.held[path]
+	if h == nil {
+		h = &containerHold{}
+		containers.held[path] = h
+	}
+	h.refs++
+	containers.mu.Unlock()
+
+	h.mu.Lock()
+	return func() {
+		h.mu.Unlock()
+		containers.mu.Lock()
+		h.refs--
+		if h.refs == 0 {
+			delete(containers.held, path)
+		}
+		containers.mu.Unlock()
+	}
 }
 
 // indexStored indexes the media inside one container — a rar volume set, a
