@@ -319,7 +319,15 @@ func (l *Library) buildAlbums() []*Album {
 				spellings[key][it.Artist]++
 			}
 		case KindPlaylist:
-			playlists = append(playlists, it)
+			// A copy too, and for the same reason as the tracks above: the
+			// playlist is read after the lock is dropped — its path parsed,
+			// its name and time put on the album — and the live item is
+			// rewritten under that by any upsert that sees the file grow or
+			// repairs a path restored from a lossy record. The rule is the
+			// same one the comment above states; this branch was the one
+			// place in the build that still handed out the pointer.
+			cp := *it
+			playlists = append(playlists, &cp)
 		}
 	}
 	l.mu.RUnlock()

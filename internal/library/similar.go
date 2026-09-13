@@ -101,10 +101,24 @@ func (l *Library) scaledVectors() *scaled {
 		// mean taken out of every column, the seconds of sound included.
 		out.spoke[id], out.judged[id] = spokenVerdict(v)
 	}
-	l.featMu.Lock()
-	l.scaledCache = out
-	l.featMu.Unlock()
+	l.putScaled(out)
 	return out
+}
+
+// putScaled installs a freshly built scaling, unless a newer one landed
+// while this was being built. Nothing holds a lock across the build — it is
+// half a second over the whole library — so two builders overlap whenever a
+// vector is published between them, and the slower one used to install its
+// older answer over the newer. Nobody is served anything wrong by that,
+// each snapshot being stamped with the generation it was built from; what
+// it costs is that the next reader finds a stale stamp and rebuilds the lot
+// again, which is the thundering herd these generations exist to prevent.
+func (l *Library) putScaled(out *scaled) {
+	l.featMu.Lock()
+	if cur := l.scaledCache; cur == nil || cur.gen <= out.gen {
+		l.scaledCache = out
+	}
+	l.featMu.Unlock()
 }
 
 func dot(a, b []float32) float32 {
@@ -136,6 +150,15 @@ func (l *Library) spokenSet(sv *scaled) func(id string) bool {
 	l.featMu.RLock()
 	byRelease := l.byRelease
 	l.featMu.RUnlock()
+	return spokenWith(byRelease, sv)
+}
+
+// spokenWith is the same over release verdicts the caller already holds. A
+// caller that reads l.byRelease for one purpose and then lets spokenSet
+// read it again for another can be handed two different album builds, and
+// then what it filtered on and what it recorded disagree about which
+// releases are speech.
+func spokenWith(byRelease map[string]bool, sv *scaled) func(id string) bool {
 	return func(id string) bool {
 		if spoken, ok := byRelease[id]; ok {
 			return spoken
@@ -176,7 +199,12 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 		return nil
 	}
 	l.Albums() // so the releases' word is current before it is read
-	isSpoken := l.spokenSet(sv)
+	// The stamper's own set, rather than a second reading of the release
+	// verdicts: an album build landing between the two made the answer
+	// contradict itself, a track admitted as music being handed back marked
+	// as speech.
+	st := l.stamper()
+	isSpoken := st.spoken
 	spoken := isSpoken(id)
 	type hit struct {
 		id, key string
@@ -221,7 +249,6 @@ func (l *Library) Similar(id string, n int, kinds KindSet, f PathFilter) []Item 
 		}
 	}
 	allowed := f.allower()
-	st := l.stamper()
 	l.ensureFlags()
 	l.mu.RLock()
 	seedKey := ""
@@ -309,7 +336,13 @@ func (l *Library) affinities() *affinity {
 	}
 	likes, likesGen := l.likes.snapshot()
 	out := &affinity{likesGen: likesGen, featGen: sv.gen, release: release, bucket: map[string]int{}, akin: map[string]string{}}
-	isSpoken := l.spokenSet(sv)
+	// The same map the stamp above records, not another reading of the
+	// field: an album build landing in between would have the buckets kept
+	// apart by one set of release verdicts and the provenance naming
+	// another, and because the staleness test is by content the mis-stamped
+	// answer becomes acceptable for good the day the verdicts happen to say
+	// again what the stamp claims.
+	isSpoken := spokenWith(release, sv)
 	var liked, disliked []string
 	for id, v := range likes {
 		if _, ok := sv.vecs[id]; !ok {
@@ -347,10 +380,19 @@ func (l *Library) affinities() *affinity {
 			}
 		}
 	}
-	l.featMu.Lock()
-	l.affinityCache = out
-	l.featMu.Unlock()
+	l.putAffinity(out)
 	return out
+}
+
+// putAffinity installs a freshly built affinity, unless what is there was
+// built against newer verdicts or newer vectors — see putScaled for why an
+// older answer must not replace a newer one.
+func (l *Library) putAffinity(out *affinity) {
+	l.featMu.Lock()
+	if cur := l.affinityCache; cur == nil || (cur.featGen <= out.featGen && cur.likesGen <= out.likesGen) {
+		l.affinityCache = out
+	}
+	l.featMu.Unlock()
 }
 
 // affinityBucket grades a similarity difference: unrelated tracks sit near
@@ -463,10 +505,18 @@ func (l *Library) sounds() *sounds {
 			out.artists[key] = s
 		}
 	}
-	l.featMu.Lock()
-	l.soundsCache = out
-	l.featMu.Unlock()
+	l.putSounds(out)
 	return out
+}
+
+// putSounds installs freshly built sounds, unless what is there was built
+// from a newer library or newer vectors — see putScaled.
+func (l *Library) putSounds(out *sounds) {
+	l.featMu.Lock()
+	if cur := l.soundsCache; cur == nil || (cur.version <= out.version && cur.featGen <= out.featGen) {
+		l.soundsCache = out
+	}
+	l.featMu.Unlock()
 }
 
 // SimilarAlbums answers the releases that sound like the given one, among

@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"os/exec"
@@ -39,6 +40,13 @@ type featureRec struct {
 	mtime, size int64
 	vec         []float32
 	failed      bool
+	// retry is when a read that was interrupted — our own deadline, or the
+	// caller's — may be tried again. An interruption is not a verdict, so
+	// it must not be written down as one; but it must not be tried again a
+	// minute later either, since what the deadline is usually saying is
+	// that the disk is busy, and a track that always overruns would then be
+	// ninety seconds of ffmpeg on every pass for the life of the process.
+	retry time.Time
 }
 
 const (
@@ -51,6 +59,11 @@ const (
 	analysisRest = time.Minute
 	// analysisReport is how often progress is logged, in tracks.
 	analysisReport = 250
+	// analysisRetryAfter is how long a track whose read ran out of time is
+	// left alone before it is offered again. Long enough that a busy disk
+	// has stopped being busy, short enough that it is tried several times
+	// in the working day a whole pass takes.
+	analysisRetryAfter = time.Hour
 )
 
 var (
@@ -123,6 +136,23 @@ func (l *Library) markFailed(it Item) {
 	l.featMu.Unlock()
 }
 
+// markInterrupted remembers that a track's read ran out of time, so the
+// pass stops offering it for a while. Nothing else in the record is
+// touched: an interrupted read produced no answer, and neither the stamp
+// nor whatever vector was there describes anything new. This is the
+// thumbnailer's rule — a timeout is never a verdict — with the one thing a
+// loop needs that a request does not, which is somewhere to wait.
+func (l *Library) markInterrupted(it Item) {
+	l.featMu.Lock()
+	if l.features == nil {
+		l.features = map[string]featureRec{}
+	}
+	rec := l.features[it.ID]
+	rec.retry = time.Now().Add(analysisRetryAfter)
+	l.features[it.ID] = rec
+	l.featMu.Unlock()
+}
+
 // LoadFeatures restores the vectors the database holds. Ones written under
 // an older recipe are left out, so they are read again under the new one.
 // An empty vector is restored too: it is a track that decoded to silence,
@@ -155,8 +185,22 @@ func (l *Library) needsAnalysis(it *Item) bool {
 	l.featMu.RLock()
 	rec, ok := l.features[it.ID]
 	l.featMu.RUnlock()
+	if !rec.retry.IsZero() && time.Now().Before(rec.retry) {
+		return false // asked for and interrupted: not now, rather than never
+	}
 	return !ok || rec.mtime != it.ModTime || rec.size != it.Size
 }
+
+// readyForAnalysis says whether enough is known about a track to describe
+// it properly. The windows are a quarter, a half and three quarters of the
+// way through, so they are chosen from the duration — and a file nothing
+// has examined yet has none, which sends the read to the fixed marks
+// meant for a file whose length *cannot* be read. That answer is then
+// permanent: the vector is stamped with the file's mtime and size, and
+// nothing re-reads it until the file itself changes. A length that is
+// merely late is worth waiting for; one that never comes is what the fixed
+// marks are for, and an examined file has settled the difference.
+func readyForAnalysis(it Item) bool { return it.Duration > 0 || it.enriched }
 
 // AnalyzeLoop reads every audio track's features, forever: a pass over what
 // is missing, a rest, and another look for what arrived meanwhile. It waits
@@ -211,16 +255,35 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 		if !ok {
 			continue
 		}
+		if !readyForAnalysis(it) {
+			// Its length has not been read yet, only not read *yet*: the
+			// tag pass has never looked at this file. Describing it now
+			// would describe the wrong seconds of it for good.
+			continue
+		}
 		switch err := l.analyzeOne(ctx, db, it); {
 		case err == nil:
 			done++
 		case ctx.Err() != nil:
 			return
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+			// Our own budget, not the pass's — analyzeOne bounds each track
+			// — so the parent is still live and the switch above did not
+			// catch it. An interruption is not an answer: recording it as
+			// one wrote the track off for the whole run, and that is a
+			// track absent from every resemblance, from radio, from its
+			// release's sound and from the vote that shelves an audiobook.
+			l.markInterrupted(it)
+			l.log.Debug("audio analysis ran out of time", "path", it.Rel)
+			continue
 		default:
 			failed++
 			l.markFailed(it)
 			l.log.Debug("audio analysis failed", "path", it.Rel, "err", err)
 		}
+		// Only a track that was read or refused reaches this; the ones
+		// passed over count towards nothing, and the average below divides
+		// by how many were actually read.
 		if (done+failed)%analysisReport == 0 {
 			l.log.Info("audio analysis", "done", done, "failed", failed, "left", len(todo)-done-failed,
 				"per_track", (time.Since(start) / time.Duration(done+failed)).Round(time.Millisecond))
@@ -288,8 +351,8 @@ func analysisOffsets(durationMs int64) []float64 {
 // separate stretches (extractFeaturesFrom): joined end to end, the frame
 // straddling two of them read as an onset and a seam in the envelope that
 // the tempo and syllable cues then measured.
-func (l *Library) analyzeOne(ctx context.Context, db *blob.DB, it Item) error {
-	ctx, cancel := context.WithTimeout(ctx, analysisTimeout)
+func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) error {
+	ctx, cancel := context.WithTimeout(parent, analysisTimeout)
 	defer cancel()
 	input, extra, err := analysisInput(it)
 	if err != nil {
@@ -326,6 +389,15 @@ func (l *Library) analyzeOne(ctx context.Context, db *blob.DB, it Item) error {
 	// as a decode failure would markFailed the track and throw the vector
 	// away — read again next run for nothing.
 	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
+	if parent.Err() != nil {
+		// Shut down between the last decode and the write. The database is
+		// about to be closed under us — the analysis is not one of the
+		// loops shutdown waits for — and a write that lands after that is a
+		// write to a closed database. The vector is in memory, which is
+		// where a failed write leaves it anyway; the next run reads the
+		// file again.
+		return nil
+	}
 	if db != nil {
 		if err := db.PutFeatures(it.ID, it.ModTime, it.Size, featuresVersion, vec); err != nil {
 			l.log.Debug("audio features not stored", "path", it.Rel, "err", err)

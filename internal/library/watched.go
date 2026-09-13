@@ -171,11 +171,31 @@ func (l *Library) watchTotals() (started, done int) {
 	}
 	l.mu.RUnlock()
 
+	l.commitWatchTotals(version, watchVer, started, done)
+	return started, done
+}
+
+// commitWatchTotals records a count, unless a newer one was committed while
+// this one was being counted.
+//
+// The memo is validated in one critical section and committed in another,
+// with the walk in between: two computations can therefore overlap, and the
+// one that sampled the older pair can be the one that commits last. The
+// answer it commits is never wrong — both counters are read before the map
+// is copied and both only ever rise, so a stamp is never newer than the
+// data it describes — but a stamp that goes backwards is a memo every later
+// caller mismatches, and the walk is paid again for a number that was
+// already right. Both counters being monotonic is also what makes "newer"
+// answerable here without holding watchMu across the index's own lock,
+// which would be an ordering nothing else in the package takes.
+func (l *Library) commitWatchTotals(version, watchVer int64, started, done int) {
 	l.watchMu.Lock()
+	defer l.watchMu.Unlock()
+	if l.totalsValid && (l.totalsVersion > version || (l.totalsVersion == version && l.totalsWatchVer > watchVer)) {
+		return
+	}
 	l.totalsValid, l.totalsVersion, l.totalsWatchVer = true, version, watchVer
 	l.totalsStarted, l.totalsDone = started, done
-	l.watchMu.Unlock()
-	return started, done
 }
 
 // watchFields is the part of Library this file owns.
