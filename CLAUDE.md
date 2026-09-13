@@ -1572,6 +1572,26 @@ Change propagation is the core loop:
   for tags before any of this existed: such items come back from a restart
   marked finished and would otherwise never be read again. It costs one
   header per video and per still, once per reading.
+- **Every completed scan is followed by a reading pass, not just the first.**
+  Only two things ever open a file for its tags: this sweep, which `main` ran
+  exactly once per process, and the watcher's debounced read on that file's
+  own events. A file the watcher never saw therefore reached the listing and
+  was opened by nothing — no duration, no codecs, no shape — until the
+  process was restarted. The watcher misses more than it looks: a directory
+  created and filled inside the window before its watch exists and past what
+  the settle walks cover, a tree moved in while the event queue is draining,
+  anything under a directory whose watch could not be installed at all.
+  Measured on a live library, four videos sat in the listing with no playing
+  time on them hours after they had finished arriving, each of which ffprobe
+  read in a tenth of a second. So the rescan ends with `EnrichMeta` as the
+  first walk does. It is affordable for the same reason it is correct: the
+  pass is a walk of the index that takes what still needs reading and returns
+  at once where that is nothing, so a rescan that found nothing new costs a
+  walk and no file I/O. It runs **outside** `scanGate` — it yields to
+  playback and to the thumbnailer and can take a while on a big arrival, and
+  the next walk must not queue behind it. The walk itself still does not read
+  tags: that is the debounce's job, and a walk of a hundred thousand files
+  must not become a hundred thousand reads.
 - Enrichment is priority-driven: `EnrichNow` (blocking, bounded by the
   caller's context) and `EnrichSoon` (one background pass at a time) read
   what the browser is showing before the rest — the listing page, the

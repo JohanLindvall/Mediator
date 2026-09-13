@@ -524,7 +524,12 @@ Go binary with the TypeScript frontend embedded.
   ever be told about again. Subtitle files are reconciled like the media
   they belong to, so one dropped beside a film after its directory had been
   walked is kept and announced rather than swept away at the end of that
-  walk — which with `-rescan 0` meant for the rest of the run.
+  walk — which with `-rescan 0` meant for the rest of the run. The rescan
+  also *reads* what it finds: a file the watcher never saw used to reach the
+  listing with no playing time, no codecs and no preview on it, and stay that
+  way until the server was restarted. With `-rescan 0` there is no safety net
+  for that either — the watcher is then the only thing that reads a new
+  file.
 - **One entry per record** — a release spread over `CD1`, `CD2` and `CD3`
   is one album, with its tracks running disc by disc rather than interleaved
   by track number, and named without the disc marker its tags carry. And a

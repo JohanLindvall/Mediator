@@ -554,3 +554,56 @@ func TestAFileWhoseProbeWasCutShortIsLeftAloneThisRun(t *testing.T) {
 		t.Fatal("the file was not looked at after it changed on disk")
 	}
 }
+
+// Only two things ever read a file's tags: the background sweep, which main
+// used to run exactly once per process, and the watcher's debounced read on
+// the events for that file. A file the watcher never saw — a directory
+// created and filled inside the window before its watch exists, a tree moved
+// in while the queue drains, anything under a directory whose watch could not
+// be installed — is indexed by the periodic walk and, before this, opened by
+// nothing: no duration, no codecs, no shape, until the process restarted.
+//
+// The walk deliberately does not read tags itself; that is the debounce's
+// job, and a walk of a hundred thousand files must not become a hundred
+// thousand file reads. What closes the hole is that main runs the sweep again
+// after every completed rescan, which is only sound because the sweep is
+// re-runnable and cheap: it walks the index, takes what still needs reading,
+// and returns at once when that is nothing.
+func TestTheSweepPicksUpWhatALaterWalkFound(t *testing.T) {
+	dir := t.TempDir()
+	taggedMP3(t, filepath.Join(dir, "first.mp3"))
+	l := quietLib(dir)
+	l.Scan(nil)
+	l.EnrichMeta(context.Background(), nil)
+
+	first := PathID(filepath.Join(dir, "first.mp3"))
+	if it, ok := l.Get(first); !ok || it.Duration == 0 {
+		t.Fatalf("the first pass did not read the file it found: %+v", it)
+	}
+
+	// A second file arrives and is indexed by a later walk, with no watcher
+	// event for it — the case this exists for.
+	taggedMP3(t, filepath.Join(dir, "second.mp3"))
+	l.Scan(nil)
+	second := PathID(filepath.Join(dir, "second.mp3"))
+	it, ok := l.Get(second)
+	if !ok {
+		t.Fatal("the walk did not index the file that arrived")
+	}
+	if it.Duration != 0 {
+		t.Fatal("the walk read the file itself; this test is about the case where nothing has")
+	}
+
+	// The sweep run again is what reads it, and it must not re-read the one
+	// already done — that is what makes running it after every rescan cheap.
+	l.EnrichMeta(context.Background(), nil)
+	if it, _ = l.Get(second); it.Duration == 0 {
+		t.Error("a file the walk found was never read: it would carry no playing time until a restart")
+	}
+	before, _ := l.Get(first)
+	l.EnrichMeta(context.Background(), nil)
+	after, _ := l.Get(first)
+	if before.Duration != after.Duration {
+		t.Errorf("the sweep read an already-examined file again: %d then %d", before.Duration, after.Duration)
+	}
+}

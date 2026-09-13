@@ -342,6 +342,13 @@ func run(cfg config, log *slog.Logger) error {
 	// the snapshot under the library's own scan lock, which is not reachable
 	// from here.
 	var scanGate sync.Mutex
+	// Playback outranks thumbnailing, which outranks metadata reading. What
+	// the background tiers stand down for. The analysis adds the interface
+	// itself to that list (uiQuiet): it is the lowest tier and the only one
+	// that runs for minutes at a time, and a viewer waiting for a listing
+	// should not be waiting behind it.
+	busy := func() bool { return lib.Streaming() || thumbs.Generating() }
+	analysisBusy := func() bool { return busy() || lib.UsedWithin(uiQuiet) }
 	// What every completed scan is followed by: the caches and the owner's
 	// records of files that are gone are dropped, never on an empty index —
 	// an unreadable root looks empty and would wipe the house.
@@ -374,13 +381,6 @@ func run(cfg config, log *slog.Logger) error {
 		// safe to throw away what the database holds for everything else.
 		pruneAll()
 		scanGate.Unlock()
-		// Playback outranks thumbnailing, which outranks metadata reading.
-		// What the background tiers stand down for. The analysis adds the
-		// interface itself to that list (uiQuiet): it is the lowest tier and
-		// the only one that runs for minutes at a time, and a viewer waiting
-		// for a listing should not be waiting behind it.
-		busy := func() bool { return lib.Streaming() || thumbs.Generating() }
-		analysisBusy := func() bool { return busy() || lib.UsedWithin(uiQuiet) }
 		lib.EnrichMeta(ctx, busy)
 		// And reading how the music sounds comes after all of them.
 		if cfg.analyze {
@@ -403,6 +403,28 @@ func run(cfg config, log *slog.Logger) error {
 					// is gone from the caches and the records too.
 					pruneAll()
 					scanGate.Unlock()
+					// And what it found *arrived* is read, which nothing did
+					// before. Only two things ever read a file's tags: the
+					// sweep here, which used to run once per process, and the
+					// watcher's debounced read on the events for that file.
+					// So a file the watcher did not see — a directory created
+					// and filled inside the window before its watch exists,
+					// past what the settle walks cover; a tree moved in while
+					// the queue was draining; anything under a directory
+					// whose watch could not be installed — was indexed by
+					// this walk and then never opened: no duration, no
+					// codecs, no shape, until the process was restarted.
+					// Measured on a live library: four videos sitting in the
+					// listing with no playing time on them, hours after they
+					// finished arriving, each readable by ffprobe in a tenth
+					// of a second. The pass is a walk of the index and a
+					// return where nothing needs reading, so a rescan that
+					// found nothing new costs nothing.
+					//
+					// Outside the gate deliberately: it yields to playback
+					// and to the thumbnailer and can take a while on a big
+					// arrival, and the next walk must not queue behind it.
+					lib.EnrichMeta(ctx, busy)
 				}
 			}
 		}()
