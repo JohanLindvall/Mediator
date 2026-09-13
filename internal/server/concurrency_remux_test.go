@@ -89,6 +89,45 @@ func TestFilterListIsReadOnceAndSilenceIsNotRemembered(t *testing.T) {
 	}
 }
 
+// A reading that comes apart still releases whoever is waiting on it. The
+// publish used to be written out after the reading rather than deferred, so a
+// reading that did not return normally — a panic in a handler, which the
+// server above recovers at the cost of that one connection — left the channel
+// open and the reading registered, and every later asker for that binary
+// waited on a reading that was no longer running, for the life of the
+// process. There is no context in hand to leave by.
+func TestAFilterReadingThatComesApartReleasesItsWaiters(t *testing.T) {
+	forgetFilters(t)
+	const bin = "/nowhere/ffmpeg"
+	var wait chan struct{}
+	probeFilters = func(string) (map[string]bool, bool) {
+		// Taken from inside the reading, which is the only moment it is
+		// there to take: published, the leader removes it.
+		filtersMu.Lock()
+		wait = filterRuns[bin]
+		filtersMu.Unlock()
+		panic("the reading came apart")
+	}
+	func() {
+		defer func() { _ = recover() }()
+		haveFilter(bin, "zscale")
+	}()
+	if wait == nil {
+		t.Fatal("the reading was never registered, so no waiter could have found it")
+	}
+	select {
+	case <-wait:
+	default:
+		t.Error("the waiters were left on an open channel with nothing coming to close it")
+	}
+	filtersMu.Lock()
+	_, still := filterRuns[bin]
+	filtersMu.Unlock()
+	if still {
+		t.Error("the reading is still registered, so the next asker waits on one that is not running")
+	}
+}
+
 // remuxItem is a film the rewrapper will take: a container no browser opens
 // around streams all of them decode.
 func remuxItem(id, name, dir string, size int64) library.Item {
@@ -224,6 +263,13 @@ func TestRewrapsInFlightCountTowardsTheBudget(t *testing.T) {
 		if err := os.WriteFile(old[i], make([]byte, 3*unit), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Under the lock, as anything touching these fields has to be: nothing
+	// else is running yet, but a setup written the other way is the pattern
+	// the race detector exists to catch and stops being harmless the moment
+	// somebody reorders it.
+	r.mu.Lock()
+	for i := range old {
 		done := make(chan struct{})
 		close(done)
 		r.entries["old"+string(rune('a'+i))] = &remuxEntry{
@@ -234,6 +280,7 @@ func TestRewrapsInFlightCountTowardsTheBudget(t *testing.T) {
 	}
 	r.total = 6 * unit
 	r.seq = 2
+	r.mu.Unlock()
 
 	gone, leave := context.WithCancel(context.Background())
 	leave()

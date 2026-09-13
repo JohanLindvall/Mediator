@@ -154,14 +154,24 @@ func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 				return false
 			}
 		}
-		v, answered := reorderUnderstated(ctx, it)
-		s.reorder.settle(key, v, answered)
+		v, answered := s.look(ctx, key, it)
 		if answered && v {
 			s.log.Info("picture must be re-encoded rather than copied",
 				"path", it.Rel, "why", "the stream reorders further than it declares")
 		}
 		return answered && v
 	}
+}
+
+// look runs the look and settles it from a defer, so that whoever is waiting
+// on it is released even where the look comes apart: a panic in a handler is
+// recovered by the server above and costs only that connection, where a
+// `looking` entry left behind outlives the request and leaves every later
+// asker for this film waiting out a budget of their own on a look that is no
+// longer running.
+func (s *Server) look(ctx context.Context, key string, it library.Item) (v, answered bool) {
+	defer func() { s.reorder.settle(key, v, answered) }()
+	return reorderUnderstated(ctx, it)
 }
 
 // reorderUnderstated runs the look itself. answered says the file was read
@@ -191,7 +201,13 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 		"-read_intervals", "%+#" + strconv.Itoa(reorderProbeFrames),
 		"-of", "json",
 	}, in.args...)
-	out, err := exec.CommandContext(ctx, probe, args...).Output()
+	cmd := exec.CommandContext(ctx, probe, args...)
+	// The budget bounds the wait and not only the process: Output() waits
+	// for the pipe as well as for the child, and a grandchild holding it
+	// open outlives the kill — which here is a look everybody asking about
+	// this film is queued behind.
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.Output()
 	if err != nil || ctx.Err() != nil {
 		return false, false // no answer is not an accusation
 	}

@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 )
 
 // tonemapSoftware is the journey through libavfilter: into linear light,
@@ -92,7 +93,9 @@ func haveFilter(ffmpeg, name string) bool {
 	}
 	if wait, running := filterRuns[ffmpeg]; running {
 		filtersMu.Unlock()
-		<-wait // bounded by the reader's own budget, below
+		// Bounded by the reader's own budget, below, and released from a
+		// defer, so it is closed even where the reading comes apart.
+		<-wait
 		filtersMu.Lock()
 		set, ok := filterSets[ffmpeg]
 		filtersMu.Unlock()
@@ -102,14 +105,26 @@ func haveFilter(ffmpeg, name string) bool {
 	filterRuns[ffmpeg] = wait
 	filtersMu.Unlock()
 
-	set, ok := probeFilters(ffmpeg)
-	filtersMu.Lock()
-	if ok {
-		filterSets[ffmpeg] = set
-	}
-	delete(filterRuns, ffmpeg)
-	close(wait)
-	filtersMu.Unlock()
+	// Published from a defer, because a waiter has no way out of `<-wait`
+	// other than the leader closing it: there is no context in hand here,
+	// haveFilter being asked in the middle of planning a conversion rather
+	// than on behalf of one request. A reading that came apart would
+	// otherwise leave the channel open and every later asker for this
+	// binary waiting on it for the life of the process — and a panic here
+	// is survivable, the server above recovering it and closing only that
+	// connection.
+	var set map[string]bool
+	var ok bool
+	defer func() {
+		filtersMu.Lock()
+		if ok {
+			filterSets[ffmpeg] = set
+		}
+		delete(filterRuns, ffmpeg)
+		close(wait)
+		filtersMu.Unlock()
+	}()
+	set, ok = probeFilters(ffmpeg)
 	return ok && set[name]
 }
 
@@ -122,7 +137,14 @@ func haveFilter(ffmpeg, name string) bool {
 func readFilters(ffmpeg string) (map[string]bool, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), hwProbeBudget)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-filters").Output()
+	cmd := exec.CommandContext(ctx, ffmpeg, "-hide_banner", "-filters")
+	// The budget has to bound the wait and not only the process. Output()
+	// waits for the pipe to close as well as for the child to die, and a
+	// grandchild holding that pipe open outlives the kill — which here is a
+	// reading that everybody else is waiting on. Every other child process
+	// in this package says the same thing.
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, false
 	}
