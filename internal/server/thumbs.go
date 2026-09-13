@@ -84,11 +84,14 @@ const (
 	// different part of the file, and any one of them can be the one that
 	// waits on a disk doing something else.
 	spriteFrameTimeout = 20 * time.Second
-	// spriteTimeout bounds the whole sheet.
-	spriteTimeout = 90 * time.Second
-	// archiveSpriteTimeout is the same for a member of an archive set, where
-	// every frame is a ranged read over loopback: measured at up to 1.9 s
-	// each, so ten of them plus the reader's own work wants room.
+)
+
+// spriteTimeout bounds the whole sheet, and archiveSpriteTimeout is the same
+// for a member of an archive set, where every frame is a ranged read over
+// loopback: measured at up to 1.9 s each, so ten of them plus the reader's own
+// work wants room. Vars so a test can shorten them.
+var (
+	spriteTimeout        = 90 * time.Second
 	archiveSpriteTimeout = 3 * time.Minute
 )
 
@@ -106,7 +109,7 @@ type Thumbnailer struct {
 	bgSem chan struct{} // collapses generation to one job while streaming
 
 	negMu sync.Mutex
-	neg   map[string]struct{} // keys that recently failed; avoids retry storms
+	neg   map[string]time.Time // keys that recently failed, and when
 
 	genMu sync.Mutex
 	gen   map[string]*genEntry // in-flight generations by cache key
@@ -141,7 +144,7 @@ func NewThumbnailer(store *blob.DB, streaming func() bool, log *slog.Logger) *Th
 		sem:       make(chan struct{}, n),
 		ffSem:     make(chan struct{}, 2),
 		bgSem:     make(chan struct{}, 1),
-		neg:       make(map[string]struct{}),
+		neg:       make(map[string]time.Time),
 		gen:       make(map[string]*genEntry),
 	}
 }
@@ -248,10 +251,7 @@ func (t *Thumbnailer) cached(ctx context.Context, it library.Item, width int, ge
 
 	key := fmt.Sprintf("%s|%d|%d|%d", it.ID, it.ModTime, it.Size, width)
 
-	t.negMu.Lock()
-	_, failed := t.neg[key]
-	t.negMu.Unlock()
-	if failed {
+	if t.recentlyFailed(key) {
 		return nil, ErrNoThumb
 	}
 
@@ -283,29 +283,68 @@ func (t *Thumbnailer) cached(ctx context.Context, it library.Item, width int, ge
 
 	e.data, e.err = t.gated(ctx, gen)
 
+	// The answer is published before the entry saying somebody is working on
+	// it is dropped. The other order left a window — a few instructions for a
+	// failure, a bolt Batch with an fsync in it for a success — in which the
+	// store held nothing, the negative cache held nothing and the in-flight
+	// map held nothing, so a request arriving inside it led a second full
+	// generation of a key that had just been answered: an ffmpeg seek, or ten
+	// of them over a volume set, beside whatever is playing. The
+	// embedded-subtitle dedup one file along has always done it this way.
+	if e.err != nil {
+		// A canceled request says nothing about the item — don't negative-cache.
+		if !errors.Is(e.err, context.Canceled) && !errors.Is(e.err, context.DeadlineExceeded) {
+			t.negMu.Lock()
+			if len(t.neg) > 50000 {
+				t.neg = make(map[string]time.Time)
+			}
+			t.neg[key] = time.Now()
+			t.negMu.Unlock()
+		}
+	} else if t.store != nil {
+		if err := t.store.PutThumb(it.ID, it.ModTime, it.Size, width, e.data); err != nil {
+			t.log.Warn("thumb store write failed", "id", it.ID, "err", err)
+		}
+	}
+
 	t.genMu.Lock()
 	delete(t.gen, key)
 	t.genMu.Unlock()
 	close(e.done)
 
 	if e.err != nil {
-		// A canceled request says nothing about the item — don't negative-cache.
-		if !errors.Is(e.err, context.Canceled) && !errors.Is(e.err, context.DeadlineExceeded) {
-			t.negMu.Lock()
-			if len(t.neg) > 50000 {
-				t.neg = make(map[string]struct{})
-			}
-			t.neg[key] = struct{}{}
-			t.negMu.Unlock()
-		}
 		return nil, e.err
 	}
-	if t.store != nil {
-		if err := t.store.PutThumb(it.ID, it.ModTime, it.Size, width, e.data); err != nil {
-			t.log.Warn("thumb store write failed", "id", it.ID, "err", err)
-		}
-	}
 	return e.data, nil
+}
+
+// negTTL is how long a failure is remembered. It is a retry-storm guard and
+// not a verdict: the grid re-asks for every failed tile on every change to the
+// library, which is every few seconds while anything is being written, so the
+// memory has to be there — but it must not outlive the reason.
+//
+// A mount that stops answering is the case. Every item under it fails at once
+// — EIO out of OpenItem for a still, no frame at all for a film, neither of
+// them a cancellation — and the key is (id, mtime, size, width), not one
+// component of which changes when the disk comes back. The files play again,
+// as the index deliberately keeps them; their tiles used to stay grey until
+// the process was restarted.
+var negTTL = 10 * time.Minute
+
+// recentlyFailed reports whether this key failed lately, forgetting it once
+// the failure has aged out.
+func (t *Thumbnailer) recentlyFailed(key string) bool {
+	t.negMu.Lock()
+	defer t.negMu.Unlock()
+	at, failed := t.neg[key]
+	if !failed {
+		return false
+	}
+	if time.Since(at) >= negTTL {
+		delete(t.neg, key)
+		return false
+	}
+	return true
 }
 
 // gated runs one generation, but while media is streaming it first takes the
@@ -325,14 +364,48 @@ func (t *Thumbnailer) gated(ctx context.Context, gen func(context.Context) ([]by
 
 func (t *Thumbnailer) generate(ctx context.Context, it library.Item, width int) ([]byte, error) {
 	switch it.Kind {
-	case library.KindImage:
-		return t.fromImageFile(ctx, it, width)
-	case library.KindAudio:
-		return t.fromAudio(ctx, it, width)
+	case library.KindImage, library.KindAudio:
+		// One budget for the item, as every video path has. These two are the
+		// generations with no ffmpeg in them and so no process for a deadline
+		// to kill, and they run under the single background slot while
+		// anything is playing: a half-gigabyte photograph read over a mount
+		// that had gone slow held that slot for as long as the read took, and
+		// with it every other tile and every scrub sheet in the process.
+		cctx, cancel := context.WithTimeout(ctx, stillThumbTimeout)
+		defer cancel()
+		if it.Kind == library.KindImage {
+			return t.fromImageFile(cctx, it, width)
+		}
+		return t.fromAudio(cctx, it, width)
 	case library.KindVideo:
 		return t.fromVideo(ctx, it, width)
 	}
 	return nil, ErrNoThumb
+}
+
+// stillThumbTimeout bounds one picture: the open, the read and the decode
+// together. A photograph is a header, a read and a scale — past a minute of
+// that the disk has stopped answering rather than the picture being large. A
+// var so a test can shorten it.
+var stillThumbTimeout = 60 * time.Second
+
+// ctxReader gives up on a read when the context does. io.ReadAll consults
+// nothing, so without this the budget above could not end a read at all.
+//
+// What it bounds is the slow read, not the wedged one: a read already blocked
+// in the kernel — a hard-mounted share that has stopped answering — returns
+// when it returns, and nothing inside a process can say otherwise. That is the
+// honest limit of this.
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 func (t *Thumbnailer) acquire(ctx context.Context, sem chan struct{}) error {
@@ -506,6 +579,15 @@ func (t *Thumbnailer) fromVideo(ctx context.Context, it library.Item, width int)
 	}
 	defer func() { <-t.ffSem }()
 
+	// One budget for the item, not one per attempt, exactly as the archived
+	// path has: four offsets and the repair behind them each opened a fresh
+	// thirty seconds, so a single tile could hold half this process's ffmpeg
+	// capacity for two and a half minutes — in an app whose priority order
+	// puts thumbnails below the playback they are taking the disk from. The
+	// per-seek deadline is unchanged and now hangs off this one.
+	ctx, cancel := context.WithTimeout(ctx, plainThumbItemTimeout)
+	defer cancel()
+
 	// A tenth of the way in, for the same reason archived video is (see
 	// thumbOffsets): the opening of a film is its front matter. For a
 	// television episode that is the distributor's logo card almost without
@@ -577,6 +659,15 @@ func (t *Thumbnailer) repairedFrame(ctx context.Context, it library.Item, width 
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if cctx.Err() != nil {
+			// Our own deadline, which is the disk being busy — the very thing
+			// the timeout is for. Reported as "no frame" it fell through to
+			// ErrNoThumb and the film was written off for the life of the
+			// process, which is the fault runFrame was introduced to end two
+			// functions along. A wrapped DeadlineExceeded keeps it out of the
+			// negative cache.
+			return nil, fmt.Errorf("thumbnail repair gave up waiting: %w", context.DeadlineExceeded)
+		}
 		return nil, nil // the copy is a last resort; its failure is not a verdict
 	}
 	data, err := t.runFrame(ctx, cctx, nil, func(out string) []string {
@@ -590,9 +681,13 @@ func (t *Thumbnailer) repairedFrame(ctx context.Context, it library.Item, width 
 	return data, err
 }
 
-// plainThumbTimeout bounds one seek into a plain file. A variable so a test
-// can shorten it.
-var plainThumbTimeout = 30 * time.Second
+// plainThumbTimeout bounds one seek into a plain file, and
+// plainThumbItemTimeout the whole tile — every offset and the repair behind
+// them together. Variables so a test can shorten them.
+var (
+	plainThumbTimeout     = 30 * time.Second
+	plainThumbItemTimeout = 60 * time.Second
+)
 
 // videoSeeks is where to look for a frame, in the order to try.
 //
@@ -892,11 +987,22 @@ func (t *Thumbnailer) fromArchivedVideo(ctx context.Context, it library.Item, wi
 			// reasons it can come back empty are not all about the file: an
 			// ffmpeg built without the http protocol, or a loopback the
 			// process cannot reach, would otherwise leave the item with no
-			// thumbnail at all when piping would still have worked. A
-			// cancelled or expired budget is different — nobody is waiting
-			// for a second attempt, and it must not be spent.
-			if !errors.Is(err, errSeekProducedNothing) || cctx.Err() != nil {
+			// thumbnail at all when piping would still have worked. Anything
+			// else — a frame, a flat film, an interruption already worded by
+			// runFrame — is the answer.
+			if !errors.Is(err, errSeekProducedNothing) {
 				return data, err
+			}
+			// A cancelled or expired budget is different: nobody is waiting
+			// for a second attempt, and it must not be spent. It must not be
+			// reported as the sentinel either, which means nothing outside
+			// this file and would be negative-cached as a verdict on the
+			// member — an expired deadline is a statement about the disk.
+			if cctx.Err() != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				return nil, fmt.Errorf("archived thumbnail gave up waiting: %w", context.DeadlineExceeded)
 			}
 			t.log.Debug("archived thumbnail: seeking produced nothing, falling back to a piped prefix",
 				"id", it.ID, "err", err)
@@ -1240,6 +1346,18 @@ func (t *Thumbnailer) makeSprite(ctx context.Context, it library.Item) ([]byte, 
 	if ctx.Err() != nil {
 		return nil, ctx.Err() // closing the player mid-run is not a verdict
 	}
+	if cctx.Err() != nil {
+		// The sheet's own budget, not the viewer's. Only the caller's context
+		// was consulted here, so an expiry part way through the ten seeks came
+		// out as whatever had been gathered: with a frame or two, a sheet
+		// whose remaining cells are painted black, stored under a key that
+		// never rotates again for a stable file and served immutable for a
+		// year; with none, ErrNoThumb, negative-cached for the life of the
+		// process. Neither is earned. A wrapped DeadlineExceeded is what
+		// runFrame already answers one screen up, and it keeps this out of
+		// both the store and the negative cache.
+		return nil, fmt.Errorf("sprite gave up waiting for frames: %w", context.DeadlineExceeded)
+	}
 	if got == 0 {
 		return nil, ErrNoThumb
 	}
@@ -1289,6 +1407,7 @@ func (t *Thumbnailer) encodeResized(ctx context.Context, r io.Reader, width int)
 		return nil, err
 	}
 	defer func() { <-t.sem }()
+	r = ctxReader{ctx: ctx, r: r}
 
 	// The dimensions live in the header, so an image too large to decode is
 	// rejected from the first megabyte rather than after buffering the whole

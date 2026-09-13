@@ -55,8 +55,24 @@ var cropLine = regexp.MustCompile(`crop=(\d+):(\d+):(\d+):(\d+)`)
 // four answers both. Keyed like the thumbnails, by the file as it is.
 var cropRuns = struct {
 	mu       sync.Mutex
-	inflight map[string]chan struct{}
-}{inflight: map[string]chan struct{}{}}
+	inflight map[string]*cropRun
+}{inflight: map[string]*cropRun{}}
+
+// cropRun is one detection in flight and the answer it produced. The answer
+// has to travel in the entry rather than through the store, because the store
+// is not always there: with -db off nothing is kept at all, and a PutCrop that
+// fails is only logged — so the close of the channel conveyed nothing, every
+// waiter missed in the store, found the entry already gone and led a full set
+// of four seeks of its own, which is exactly what this exists to prevent.
+//
+// ok says the leader finished. An interrupted leader wrote nothing down and
+// says nothing about the file, so the next caller leads instead of inheriting
+// its silence — the same rule the thumbnailer's followers keep.
+type cropRun struct {
+	done chan struct{}
+	box  CropResponse
+	ok   bool
+}
 
 // handleCrop answers where the picture actually is inside this file's frame.
 // An empty box means there is nothing to trim, which is the ordinary case
@@ -69,40 +85,66 @@ func (s *Server) handleCrop(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), cropTimeout)
 	defer cancel()
+	// The samples fall at fractions of the length, so the length has to be
+	// known before they can be placed. The player asks for the borders as it
+	// opens a film — before, in practice, the item request that reads them —
+	// so a film nothing had measured yet was answered without a single seek.
+	// This is the probe every other opening handler already runs, and it is
+	// at most one per film per process.
+	it = s.probed(ctx, it)
+	writeJSON(w, s.cropAnswer(ctx, it, func(ctx context.Context) (CropResponse, bool) {
+		return s.detectCrop(ctx, it)
+	}))
+}
+
+// cropAnswer is what was found for this file before, or the answer of a
+// detection already in flight, or one this caller runs itself.
+//
+// detect reports whether it actually looked, and that second word is
+// load-bearing: "there are no borders here" and "nothing ever measured this
+// file" are the same empty box and must not be written down alike. The store
+// is keyed by (id, mtime, size), which never changes again for a stable file,
+// so an empty box stored by a run that had no duration to place its samples
+// by — or by a build with no ffmpeg, or an archived item on a server with no
+// loopback address — was a permanent "this film has no borders", out of reach
+// of everything short of deleting the database.
+func (s *Server) cropAnswer(ctx context.Context, it library.Item, detect func(context.Context) (CropResponse, bool)) CropResponse {
 	key := fmt.Sprintf("%s|%d|%d", it.ID, it.ModTime, it.Size)
 	for {
 		if box, found := s.storedCrop(it); found {
-			writeJSON(w, box)
-			return
+			return box
 		}
 		cropRuns.mu.Lock()
-		if ch, running := cropRuns.inflight[key]; running {
+		if run, running := cropRuns.inflight[key]; running {
 			cropRuns.mu.Unlock()
-			// Somebody is looking already; their answer will be in the store.
 			select {
-			case <-ch:
-				continue
+			case <-run.done:
+				if run.ok {
+					return run.box
+				}
+				continue // the leader was interrupted: look again ourselves
 			case <-ctx.Done():
-				writeJSON(w, CropResponse{})
-				return
+				return CropResponse{}
 			}
 		}
-		ch := make(chan struct{})
-		cropRuns.inflight[key] = ch
+		run := &cropRun{done: make(chan struct{})}
+		cropRuns.inflight[key] = run
 		cropRuns.mu.Unlock()
 
-		box := s.detectCrop(ctx, it)
-		if ctx.Err() == nil {
-			// Only an answer is written down. An interrupted run says nothing
-			// about the file and must not be remembered as "no borders".
+		box, measured := detect(ctx)
+		// Only an answer is written down. An interrupted run says nothing
+		// about the file and must not be remembered as "no borders", and
+		// neither must a run that never looked.
+		answered := ctx.Err() == nil
+		if answered && measured {
 			s.storeCrop(it, box)
 		}
 		cropRuns.mu.Lock()
+		run.box, run.ok = box, answered
 		delete(cropRuns.inflight, key)
-		close(ch)
+		close(run.done)
 		cropRuns.mu.Unlock()
-		writeJSON(w, box)
-		return
+		return box
 	}
 }
 
@@ -111,35 +153,49 @@ func (s *Server) handleCrop(w http.ResponseWriter, r *http.Request) {
 // smaller than it is, and cropping to that would cut the picture; taking the
 // largest of what was found means a borderless moment simply cancels the
 // crop, which is the safe way to be wrong.
-func (s *Server) detectCrop(ctx context.Context, it library.Item) CropResponse {
+//
+// The second word is whether this was a look at all. Every way out of here
+// that never ran ffmpeg over a real frame answers false, so that the caller
+// keeps it out of the store: none of them is a statement about the film, and
+// two of them — no ffmpeg on this machine, no loopback address for an
+// archived item — would otherwise write off every film the server was ever
+// asked about, and go on saying so after the deployment was put right.
+func (s *Server) detectCrop(ctx context.Context, it library.Item) (CropResponse, bool) {
 	ffmpeg := s.thumbs.FFmpegPath()
 	if ffmpeg == "" || it.Duration <= 0 {
-		return CropResponse{}
+		return CropResponse{}, false
 	}
 	input, headers := library.LoopbackURL(it), ""
 	if input == "" {
 		if it.Archived() {
-			return CropResponse{} // no path to read it by, and no loopback
+			return CropResponse{}, false // no path to read it by, and no loopback
 		}
 		input = it.Path
 	} else {
 		headers = library.LoopbackHeaderArg()
 	}
+	// These seeks race the playback of the very film they are for, and
+	// nothing else here says so: the ffmpeg slot is shared with the
+	// thumbnailer but the background gate is not, so the analysis pass and
+	// the tag reader went on at full rate against a viewer waiting for a
+	// picture to fit its window. The extraction says it the same way.
+	defer s.lib.StartStream()()
 
 	seconds := float64(it.Duration) / 1000
 	// The frame the borders are a fraction of: what the library read out of
 	// the header where it has, and only otherwise what ffmpeg prints about
 	// its input, which is a log line and not a contract.
 	box := CropResponse{FrameW: it.Width, FrameH: it.Height}
+	looked := 0
 	for _, at := range cropSamplePoints {
 		if ctx.Err() != nil {
-			return CropResponse{}
+			return CropResponse{}, false
 		}
 		// Each seek takes an ffmpeg slot, as every still does: four of them
 		// beside a film that is playing were the thumbnailer's whole reason
 		// for a gate, and this path had none.
 		if err := s.thumbs.acquire(ctx, s.thumbs.ffSem); err != nil {
-			return CropResponse{}
+			return CropResponse{}, false
 		}
 		// The size is read off the log, so the log has to be there whatever
 		// the build's default level is.
@@ -160,15 +216,22 @@ func (s *Server) detectCrop(ctx context.Context, it library.Item) CropResponse {
 		_ = cmd.Run() // a sample that fails is a sample, not a failure
 		<-s.thumbs.ffSem
 		out := errBuf.String()
-		box = box.union(lastCrop(out))
+		// cropdetect prints a box for every frame it sees, including the
+		// whole frame for a film with no borders at all, so a sample with no
+		// box in it is one that decoded nothing. A sample that failed is
+		// harmless; four of them are not an answer.
+		if sample := lastCrop(out); sample.W > 0 && sample.H > 0 {
+			looked++
+			box = box.union(sample)
+		}
 		if box.FrameW == 0 {
 			box.FrameW, box.FrameH = frameSize(out)
 		}
 	}
 	if !box.worthwhile() {
-		return CropResponse{}
+		return CropResponse{}, looked > 0
 	}
-	return box
+	return box, true
 }
 
 // lastCrop reads the final answer cropdetect settled on in this run.
