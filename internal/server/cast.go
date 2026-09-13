@@ -60,10 +60,29 @@ type casting struct {
 	found map[string]*dlna.Renderer
 	order []string
 	at    time.Time
+	// known is every set this process has ever been told about, and it is
+	// what an id a client already holds is resolved against when the last
+	// search did not report it. A search loses things — the M-SEARCH goes
+	// out twice per interface precisely because nobody retries a datagram,
+	// and a description is a fetch that can time out — so a losing round
+	// used to evict a television that was still in the room, and every
+	// transport command, status poll and handover for it answered "no such
+	// renderer" until the stamp went stale a minute later. What the picker
+	// is shown is still only what was just found; this is for the id in a
+	// client's hand. It grows by the number of distinct renderers on the
+	// network, which is a handful.
+	known map[string]*dlna.Renderer
+	// driving is the request currently walking one set through a play
+	// sequence, by renderer id (see castClaim), and gen names them in turn.
+	driving map[string]*castDrive
+	gen     uint64
 	// searching is held for the length of a search so that several clients
 	// asking at once wait for one answer rather than filling the network
 	// with duplicate M-SEARCHes.
 	searching sync.Mutex
+	// discover is the search itself. A test stands in for the network here;
+	// nil is the network.
+	discover func(ctx context.Context, wait time.Duration) []*dlna.Renderer
 }
 
 // SetLocalPort tells the server which port it is reachable on, so it can
@@ -92,14 +111,30 @@ func (s *Server) renderers(ctx context.Context, force bool) []*dlna.Renderer {
 		return s.castList()
 	}
 
-	found := dlna.Discover(ctx, searchWait)
+	found := s.search(ctx)
+	if ctx.Err() != nil {
+		// Interrupted is not answered. A request that went away during the
+		// search — a page reloaded, a tab closed, a connection dropped —
+		// leaves every device description fetching on a dead context, so
+		// what comes back is an empty list that says nothing about the
+		// network. Published with a fresh stamp it became the minute's
+		// authoritative answer: every later caller took the freshness path,
+		// an empty map being as non-nil as a full one, and for the whole of
+		// the TTL the house had no televisions in it. Nothing is written
+		// down, so the next asker searches again.
+		return s.castList()
+	}
 	s.cast.mu.Lock()
 	defer s.cast.mu.Unlock()
 	s.cast.found = map[string]*dlna.Renderer{}
 	s.cast.order = nil
+	if s.cast.known == nil {
+		s.cast.known = map[string]*dlna.Renderer{}
+	}
 	for _, r := range found {
 		s.cast.found[r.ID] = r
 		s.cast.order = append(s.cast.order, r.ID)
+		s.cast.known[r.ID] = r
 	}
 	s.cast.at = time.Now()
 	out := make([]*dlna.Renderer, 0, len(found))
@@ -107,6 +142,14 @@ func (s *Server) renderers(ctx context.Context, force bool) []*dlna.Renderer {
 		out = append(out, s.cast.found[id])
 	}
 	return out
+}
+
+// search asks the network, or whatever a test has put in its place.
+func (s *Server) search(ctx context.Context) []*dlna.Renderer {
+	if s.cast.discover != nil {
+		return s.cast.discover(ctx, searchWait)
+	}
+	return dlna.Discover(ctx, searchWait)
 }
 
 func (s *Server) castList() []*dlna.Renderer {
@@ -134,7 +177,74 @@ func (s *Server) renderer(ctx context.Context, id string) (*dlna.Renderer, bool)
 			return r, true
 		}
 	}
-	return nil, false
+	// And one search missing a set is not the set being gone: the reply is a
+	// datagram and the description a fetch, either of which can be lost
+	// while the television goes on playing the film. So an id a client is
+	// already holding is answered from everything this process has been told
+	// about, rather than from the one round that happened to lose it. A set
+	// that really has been switched off then fails the command instead,
+	// which is what the viewer is told about anyway ("did not answer") and a
+	// far better answer than a film that cannot be paused.
+	s.cast.mu.Lock()
+	defer s.cast.mu.Unlock()
+	r, ok = s.cast.known[id]
+	return r, ok
+}
+
+// castDrive is the request currently walking one renderer through a play
+// sequence, with the generation that says whether it is still that request.
+type castDrive struct {
+	gen    uint64
+	cancel context.CancelFunc
+}
+
+// castClaim hands a set to this request and takes it from whatever was
+// driving it.
+//
+// A cast is four steps — the URI, the confirmation that the set took it,
+// play, and the seek — and the last two are unconditional. A second request
+// landing in the middle of the first therefore had its film played and
+// seeked by the first: the resume point of a film nobody was watching any
+// more, applied to the one that had just replaced it.
+//
+// The set itself cannot be owned — somebody with the remote is assumed
+// throughout, and reconciled with by polling — but a superseded request on
+// this side can be made to stop talking to it. Its context is cancelled, and
+// every SOAP call is built on that context, so it issues nothing further and
+// gives up. Nothing queues: the newest request drives the set, which is the
+// order the gestures were made in, and waiting behind a slow set's 45-second
+// budget would be the worse failure.
+func (s *Server) castClaim(parent context.Context, rid string) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	s.cast.mu.Lock()
+	if s.cast.driving == nil {
+		s.cast.driving = map[string]*castDrive{}
+	}
+	if prev := s.cast.driving[rid]; prev != nil {
+		prev.cancel()
+	}
+	s.cast.gen++
+	mine := s.cast.gen
+	s.cast.driving[rid] = &castDrive{gen: mine, cancel: cancel}
+	s.cast.mu.Unlock()
+	return ctx, func() {
+		s.cast.mu.Lock()
+		// Only while this request is still the one driving: a later claim
+		// owns the slot now, and clearing it would leave the next request
+		// with nothing to take the set from.
+		if d := s.cast.driving[rid]; d != nil && d.gen == mine {
+			delete(s.cast.driving, rid)
+		}
+		s.cast.mu.Unlock()
+		cancel()
+	}
+}
+
+// superseded reports whether a step failed because another request took the
+// set rather than because the set refused it. The two look identical from
+// the SOAP call and want opposite things said about them.
+func superseded(parent, ctx context.Context) bool {
+	return ctx.Err() != nil && parent.Err() == nil
 }
 
 func (s *Server) handleRenderers(w http.ResponseWriter, r *http.Request) {
@@ -174,8 +284,15 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := s.castMeta(r, d, it, src, mimeType)
-	ctx := r.Context()
+	// This request drives the set from here to the seek, and takes it from
+	// whatever was driving it before (castClaim).
+	ctx, done := s.castClaim(r.Context(), d.ID)
+	defer done()
 	if err := d.SetURI(ctx, src, meta); err != nil {
+		if superseded(r.Context(), ctx) {
+			s.castSuperseded(w, d, it)
+			return
+		}
 		// A set that has not answered has not necessarily failed. Measured
 		// on a television that had another session open, the reply to this
 		// took longer than any budget worth waiting on while the film
@@ -192,6 +309,10 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 			"renderer", d.Name, "item", it.Name, "err", err)
 	}
 	if err := d.Play(ctx); err != nil {
+		if superseded(r.Context(), ctx) {
+			s.castSuperseded(w, d, it)
+			return
+		}
 		s.log.Warn("cast failed to start", "renderer", d.Name, "item", it.Name, "err", err)
 		http.Error(w, castFault(d.Name, "would not start playing it", err), http.StatusBadGateway)
 		return
@@ -312,7 +433,16 @@ func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it libra
 	// that ships automatic dubs, the one kind of file where the choice is the
 	// whole reason for the feature.
 	if kind, ok := castTrackKind(it, audio); ok {
-		if _, err := s.remux.File(ctx, it, audio, kind); err == nil {
+		// Making the copy is a read of the whole film at disk speed with a
+		// television waiting on it, which is playback by every measure the
+		// priority order recognises — so thumbnails and tag reading stand
+		// down for it. Nothing else marks it here: the production is
+		// detached from any request, and a cast is the one route where no
+		// delivery is in flight meanwhile to hold the gate instead.
+		release := s.lib.StartStream()
+		_, err := s.remux.File(ctx, it, audio, kind)
+		release()
+		if err == nil {
 			path = "remux/" + url.PathEscape(it.ID) + "?a=" + strconv.Itoa(audioTrack(audio)) + remuxQuery(kind)
 			mimeType = remuxMime(it, kind)
 		} else {
@@ -627,6 +757,15 @@ func (s *Server) handleCastControl(w http.ResponseWriter, r *http.Request) {
 // diagnosing the set can read it, and not onto a screen where it reads as
 // the page having broken. A set that answered nothing at all is said to
 // have gone quiet, which is the one distinction a viewer can act on.
+// castSuperseded is what a request is told when another one took the set out
+// from under it. It is not a fault of the set's and must not be reported as
+// one: the film the viewer actually asked for last is the one now playing,
+// and the page's own generation guard discards this answer anyway.
+func (s *Server) castSuperseded(w http.ResponseWriter, d *dlna.Renderer, it library.Item) {
+	s.log.Debug("cast superseded by a later request", "renderer", d.Name, "item", it.Name)
+	http.Error(w, "another request took "+d.Name, http.StatusConflict)
+}
+
 func castFault(name, what string, err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return name + " did not answer in time"

@@ -99,6 +99,17 @@ type links struct {
 	mu      sync.Mutex
 	byCode  map[string]string
 	byField map[string]string
+
+	// mintMu makes a mint one operation. Looking for an existing code and
+	// writing a new one are two steps over shared state — a bucket in the
+	// database, or the maps above — and two presses of the button in the
+	// same moment both missed, both minted, and the second overwrote the
+	// reverse index: two codes for one view, the older orphaned and never
+	// handed out again, which is exactly the "database fills with synonyms"
+	// the reverse index exists to prevent. It is always taken outside l.mu,
+	// which the memory path takes inside these calls. Minting is a button
+	// press, so one at a time costs nothing worth measuring.
+	mintMu sync.Mutex
 }
 
 // memKey is the in-memory equivalent of the database's compound key.
@@ -134,6 +145,8 @@ func (l *links) target(host, code string) (string, bool) {
 // same link back: a person clicking the button again means "give me that
 // link", not "give me another name for it".
 func (l *links) mint(host, target string) (string, error) {
+	l.mintMu.Lock()
+	defer l.mintMu.Unlock()
 	if code, ok := l.existing(host, target); ok {
 		return code, nil
 	}

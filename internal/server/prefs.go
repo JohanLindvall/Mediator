@@ -88,6 +88,16 @@ func (s *Server) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// One change at a time. The callback is several mutations of global
+	// state in a row — the stored list, the live list, the watches, a scan —
+	// and the file's own comment above ("all of that is one operation") was
+	// only true of one caller: two PUTs interleaved could leave the database
+	// naming one set of directories while the index walked another, which
+	// nobody sees until the next restart quietly puts the other set back.
+	// The answer is read under the same lock, or a request could report the
+	// set the other one applied.
+	s.rootsMu.Lock()
+	defer s.rootsMu.Unlock()
 	applied, err := s.setRoots(clean)
 	if err != nil {
 		s.log.Warn("could not change the scanned directories", "err", err)

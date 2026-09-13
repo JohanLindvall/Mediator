@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -65,7 +66,13 @@ type Server struct {
 	// Applying a change of scanned directories belongs to main, which is the
 	// only place holding the watcher and the scanner together. nil leaves the
 	// set fixed for the run.
-	setRoots     SetRootsFunc
+	setRoots SetRootsFunc
+	// rootsMu serialises that change. The callback is a multi-step mutation
+	// of everything at once — the stored list, the live list, the watches,
+	// a scan — and two of them interleaved left the database naming one set
+	// of directories while the index walked another, which shows up as the
+	// roots silently flipping back at the next restart.
+	rootsMu      sync.Mutex
 	prefsPersist bool
 	access       bool
 	mux          *http.ServeMux
@@ -83,6 +90,44 @@ type Server struct {
 	// (embsubs.go): the read is the whole container, and the player asks
 	// again with a new ?shift= on every seek.
 	embsubs embSubs
+	// ownerMu serialises what the owner did with one item (see owning).
+	ownerMu [ownerStripes]sync.Mutex
+}
+
+// ownerStripes is how finely the owner's writes are serialised by id. A
+// mutex per id would be a map to grow and prune for a lock held across two
+// statements; a fixed set of them costs nothing and collides harmlessly.
+const ownerStripes = 64
+
+// owning holds one id's turn at recording what the owner did with it — a
+// position, a play, a verdict — and returns the release.
+//
+// Each of those is written twice: to the state store, which is the record,
+// and then into the library, which keeps a copy for the listings to sort and
+// filter under their own lock. Both stores lock properly on their own and
+// neither could tell anything was wrong; what was missing was any order
+// between the pair. The store's `Play` increments under its lock and hands
+// back the new total, and that **absolute** number is what goes to the
+// library — so two plays of one track could take 1 and 2 from the store and
+// apply them in the other order, leaving the tile, the Popular ordering and
+// every collection total reading one play behind the truth until the track
+// was played again. The same shape leaves a cleared position showing as
+// finished, and a withdrawn verdict showing as a lit thumb.
+func (s *Server) owning(id string) func() {
+	m := &s.ownerMu[ownerStripe(id)]
+	m.Lock()
+	return m.Unlock
+}
+
+// ownerStripe picks the lock for an id. FNV-1a over the bytes: ids are hex,
+// so anything cheaper than a hash puts whole neighbourhoods on one stripe.
+func ownerStripe(id string) uint32 {
+	h := uint32(2166136261)
+	for i := 0; i < len(id); i++ {
+		h ^= uint32(id[i])
+		h *= 16777619
+	}
+	return h % ownerStripes
 }
 
 // New builds the server. dist is the built frontend to serve at /.
@@ -273,13 +318,47 @@ const (
 // collect pages through List for up to max items. The paging costs nothing
 // beyond the copies: the library caches the filtered, sorted result per
 // (query, version), so only the first call does the work.
+//
+// **Every page has to come from the same version of the library**, and that
+// is what the loop below is for. An offset names a row in a particular
+// filtered, sorted result, and this library is written to constantly by
+// design — a download bumps the version dozens of times a second, and under
+// the default order a file that merely grew moves in it. A change between
+// two pages therefore re-sorted what the offsets referred to: the queue came
+// out holding one track twice and missing another, and because the running
+// total was compared against a `Total` read from a later snapshot it also
+// stopped short (measured: 3047 collected, 3004 of them distinct). So the
+// version each page answered at is checked, and a collection that spanned
+// two starts again from the top. Bounded, because a library being written to
+// need never settle: the last attempt is taken as it stands, which is one
+// listing's worth of drift rather than a loop that cannot end.
 func (s *Server) collect(q library.Query, max int) []library.Item {
+	const attempts = 3
 	var out []library.Item
-	for len(out) < max {
-		q.Offset, q.Limit = len(out), min(listPage, max-len(out))
-		res := s.lib.List(q)
-		out = append(out, res.Items...)
-		if len(res.Items) == 0 || len(out) >= res.Total {
+	for attempt := range attempts {
+		// The last attempt pages on through a change rather than starting
+		// over: an answer with a row's worth of drift in it is better than
+		// an answer cut short, and better than a loop a busy library can
+		// keep alive for ever.
+		last := attempt == attempts-1
+		out = nil
+		var version int64
+		moved := false
+		for len(out) < max {
+			q.Offset, q.Limit = len(out), min(listPage, max-len(out))
+			res := s.lib.List(q)
+			if len(out) == 0 {
+				version = res.Version
+			} else if res.Version != version && !last {
+				moved = true
+				break
+			}
+			out = append(out, res.Items...)
+			if len(res.Items) == 0 || len(out) >= res.Total {
+				break
+			}
+		}
+		if !moved {
 			break
 		}
 	}
@@ -919,6 +998,15 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// This is playback: thumbnailing and enrichment yield to it — and they
+	// yield for the **wait** as well as for the delivery. A rewrap is a read
+	// of the whole film at disk speed, and a viewer is sitting in front of a
+	// percentage while it happens; marked only once the file was open, that
+	// whole stretch looked to the background work like an idle machine, and
+	// a hover sheet or a tag pass went to the same disk. (The production
+	// outlives the request that started it, so a copy nobody is waiting on
+	// is still unmarked — see Remuxer.produce.)
+	defer s.lib.StartStream()()
 	path, err := s.remux.File(r.Context(), it, r.URL.Query().Get("a"), kind)
 	if err != nil {
 		if !errors.Is(err, ErrNoRemux) && r.Context().Err() == nil {
@@ -936,8 +1024,6 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer f.Close()
-	// This is playback: thumbnailing and enrichment yield to it.
-	defer s.lib.StartStream()()
 	// Scratch, and evictable, so nothing downstream should hold on to it.
 	w.Header().Set("Cache-Control", "no-store")
 	// Not always an MP4 now: a soundtrack copy keeps the container it was made
@@ -1012,10 +1098,21 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	// re-entry, so the semaphore and the stream count are held once. Two
 	// starts-over at most: the aspect verdict and the hardware verdict, each
 	// remembered so planConversion cannot choose it again.
+	//
+	// Whether the declaration has been put right is **this attempt's own**
+	// memory, seeded from the process-wide verdict and never re-read from
+	// it. The verdict is shared with the thumbnailer and the segmented
+	// converter, and a tile generated for the same film while this ffmpeg
+	// was configuring its filter graph used to answer the guard for us: the
+	// one start-over that would have worked was refused because somebody
+	// else had already noted what we were about to note, and the viewer was
+	// told the conversion had failed over a film the very next request
+	// converted.
+	repaired := aspects.has(it)
 	for attempt := 0; attempt < 3; attempt++ {
 		// The same plan the segmented converter runs (convert.go); only the
 		// delivery is this endpoint's own: fragmented MP4 down the response.
-		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), aspects.has(it), s.log)
+		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), repaired, s.log)
 		if err != nil {
 			// Known and unopenable, not unknown: the same answer the stream
 			// gives, with the same reason, so the player says what happened
@@ -1065,8 +1162,9 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		// over to try: the aspect put right (aspect.go), or — if the
 		// hardware was what failed — the same plan on the processor.
 		switch {
-		case aspectRefused(stderr) && !aspects.has(it) && repairable(ffmpeg, it):
+		case startOverWithAspect(stderr, repaired, repairable(ffmpeg, it)):
 			aspects.note(it)
+			repaired = true
 			s.log.Info("converting again with the declared aspect put right", "path", it.Rel)
 		case wasHardware:
 			// hwRefused.note above already steers the next plan to software.
@@ -1078,6 +1176,17 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	// Every start-over spent and nothing went out: say so, rather than
 	// letting the handler fall off the end into an empty 200.
 	http.Error(w, "conversion failed", http.StatusServiceUnavailable)
+}
+
+// startOverWithAspect says whether this attempt's failure is the declared
+// pixel aspect and whether there is a start-over left to make of it.
+//
+// `repaired` is the attempt's own memory and not the process-wide verdict,
+// which is what the caller's comment is about: the verdict is shared with
+// everything else that makes a picture, so reading it here let another
+// goroutine's note cancel this request's one retry.
+func startOverWithAspect(stderr string, repaired, canRepair bool) bool {
+	return aspectRefused(stderr) && !repaired && canRepair
 }
 
 // sheetWorthMaking answers the one question handleSprite has to decide: may
@@ -1380,10 +1489,14 @@ func (s *Server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad values", http.StatusBadRequest)
 		return
 	}
+	// One turn for the pair (see owning): the store and the library must
+	// agree about which write was the last one.
+	unlock := s.owning(id)
 	s.st.Set(id, body.Time, body.Duration)
 	// The listing filters on how far things have been watched, so it is told
 	// as the position moves rather than being made to ask the store.
 	s.lib.SetWatch(id, library.Watch{Pos: body.Time, Len: body.Duration})
+	unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1401,11 +1514,16 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// The count is read out of the store and written into the library as an
+	// absolute number, so the two writes are one turn (see owning) — or a
+	// second play of the same track could apply the lower count last.
+	unlock := s.owning(id)
 	n := s.st.Play(id)
 	// The listings sort and filter on this, so the library is told rather
 	// than made to ask the store — the same arrangement as the positions
 	// above, and for the same reason.
 	s.lib.SetPlays(id, n)
+	unlock()
 	writeJSON(w, PlayResponse{Plays: n})
 }
 
@@ -1421,8 +1539,13 @@ func (s *Server) handleStateDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The same turn a save takes, so a clear racing one cannot leave the
+	// library calling a film finished that the store no longer has a
+	// position for.
+	unlock := s.owning(id)
 	s.st.Delete(id)
 	s.lib.SetWatch(id, library.Watch{})
+	unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
