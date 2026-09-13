@@ -222,6 +222,15 @@ func (l *Library) PruneDB(db *blob.DB) {
 	if len(live) == 0 {
 		return // an empty index means the roots are unreadable, not empty
 	}
+	l.pruneTo(db, live)
+}
+
+// pruneTo is the prune and the repair of what the list missed, which are one
+// step on purpose: a prune that has run is never without the repair, and
+// keeping them in one function is what lets a test stand in the window
+// between the two — an interleaving that cannot be produced from outside,
+// since the list is taken and used inside the call.
+func (l *Library) pruneTo(db *blob.DB, live map[string]struct{}) {
 	n, err := db.Prune(live)
 	if err != nil {
 		l.log.Warn("could not prune the database", "err", err)
@@ -233,8 +242,8 @@ func (l *Library) PruneDB(db *blob.DB) {
 	}
 }
 
-// remarkAfterPrune marks for writing again whatever the index gained after
-// live was taken.
+// remarkAfterPrune writes down again whatever the index gained after live was
+// taken.
 //
 // The list is made under a read lock and the prune itself is a transaction
 // over the whole database, and nothing orders the two against the watcher:
@@ -247,6 +256,21 @@ func (l *Library) PruneDB(db *blob.DB) {
 // illness, so the late arrivals are simply written again: one put apiece on
 // the next tick, and none at all on the ordinary run where the list was
 // complete.
+//
+// It puts back **both** of the two things a prune deletes that nothing else
+// would rewrite. The index record is the one that matters, and the metadata
+// record has to go with it: the index record carries "examined", so once it
+// is back nothing ever asks to read that file again (needsEnrich), and the
+// cached reading the prune took would be gone for as long as the file sits
+// unchanged on disk — its key is the file's own mtime and size, which is what
+// makes it worth keeping and also what makes it permanent. It is rebuilt from
+// the item itself, which holds every field that record holds, and only where
+// the item is marked examined and its shape read at the current recipe: that
+// is exactly the state a completed enrichment leaves, so nothing here can
+// write down a verdict enrichment deliberately withheld — an interrupted
+// probe leaves neither mark and is left to be looked at again. Thumbnails are
+// the third thing the prune drops and they need nothing: they are made on
+// demand, so one that has gone is one made again the next time a tile asks.
 func (l *Library) remarkAfterPrune(live map[string]struct{}) {
 	l.mu.RLock()
 	var late []string
@@ -259,11 +283,29 @@ func (l *Library) remarkAfterPrune(live map[string]struct{}) {
 	if len(late) == 0 {
 		return
 	}
+	metas := make(map[string]blob.Meta, len(late))
 	l.mu.Lock()
 	for _, id := range late {
-		if _, still := l.items[id]; still {
-			l.markDirty(id)
+		it, still := l.items[id]
+		if !still {
+			continue
+		}
+		l.markDirty(id)
+		if it.enriched && it.shape >= shapeVersion {
+			metas[id] = blob.Meta{
+				MTime: it.ModTime, Size: it.Size, Duration: it.Duration,
+				Title: it.Title, Artist: it.Artist, Album: it.Album,
+				Genre: it.Genre, Track: it.Track, Year: it.Year,
+				VCodec: it.VCodec, ACodec: it.ACodec,
+				Width: it.Width, Height: it.Height, FPS: it.FPS, HDR: it.HDR,
+				Shape: it.shape,
+			}
 		}
 	}
 	l.mu.Unlock()
+	// Queued outside the index lock: the pending buffer has a lock of its own
+	// and nothing else here takes the two in that order.
+	for id, m := range metas {
+		l.queueMeta(id, m)
+	}
 }

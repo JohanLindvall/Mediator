@@ -33,7 +33,22 @@ type Flags struct {
 // LoadFlags reads the stored flags into memory and reports how many there
 // were. Called on first use (see ensureFlags); startup may call it as soon as
 // the database is open so the first listing does not pay for the read.
+//
+// It goes through the same lock the lazy load does, so that is a safe thing
+// for a startup step to do: whichever of the two arrives first reads the
+// bucket and the other finds the work done. A door into this that did not
+// take flagStore would be a second reader of the bucket racing a write of
+// it, which is the whole of what the lock is for.
 func (l *Library) LoadFlags(db *blob.DB) int {
+	flagStore.Lock()
+	defer flagStore.Unlock()
+	return l.loadFlags(db)
+}
+
+// loadFlags is the load itself. Caller must hold flagStore, which is what
+// makes one read of the bucket and one notify out of however many callers
+// arrive together, and what orders the read against SetFlags writing to it.
+func (l *Library) loadFlags(db *blob.DB) int {
 	stored, err := db.AllFlags()
 	if err != nil {
 		l.log.Warn("could not read item flags", "err", err)
@@ -41,16 +56,17 @@ func (l *Library) LoadFlags(db *blob.DB) int {
 	}
 	l.mu.Lock()
 	if l.flagsLoaded {
-		// Somebody else finished the load while this read was in flight, so
-		// what is in memory is newer than what is in hand — including every
-		// judgement withdrawn since. A withdrawal is spelled as a *deletion*,
-		// here and in the database alike, which is exactly what the per-key
-		// guard below cannot see: an absent key reads as "never set", so the
-		// stale snapshot wrote the old value back and an item the owner had
-		// just un-hidden was hidden again for the life of the process, with
-		// the database saying the opposite and a restart disagreeing with
-		// both. A snapshot older than a mutation cannot be merged key by
-		// key, so it is dropped whole.
+		// The load has already happened — a request's lazy one, or a startup
+		// call, whichever reached the lock first — so what is in memory is
+		// newer than what is in hand, including every judgement withdrawn
+		// since. That is why this is a whole-snapshot drop and not one more
+		// per-key guard: a withdrawal is spelled as a *deletion*, here and in
+		// the database alike, so the key the merge below would have to skip
+		// is not there to be seen. An absent key reads as "never set", the
+		// old value goes back, and an item the owner had just un-hidden is
+		// hidden again for the life of the process, with the database saying
+		// the opposite and a restart disagreeing with both. A snapshot older
+		// than a mutation cannot be merged key by key at all.
 		l.mu.Unlock()
 		return len(stored)
 	}
@@ -96,7 +112,7 @@ func (l *Library) ensureFlags() {
 	if loaded {
 		return
 	}
-	l.LoadFlags(db)
+	l.loadFlags(db)
 }
 
 // flagStore serializes what touches the stored flags: the lazy load above,
@@ -275,10 +291,19 @@ func (l *Library) keepFlagged(id, showHidden string, favouritesOnly bool) bool {
 // with what a default listing shows.
 //
 // It is a walk of the flagged items — never of the index — so its cost is
-// bounded by how much the owner has marked, and it is paid at most once per
-// version. Deriving the totals here, rather than counting hidden items at
-// every insert and delete, keeps them in step with the index whichever of
-// those sites moved the item.
+// bounded by how much the owner has marked. What the memo saves is the walk
+// for every caller holding the version it was counted at; a caller holding an
+// older one walks for itself, because the answer it is owed is an answer
+// about its own version and the only honest thing to publish is the one this
+// walk actually saw. So in the moment after a change two callers still
+// holding the version before it each walk, where one of them used to publish
+// under that older stamp and hand the other a hidden set counted over an
+// index it never asked about. A walk of what the owner has marked is the
+// cheap half of Counts; being wrong about it is not.
+//
+// Deriving the totals here, rather than counting hidden items at every insert
+// and delete, keeps them in step with the index whichever of those sites
+// moved the item.
 func (l *Library) hiddenCounts(version int64) Counts {
 	l.hiddenMu.Lock()
 	defer l.hiddenMu.Unlock()
@@ -306,11 +331,11 @@ func (l *Library) hiddenCounts(version int64) Counts {
 		}
 	}
 	l.mu.RUnlock()
-	// And the stamp never goes backwards: a caller running behind must not
-	// replace a newer memo with an older count.
-	if !l.hiddenValid || at >= l.hiddenVersion {
-		l.hiddenTotals, l.hiddenVersion, l.hiddenValid = c, at, true
-	}
+	// Which also means the stamp cannot go backwards, with nothing here to
+	// check: hiddenMu is held across the whole walk, so the walks are in a
+	// line, and the group version only ever rises — whatever this one saw is
+	// at or ahead of what the last one wrote down.
+	l.hiddenTotals, l.hiddenVersion, l.hiddenValid = c, at, true
 	return c
 }
 

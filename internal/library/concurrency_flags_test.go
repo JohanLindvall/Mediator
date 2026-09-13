@@ -1,6 +1,7 @@
 package library
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -132,7 +133,10 @@ func TestHiddenCountsAreStampedWithTheVersionTheyCounted(t *testing.T) {
 		t.Fatalf("memo published under version %d (valid %v), counted at %d", v, valid, at)
 	}
 
-	// And the stamp never goes backwards under a caller running behind.
+	// And a caller running behind is answered what the library holds now,
+	// with the memo left standing at the version that walk saw: published
+	// under the stale question instead, this is the answer every other
+	// request holding it would have been handed.
 	l.SetFlags([]string{ids[1]}, boolp(true), nil, nil, nil)
 	now := l.GroupVersion()
 	if c := l.hiddenCounts(now); c.Video != 2 {
@@ -188,11 +192,14 @@ func TestFlushKeepsTheRecordItIsAlsoWriting(t *testing.T) {
 // PruneDB works from a list of the live ids taken before the transaction,
 // and nothing orders that against the watcher: a file indexed in between is
 // not on the list, so a record written for it in that window is deleted
-// while the item is live in memory and no longer dirty.
+// while the item is live in memory and no longer dirty. The prune is asked
+// here with a list that missed an arrival, which is the one interleaving
+// that cannot be arranged from outside — and both the record and the reading
+// cached beside it have to come back, since the record says "examined" and
+// nothing would ever read the file again.
 func TestPruneMarksWhatArrivedWhileItRan(t *testing.T) {
 	dir := t.TempDir()
-	old := filepath.Join(dir, "Harbour.jpg")
-	write(t, old, "image")
+	write(t, filepath.Join(dir, "Harbour.jpg"), "image")
 	db := openDB(t)
 	l := quietLib(dir)
 	l.SetMetaDB(db)
@@ -211,18 +218,24 @@ func TestPruneMarksWhatArrivedWhileItRan(t *testing.T) {
 	write(t, late, "image")
 	l.AddFile(late)
 	lateID := PathID(late)
-	flushNow(l, db) // its record lands inside the window
-
-	if n, err := db.Prune(live); err != nil {
-		t.Fatal(err)
-	} else if n == 0 {
-		t.Fatal("the prune deleted nothing, so there is nothing to repair")
+	l.enrichOne(context.Background(), lateID)
+	it, ok := l.Get(lateID)
+	if !ok {
+		t.Fatal("the arrival never reached the index")
 	}
-	l.remarkAfterPrune(live)
+	flushNow(l, db) // its records land inside the window
+	if _, ok := db.GetMeta(lateID, it.ModTime, it.Size); !ok {
+		t.Fatal("nothing was cached about the arrival, so there is nothing to lose")
+	}
+
+	l.pruneTo(db, live)
 	flushNow(l, db)
 
 	if !stored(t, db, lateID) {
 		t.Fatal("a file the index holds has no record: the prune took it and nothing wrote it again")
+	}
+	if _, ok := db.GetMeta(lateID, it.ModTime, it.Size); !ok {
+		t.Fatal("the prune took what had been read from the file, and the record it left says not to read it again")
 	}
 }
 
