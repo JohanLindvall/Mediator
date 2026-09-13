@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -83,27 +84,41 @@ func Discover(ctx context.Context, wait time.Duration) []*Renderer {
 	)
 	// A noisy network answers with dozens of locations; describing them all
 	// at once is dozens of fetches in flight for a list nobody needs faster.
-	slots := make(chan struct{}, describeAtOnce)
-	for loc := range locs {
+	// It is a fixed pool rather than a goroutine per location with a gate in
+	// front of it: how many datagrams arrive is decided by other hosts, and
+	// the one thing this process can keep constant is how much of itself it
+	// spends on them.
+	queue := make(chan string)
+	workers := min(describeAtOnce, len(locs))
+	for range workers {
 		wg.Add(1)
-		go func(loc string) {
+		go func() {
 			defer wg.Done()
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			r, err := describe(ctx, loc)
-			if err != nil || r == nil {
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			for _, have := range found {
-				if have.UDN == r.UDN { // answered on more than one interface
-					return
+			for loc := range queue {
+				r, err := describe(ctx, loc)
+				if err != nil || r == nil {
+					continue
 				}
+				mu.Lock()
+				// Not twice: a set answers on every interface it can hear
+				// the search on, and it is one television.
+				if !slices.ContainsFunc(found, func(have *Renderer) bool { return have.UDN == r.UDN }) {
+					found = append(found, r)
+				}
+				mu.Unlock()
 			}
-			found = append(found, r)
-		}(loc)
+		}()
 	}
+	for loc := range locs {
+		// Nobody is waiting for this any more: the answer would be an empty
+		// list either way, since every describe under a dead context fails
+		// the moment it is made.
+		if ctx.Err() != nil {
+			break
+		}
+		queue <- loc
+	}
+	close(queue)
 	wg.Wait()
 	return found
 }
@@ -161,6 +176,23 @@ func search(ctx context.Context, wait time.Duration) map[string]bool {
 					deadline = d
 				}
 				_ = conn.SetDeadline(deadline)
+				// A deadline is not the whole of it. These are called from
+				// handlers, whose context carries no deadline at all, so
+				// until this the search ran its full window after the caller
+				// had gone — a socket and a goroutine per interface, and the
+				// search mutex held against the next client, for an answer
+				// nobody was left to read. Winding the deadline forward is
+				// what a read in progress notices; the socket is closed by
+				// the defer as before.
+				stopped := make(chan struct{})
+				defer close(stopped)
+				go func() {
+					select {
+					case <-ctx.Done():
+						_ = conn.SetDeadline(time.Now())
+					case <-stopped:
+					}
+				}()
 				for range 2 {
 					if _, err := conn.WriteToUDP(msg, dst); err != nil {
 						return
@@ -339,7 +371,9 @@ func LocalIPFor(host string) string {
 	return a.IP.String()
 }
 
-// describeAtOnce bounds the fan-out of Discover's description fetches.
+// describeAtOnce bounds the fan-out of Discover's description fetches, and
+// with it the number of goroutines a stream of datagrams from elsewhere can
+// make this process start.
 const describeAtOnce = 8
 
 // client is the one HTTP client this package speaks to televisions with. Not

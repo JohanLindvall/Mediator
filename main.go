@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -178,6 +179,17 @@ func run(cfg config, log *slog.Logger) error {
 	lib := library.New(cfg.roots, log)
 	lib.SetExcludes(cfg.excludes) // before anything indexes
 
+	// The two stores flush on a context of their own rather than on the
+	// signal's. They are the last things that may stop: a handler still
+	// answering when the signal lands goes on recording positions, plays and
+	// index changes, and on the signal's context both loops had already run
+	// their final flush and returned by the time the HTTP server was so much
+	// as asked to drain — so those writes landed in a dirty set with no
+	// flusher left alive, acknowledged to the caller and then dropped. This
+	// context is cancelled after the drain, below.
+	storeCtx, stopStores := context.WithCancel(context.Background())
+	defer stopStores()
+
 	// Closed when PersistLoop has written its final flush, so shutdown can
 	// wait for it before the deferred db.Close — otherwise the two race and
 	// the last two seconds of index changes lose to "database not open".
@@ -219,7 +231,7 @@ func run(cfg config, log *slog.Logger) error {
 			log.Info("restored index", "files", n)
 		}
 		go func() {
-			lib.PersistLoop(ctx, db)
+			lib.PersistLoop(storeCtx, db)
 			close(persistDone)
 		}()
 	}
@@ -231,6 +243,22 @@ func run(cfg config, log *slog.Logger) error {
 	// in flight when the deferred db.Close runs is a write to a closed
 	// database, and the positions of the last few seconds are what it holds.
 	stateDone := make(chan struct{})
+	go func() {
+		st.Run(storeCtx)
+		close(stateDone)
+	}()
+	// Whichever way run leaves — the signal, a serve error, a bind that
+	// failed, a watcher that would not start — the stores are stopped and
+	// drained before the deferred db.Close, which was registered above and
+	// so runs after this. The error returns used to skip the drain
+	// altogether: the loops were never asked to flush, and whatever the walk
+	// had mirrored meanwhile went with them. It is registered here, as early
+	// as both loops exist, so that every return below it is covered.
+	defer func() {
+		stopStores()
+		<-stateDone
+		<-persistDone
+	}()
 	// What has been watched is part of what the listing filters on, so the
 	// library is given the positions the store just restored.
 	all := st.All()
@@ -253,10 +281,19 @@ func run(cfg config, log *slog.Logger) error {
 
 	go lib.BroadcastLoop(ctx)
 	go watcher.Run(ctx)
-	go func() {
-		st.Run(ctx)
-		close(stateDone)
-	}()
+	// A walk and the pruning that follows it are one operation, and this gate
+	// is what makes them one. The library serializes the walks themselves,
+	// but the prune is outside that: it takes its live set after the walk has
+	// let go, so a second walk could start, index a newly added root and have
+	// its records written by the persist loop before the first walk's
+	// db.Prune ran — which then deleted exactly those records for being
+	// absent from a set taken before they existed. What is lost is one batch
+	// of index, metadata and thumbnail records, and with them the moment each
+	// of those files was first seen, which puts them at the top of the Added
+	// order as though they had arrived today. The three walks main starts are
+	// the only ones there are, so one gate held across the walk and the prune
+	// settles it.
+	var scanGate sync.Mutex
 	// What every completed scan is followed by: the caches and the owner's
 	// records of files that are gone are dropped, never on an empty index —
 	// an unreadable root looks empty and would wipe the house.
@@ -275,6 +312,7 @@ func run(cfg config, log *slog.Logger) error {
 	// the UI fills in progressively via SSE while large trees are walked.
 	go func() {
 		start := time.Now()
+		scanGate.Lock()
 		lib.Scan(watcher.AddDir)
 		log.Info("initial scan complete", "files", lib.Size(), "took", time.Since(start).Round(time.Millisecond))
 		// Album/artist totals are fed by their builds; an unchanged warm
@@ -284,6 +322,7 @@ func run(cfg config, log *slog.Logger) error {
 		// Only now is the index known to match the disk, so only now is it
 		// safe to throw away what the database holds for everything else.
 		pruneAll()
+		scanGate.Unlock()
 		// Playback outranks thumbnailing, which outranks metadata reading.
 		// What the background tiers stand down for. The analysis adds the
 		// interface itself to that list (uiQuiet): it is the lowest tier and
@@ -307,10 +346,12 @@ func run(cfg config, log *slog.Logger) error {
 				case <-ctx.Done():
 					return
 				case <-t.C:
+					scanGate.Lock()
 					lib.Scan(watcher.AddDir)
 					// A completed scan, like the first: what it found gone
 					// is gone from the caches and the records too.
 					pruneAll()
+					scanGate.Unlock()
 				}
 			}
 		}()
@@ -365,19 +406,36 @@ func run(cfg config, log *slog.Logger) error {
 	if cfg.lock {
 		log.Info("directories are locked; the preferences are read-only")
 	} else {
+		// Two requests changing the directories at once are two
+		// read-modify-writes over two stores with nothing between them: one
+		// can write its list to the database while the other writes a
+		// different list to the index, leaving the running library indexing
+		// one set and the next restart reading the other — which is the very
+		// disagreement this callback exists to prevent, and the dialog is
+		// then answered with the list that lost. Nothing else serializes
+		// them, there being no authentication here and so no reason two
+		// clients cannot ask together.
+		var prefsMu sync.Mutex
 		srv.AllowRootChanges(func(roots []string) ([]string, error) {
+			prefsMu.Lock()
+			defer prefsMu.Unlock()
 			if db != nil {
 				if err := db.SetRoots(roots); err != nil {
 					return nil, err
 				}
 			}
 			lib.SetRoots(roots)
-			// Old watches would report a directory that is no longer indexed,
-			// and the watcher would put back exactly what the scan is about to
-			// take out. The scan reinstalls them for the new set as it walks.
-			watcher.Reset()
 			go func() {
 				start := time.Now()
+				scanGate.Lock()
+				// Old watches would report a directory that is no longer
+				// indexed, and the watcher would put back exactly what the
+				// scan is about to take out. The scan reinstalls them for the
+				// new set as it walks. It happens here rather than before the
+				// goroutine because a walk already running would otherwise go
+				// on installing watches under the removed root behind the
+				// reset, and nothing ever takes those away again.
+				watcher.Reset()
 				lib.Scan(watcher.AddDir)
 				lib.RefreshCounts()
 				log.Info("rescanned after a change of directories",
@@ -385,6 +443,7 @@ func run(cfg config, log *slog.Logger) error {
 				// Only after a completed scan, and never on an empty index: the
 				// same rule the initial scan follows.
 				pruneAll()
+				scanGate.Unlock()
 			}()
 			return lib.Roots(), nil
 		}, db != nil)
@@ -450,15 +509,31 @@ func run(cfg config, log *slog.Logger) error {
 	}
 
 	log.Info("shutting down")
+	// The converters stop before the drain rather than in a defer after it.
+	// Both read archived content over this server's own loopback stream, and
+	// that read is an ordinary in-flight request — which is exactly what
+	// Shutdown waits for. So the drain was waiting on work that only the code
+	// after the drain would release, and spent its whole budget whenever an
+	// archived film was being converted, with nobody watching it. The defers
+	// above stay as the backstop for the paths that never reach here, and
+	// both Close methods are safe to call twice.
+	hls.Close()
+	if err := remux.Close(); err != nil {
+		log.Warn("could not clear the rewrap scratch directory", "err", err)
+	}
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = httpSrv.Shutdown(shutCtx)
-	// The server-error path arrives here with ctx still live; end it so both
-	// loops run their final flush, and wait for each before the deferred
-	// db.Close runs under them.
+	if err := httpSrv.Shutdown(shutCtx); err != nil {
+		// Discarded, this said nothing at all — and a timeout here is the one
+		// report that something was still holding the server open.
+		log.Warn("connections were still open when the shutdown budget ran out", "err", err)
+	}
+	// The handlers are gone, so nothing more will be recorded: only now are
+	// the stores told to write their last, in the deferred drain above, and
+	// only after that does the deferred db.Close run. The server-error path
+	// arrives here with ctx still live, so end that too — the watcher, the
+	// broadcast loop and the background passes are on it.
 	stop()
-	<-stateDone
-	<-persistDone
 	return runErr
 }
 

@@ -234,19 +234,26 @@ func (s *DB) GetPositions() (map[string][]byte, error) {
 // transaction. Both together, because a flush is one consistent picture of
 // what changed since the last one — and one transaction is also what keeps a
 // debounced flush cheap.
+//
+// The removals go first, and that ordering is load-bearing: an id given in
+// both lists is a caller whose two intents overlap, and the later one is the
+// write. Done the other way the record was stored and then deleted in the
+// same transaction, so what the caller had just saved was gone from the
+// database while it was still live in memory and no longer marked dirty —
+// nothing would ever write it again.
 func (s *DB) PutPositions(put map[string][]byte, remove []string) error {
 	if len(put) == 0 && len(remove) == 0 {
 		return nil
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(posBucket)
-		for id, v := range put {
-			if err := b.Put([]byte(id), v); err != nil {
+		for _, id := range remove {
+			if err := b.Delete([]byte(id)); err != nil {
 				return err
 			}
 		}
-		for _, id := range remove {
-			if err := b.Delete([]byte(id)); err != nil {
+		for id, v := range put {
+			if err := b.Put([]byte(id), v); err != nil {
 				return err
 			}
 		}
@@ -463,20 +470,25 @@ func (it *Item) restorePath() {
 }
 
 // SaveItems writes the given records and deletes the given ids in one
-// transaction.
+// transaction. The deletions go first, for the reason PutPositions gives:
+// an id in both lists has been removed and then written again — a file
+// deleted and re-created at the same path keeps its id, since the id is the
+// hash of the path — and the write is the newer of the two. Put first, the
+// record was deleted the moment after it was stored, and the file was
+// missing from the warm start until a later walk found it changed.
 func (s *DB) SaveItems(put []Item, remove []string) error {
 	if len(put) == 0 && len(remove) == 0 {
 		return nil
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(itemBucket)
-		for _, it := range put {
-			if err := putJSON(b, it.ID, it.encodePath()); err != nil {
+		for _, id := range remove {
+			if err := b.Delete([]byte(id)); err != nil {
 				return err
 			}
 		}
-		for _, id := range remove {
-			if err := b.Delete([]byte(id)); err != nil {
+		for _, it := range put {
+			if err := putJSON(b, it.ID, it.encodePath()); err != nil {
 				return err
 			}
 		}

@@ -220,19 +220,54 @@ func (s *Store) Prune(live map[string]struct{}) int {
 	return n
 }
 
-// Run flushes periodically until ctx is done, then flushes one final time.
+// Run flushes periodically until ctx is done, then flushes until nothing is
+// left.
 func (s *Store) Run(ctx context.Context) {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			s.Flush()
+			s.flushFinal()
 			return
 		case <-t.C:
 			s.Flush()
 		}
 	}
+}
+
+// finalFlushRounds bounds the last flush. Two rounds settle what it is for —
+// the writes that landed during the last commit — and the third is slack;
+// the bound itself is what stops a database refusing every write from
+// holding the shutdown open.
+const finalFlushRounds = 3
+
+// flushFinal is the last flush, and it looks again afterwards. Flush clears
+// the dirty set before its transaction on purpose: a position saved while the
+// commit is in flight belongs to the next flush. At shutdown there is no next
+// flush, so that one write — the last position of the last thing played —
+// would simply be dropped.
+func (s *Store) flushFinal() { flushUntilQuiet(s.Flush, s.pending, finalFlushRounds) }
+
+// flushUntilQuiet writes, then looks again while anything remains. Bounded,
+// and that is the whole of why it is written down separately: a database
+// that refuses every write re-marks what it could not save, so an unbounded
+// loop here would hold the shutdown open for as long as the disk stayed
+// broken.
+func flushUntilQuiet(flush func(), pending func() bool, rounds int) {
+	for range rounds {
+		flush()
+		if !pending() {
+			return
+		}
+	}
+}
+
+// pending reports whether anything is waiting to be written.
+func (s *Store) pending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.dirty) > 0 || len(s.removed) > 0
 }
 
 // Flush writes everything that changed since the last call, in one
@@ -271,14 +306,29 @@ func (s *Store) Flush() {
 
 	if err := s.db.PutPositions(put, remove); err != nil {
 		s.log.Error("saving playback positions failed", "err", err)
-		// Put them back: the next flush tries again rather than losing them.
-		s.mu.Lock()
-		for id := range put {
-			s.dirty[id] = struct{}{}
+		s.restore(put, remove)
+	}
+}
+
+// restore puts back what a failed write could not save, so the next flush
+// tries again rather than losing it — but only where nothing newer has
+// overtaken it. The lock was let go before the transaction, so the owner may
+// have started playing a file again while its removal was in flight: putting
+// that removal back would leave the id in dirty and removed at once, which no
+// other path here can produce, and the next flush would then write the new
+// record and delete it in the same transaction. The other direction needs no
+// guard: a put whose record has since been deleted is skipped by the
+// existence check in Flush and never reaches the write.
+func (s *Store) restore(put map[string][]byte, remove []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range put {
+		s.dirty[id] = struct{}{}
+	}
+	for _, id := range remove {
+		if _, newer := s.dirty[id]; newer {
+			continue
 		}
-		for _, id := range remove {
-			s.removed[id] = struct{}{}
-		}
-		s.mu.Unlock()
+		s.removed[id] = struct{}{}
 	}
 }
