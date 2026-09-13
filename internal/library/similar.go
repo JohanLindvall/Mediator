@@ -385,14 +385,32 @@ func (l *Library) affinities() *affinity {
 }
 
 // putAffinity installs a freshly built affinity, unless what is there was
-// built against newer verdicts or newer vectors — see putScaled for why an
-// older answer must not replace a newer one.
+// built from something newer — see putScaled for why an older answer must
+// not replace a newer one.
+//
+// An affinity is stale along three axes and only two of them are numbers.
+// The verdicts and the vectors carry generations that only rise, so "newer"
+// is answerable; the release verdicts are a map the album build replaces
+// wholesale, with no ordering between two of them at all. Two builds that
+// tie on both generations and read different album builds are exactly the
+// case the affinities comment above is about, and a comparison on the
+// numbers alone lets the older of those overwrite the newer. So the third
+// axis is answered the only way it can be: a build whose release verdicts
+// are no longer what the library holds is stale on arrival — the next
+// reader's sameMap would miss it and rebuild anyway — and is not installed
+// at all rather than installed over something current. Compared by content
+// like everything else about that map, since the build makes a fresh one
+// whether or not the verdicts changed; a walk of twenty thousand entries is
+// a millisecond, and this is paid once per build rather than per reader.
 func (l *Library) putAffinity(out *affinity) {
 	l.featMu.Lock()
+	defer l.featMu.Unlock()
+	if !sameMap(out.release, l.byRelease) {
+		return
+	}
 	if cur := l.affinityCache; cur == nil || (cur.featGen <= out.featGen && cur.likesGen <= out.likesGen) {
 		l.affinityCache = out
 	}
-	l.featMu.Unlock()
 }
 
 // affinityBucket grades a similarity difference: unrelated tracks sit near

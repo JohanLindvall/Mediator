@@ -52,8 +52,6 @@ type featureRec struct {
 const (
 	// analysisWindow is how much of the track each window decodes.
 	analysisWindow = 20 * time.Second
-	// analysisTimeout bounds one track: three decodes and the arithmetic.
-	analysisTimeout = 90 * time.Second
 	// analysisRest is how long the loop sleeps once nothing is left to do,
 	// before looking again for files that have since arrived.
 	analysisRest = time.Minute
@@ -65,6 +63,12 @@ const (
 	// in the working day a whole pass takes.
 	analysisRetryAfter = time.Hour
 )
+
+// analysisTimeout bounds one track: three decodes and the arithmetic. It is
+// a var rather than a const for one reason — a test spends it up front to
+// prove that a budget that runs out is not a verdict, which is the whole of
+// what the switch in analyzeAll is for. Nothing changes it at runtime.
+var analysisTimeout = 90 * time.Second
 
 var (
 	ffmpegOnce sync.Once
@@ -200,7 +204,7 @@ func (l *Library) needsAnalysis(it *Item) bool {
 // nothing re-reads it until the file itself changes. A length that is
 // merely late is worth waiting for; one that never comes is what the fixed
 // marks are for, and an examined file has settled the difference.
-func readyForAnalysis(it Item) bool { return it.Duration > 0 || it.enriched }
+func readyForAnalysis(it *Item) bool { return it.Duration > 0 || it.enriched }
 
 // AnalyzeLoop reads every audio track's features, forever: a pass over what
 // is missing, a rest, and another look for what arrived meanwhile. It waits
@@ -215,14 +219,7 @@ func (l *Library) AnalyzeLoop(ctx context.Context, db *blob.DB, busy func() bool
 		busy = func() bool { return false }
 	}
 	for {
-		l.mu.RLock()
-		var todo []string
-		for id, it := range l.items {
-			if l.needsAnalysis(it) {
-				todo = append(todo, id)
-			}
-		}
-		l.mu.RUnlock()
+		todo := l.analysisTodo()
 		if len(todo) > 0 {
 			l.analyzeAll(ctx, db, todo, busy)
 		}
@@ -232,6 +229,28 @@ func (l *Library) AnalyzeLoop(ctx context.Context, db *blob.DB, busy func() bool
 		case <-time.After(analysisRest):
 		}
 	}
+}
+
+// analysisTodo is what the next pass has to read: the tracks that still
+// want reading and are ready to be read.
+//
+// Readiness belongs here and not only in the pass. Queued and then passed
+// over, a track nothing has examined keeps the list non-empty for ever: the
+// loop would enter a pass every minute, log a start and a completion with
+// nothing done, and — with something streaming — wait two seconds at the
+// gate for each track it was never going to read. Left out of the list, an
+// unready track simply waits for the tag pass to reach it, which is what
+// the rest is for.
+func (l *Library) analysisTodo() []string {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	var todo []string
+	for id, it := range l.items {
+		if l.needsAnalysis(it) && readyForAnalysis(it) {
+			todo = append(todo, id)
+		}
+	}
+	return todo
 }
 
 // analyzeAll reads the given tracks one at a time, yielding to everything
@@ -255,10 +274,12 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 		if !ok {
 			continue
 		}
-		if !readyForAnalysis(it) {
-			// Its length has not been read yet, only not read *yet*: the
-			// tag pass has never looked at this file. Describing it now
-			// would describe the wrong seconds of it for good.
+		if !readyForAnalysis(&it) {
+			// Asked again because the file may have changed since the list
+			// was built, and a file that changed forgets what was read from
+			// it (forgetContent) — its length with the rest. Describing it
+			// from the fixed marks now would describe the wrong seconds of
+			// it for good, the vector being stamped with the file.
 			continue
 		}
 		switch err := l.analyzeOne(ctx, db, it); {
@@ -390,11 +411,17 @@ func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) error
 	// away — read again next run for nothing.
 	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
 	if parent.Err() != nil {
-		// Shut down between the last decode and the write. The database is
-		// about to be closed under us — the analysis is not one of the
-		// loops shutdown waits for — and a write that lands after that is a
-		// write to a closed database. The vector is in memory, which is
-		// where a failed write leaves it anyway; the next run reads the
+		// Shutting down, so this write is certainly pointless: the analysis
+		// is not one of the loops shutdown waits for, and the database is
+		// being closed while the last decode of the run is still finishing.
+		// Say plainly what this is and is not. It is a narrowing, not a
+		// fix: the cancellation can as easily land a nanosecond later, and
+		// then the write goes to a database that is closing anyway — which
+		// bolt refuses rather than corrupting anything, since a transaction
+		// takes the same locks Close does. The fix proper is for shutdown to
+		// wait for this goroutine as it waits for the persist loop and the
+		// state store, which is main's to make. The vector stays in memory,
+		// which is where a refused write leaves it; the next run reads the
 		// file again.
 		return nil
 	}

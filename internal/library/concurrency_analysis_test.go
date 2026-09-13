@@ -1,6 +1,8 @@
 package library
 
 import (
+	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -66,7 +68,7 @@ func TestAnalysisWaitsForALengthNobodyHasReadYet(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			it := c.it
 			it.enriched = c.enriched
-			if got := readyForAnalysis(it); got != c.want {
+			if got := readyForAnalysis(&it); got != c.want {
 				t.Errorf("readyForAnalysis = %v, want %v", got, c.want)
 			}
 		})
@@ -146,7 +148,14 @@ func TestFeatureCachesKeepTheNewerBuild(t *testing.T) {
 // what it hands back by the same question, and the two used to be separate
 // readings of the release verdicts: an album build landing between them
 // handed back a track the answer had admitted as music wearing the mark of
-// speech. One set now serves both.
+// speech. One set now serves both, so the answer cannot contradict itself
+// however often the verdicts move under it.
+//
+// It is a race by nature and so it is tested as one: the verdicts are
+// turned over and over while the answer is asked for, and the invariant is
+// that a music answer never carries the mark of speech. Against the two
+// readings this fails within a few hundred laps; against one it cannot fail
+// at all, the closure being taken once.
 func TestSimilarMarksWhatItFiltered(t *testing.T) {
 	l := quietLib("/m")
 	l.upsert("/m/one.mp3", KindAudio, 10, time.Unix(1, 0), fileKey{}, false)
@@ -161,11 +170,162 @@ func TestSimilarMarksWhatItFiltered(t *testing.T) {
 	l.SetFeatures(seed, 1000, 10, a)
 	l.SetFeatures(other, 1000, 10, b)
 
-	got := l.Similar(seed, 5, 0, PathFilter{})
-	if len(got) != 1 || got[0].ID != other {
+	// Settle the shelves first: the build is cached per version and writes
+	// the release verdicts itself, so one call up front leaves the map to
+	// the test rather than to the build.
+	l.Albums()
+	if got := l.Similar(seed, 5, 0, PathFilter{}); len(got) != 1 || got[0].ID != other {
 		t.Fatalf("Similar answered %d items, want the one other track", len(got))
 	}
-	if got[0].Spoken {
-		t.Error("a track admitted to a music answer must not be handed back marked as speech")
+
+	// The album build, landing over and over: the other track's release is
+	// speech, then music, then speech again. The seed is left out of the
+	// map throughout, so what the answer is filtered on — the seed's own
+	// word, which is music — never moves.
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			for _, spoken := range [2]bool{true, false} {
+				l.featMu.Lock()
+				l.byRelease = map[string]bool{other: spoken}
+				l.featMu.Unlock()
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		wg.Wait()
+	}()
+
+	for i := 0; i < 20000; i++ {
+		for _, it := range l.Similar(seed, 5, 0, PathFilter{}) {
+			if it.Spoken {
+				t.Fatalf("lap %d: a track admitted to a music answer was handed back marked as speech", i)
+			}
+		}
+	}
+}
+
+// An affinity is stale along three axes and only two of them are numbers.
+// Two builds that tie on the verdicts and the vectors and read different
+// album builds have no ordering between them at all, so the one that read
+// the older shelves must not be installed over the one that read the
+// newer — which is the very interleaving the build itself guards against
+// one layer down, and the case a comparison on the generations alone let
+// through.
+func TestAffinityFromOlderShelvesIsNotInstalled(t *testing.T) {
+	l := quietLib("/m")
+	current := map[string]bool{"track-1": true}
+	l.featMu.Lock()
+	l.byRelease = current
+	l.featMu.Unlock()
+
+	fresh := &affinity{likesGen: 2, featGen: 6, release: current, bucket: map[string]int{"track-1": 2}}
+	l.putAffinity(fresh)
+	if l.affinityCache != fresh {
+		t.Fatal("an affinity built against the shelves the library holds was refused")
+	}
+	// The overlapping build that read the album build before this one, and
+	// finished after it: same verdicts, same vectors, older shelves.
+	stale := &affinity{likesGen: 2, featGen: 6, release: map[string]bool{"track-1": false}}
+	l.putAffinity(stale)
+	if l.affinityCache != fresh {
+		t.Error("an affinity built against shelves the library no longer holds replaced the current one")
+	}
+	// A build whose map merely says again what the current one says is the
+	// current one: the album build makes a fresh map every run, and that is
+	// why the test is by content.
+	same := &affinity{likesGen: 2, featGen: 7, release: map[string]bool{"track-1": true}}
+	l.putAffinity(same)
+	if l.affinityCache != same {
+		t.Error("an affinity built against an identical set of verdicts was refused")
+	}
+}
+
+// The headline of the change: a read that ran out of time is filed as an
+// interruption and not as a track that cannot be read. analyzeOne bounds
+// each track with a budget of its own, so the error comes back carrying
+// that budget's deadline while the pass's own context is still live — and
+// the switch, which asks the parent, used to fall through to markFailed and
+// write the track off for the whole run.
+func TestAPassThatRanOutOfTimeWritesNoVerdict(t *testing.T) {
+	l := quietLib("/m")
+	l.upsert("/m/slow.mp3", KindAudio, 10, time.Unix(1, 0), fileKey{}, false)
+	id := PathID("/m/slow.mp3")
+	l.mu.Lock()
+	l.items[id].Duration = 60_000
+	l.mu.Unlock()
+
+	// The budget, spent before the decode starts: whatever ffmpeg does or
+	// does not do here, the read comes back as the deadline it was given.
+	// (decodeWindow answers ctx.Err() for any failure under a dead context,
+	// so this holds with ffmpeg installed and without it.)
+	defer func(d time.Duration) { analysisTimeout = d }(analysisTimeout)
+	analysisTimeout = 0
+
+	l.analyzeAll(context.Background(), nil, []string{id}, func() bool { return false })
+
+	l.featMu.RLock()
+	rec := l.features[id]
+	l.featMu.RUnlock()
+	if rec.failed {
+		t.Error("a read that ran out of time was written down as a track that cannot be read")
+	}
+	if rec.mtime != 0 || rec.size != 0 {
+		t.Error("an interrupted read stamped the file it never finished reading")
+	}
+	if rec.retry.IsZero() {
+		t.Fatal("an interrupted read left nothing to wait on: the track is offered again at once, every pass")
+	}
+	// And it is a wait rather than a verdict: once it is up the track is
+	// read again, where a failure is remembered for the run.
+	it, _ := l.Get(id)
+	if l.needsAnalysis(&it) {
+		t.Error("a track just interrupted was offered again at once")
+	}
+	l.featMu.Lock()
+	rec.retry = time.Now().Add(-time.Second)
+	l.features[id] = rec
+	l.featMu.Unlock()
+	if !l.needsAnalysis(&it) {
+		t.Error("once the wait is up the track must be offered again")
+	}
+}
+
+// A track nothing has examined is passed over rather than described from
+// the fixed marks — in the pass, and in the list the pass is built from. The
+// second is what keeps the loop resting: queued and then passed over, such a
+// track keeps the list non-empty for ever and the loop wakes into an empty
+// pass every minute for the life of the process.
+func TestTheAnalysisPassesOverATrackItCannotPlaceYet(t *testing.T) {
+	l := quietLib("/m")
+	l.upsert("/m/fresh.mp3", KindAudio, 10, time.Unix(1, 0), fileKey{}, false)
+	id := PathID("/m/fresh.mp3")
+
+	if todo := l.analysisTodo(); len(todo) != 0 {
+		t.Errorf("a track whose length nobody has read yet was queued: %v", todo)
+	}
+	l.analyzeAll(context.Background(), nil, []string{id}, func() bool { return false })
+	l.featMu.RLock()
+	_, recorded := l.features[id]
+	l.featMu.RUnlock()
+	if recorded {
+		t.Error("a track the pass cannot place yet was described, or written off, rather than left alone")
+	}
+
+	// Once its length has been read it is the pass's to read.
+	l.mu.Lock()
+	l.items[id].Duration = 60_000
+	l.mu.Unlock()
+	if todo := l.analysisTodo(); len(todo) != 1 || todo[0] != id {
+		t.Errorf("a measured track was not queued: %v", todo)
 	}
 }
