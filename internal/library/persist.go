@@ -89,8 +89,20 @@ func (l *Library) UnderRoots(path string) bool {
 }
 
 // markDirty notes that an item needs writing. Caller must hold l.mu.
+//
+// It takes the id out of the removals for the same reason markRemoved takes
+// it out of the dirty set: one id must never sit in both, because a flush
+// hands bolt the puts and the deletions in one transaction and the deletion
+// is applied last. A file dropped and indexed again inside one two-second
+// tick — a rename away and back, a reconciliation that ran while a disk was
+// slow, a torrent client replacing a file in place — therefore had its fresh
+// record written and then deleted, and both maps were cleared, so nothing
+// ever wrote it again: the mirror was missing a file that is in the library
+// until something changed it on disk, and a warm start inside that window
+// served a library without it.
 func (l *Library) markDirty(id string) {
 	if l.dirty != nil {
+		delete(l.removed, id)
 		l.dirty[id] = struct{}{}
 	}
 }
@@ -165,6 +177,17 @@ func (l *Library) flush(db *blob.DB) {
 	}
 	remove := make([]string, 0, len(l.removed))
 	for id := range l.removed {
+		if _, live := l.items[id]; live {
+			// It went and came back: the index holds it again, and the put
+			// above carries its record. bolt applies this transaction's
+			// deletions after its puts, so passing both would write the
+			// record and delete it in the same breath — and both maps are
+			// cleared here, so nothing would ever write it again. markDirty
+			// keeps the two sets apart; this is the belt, at the one point
+			// where the harm is done, and it also covers an id the error
+			// path below put back after the file returned.
+			continue
+		}
 		remove = append(remove, id)
 	}
 	clear(l.dirty)
@@ -204,7 +227,43 @@ func (l *Library) PruneDB(db *blob.DB) {
 		l.log.Warn("could not prune the database", "err", err)
 		return
 	}
+	l.remarkAfterPrune(live)
 	if n > 0 {
 		l.log.Info("pruned stale database entries", "keys", n)
 	}
+}
+
+// remarkAfterPrune marks for writing again whatever the index gained after
+// live was taken.
+//
+// The list is made under a read lock and the prune itself is a transaction
+// over the whole database, and nothing orders the two against the watcher:
+// a file that arrives in between is not in the list the prune works from, so
+// if the persist loop's tick writes its record inside that window the prune
+// deletes it a moment later — while the item is live in memory and no longer
+// dirty, so nothing writes it again and a restart serves a library without
+// it until the next walk finds it. Holding the index still for the length of
+// a whole-database transaction would be the cure that costs more than the
+// illness, so the late arrivals are simply written again: one put apiece on
+// the next tick, and none at all on the ordinary run where the list was
+// complete.
+func (l *Library) remarkAfterPrune(live map[string]struct{}) {
+	l.mu.RLock()
+	var late []string
+	for id, it := range l.items {
+		if _, known := live[id]; !known && persistable(it) {
+			late = append(late, id)
+		}
+	}
+	l.mu.RUnlock()
+	if len(late) == 0 {
+		return
+	}
+	l.mu.Lock()
+	for _, id := range late {
+		if _, still := l.items[id]; still {
+			l.markDirty(id)
+		}
+	}
+	l.mu.Unlock()
 }

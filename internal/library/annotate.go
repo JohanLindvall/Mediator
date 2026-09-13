@@ -1,6 +1,8 @@
 package library
 
 import (
+	"sync"
+
 	"github.com/JohanLindvall/Mediator/internal/blob"
 )
 
@@ -38,6 +40,20 @@ func (l *Library) LoadFlags(db *blob.DB) int {
 		return 0
 	}
 	l.mu.Lock()
+	if l.flagsLoaded {
+		// Somebody else finished the load while this read was in flight, so
+		// what is in memory is newer than what is in hand — including every
+		// judgement withdrawn since. A withdrawal is spelled as a *deletion*,
+		// here and in the database alike, which is exactly what the per-key
+		// guard below cannot see: an absent key reads as "never set", so the
+		// stale snapshot wrote the old value back and an item the owner had
+		// just un-hidden was hidden again for the life of the process, with
+		// the database saying the opposite and a restart disagreeing with
+		// both. A snapshot older than a mutation cannot be merged key by
+		// key, so it is dropped whole.
+		l.mu.Unlock()
+		return len(stored)
+	}
 	for id, f := range stored {
 		if _, ok := l.flags[id]; ok {
 			continue // set while we were reading: that judgement is newer
@@ -65,8 +81,31 @@ func (l *Library) ensureFlags() {
 	if loaded || db == nil {
 		return
 	}
+	// One loader, however many callers arrive first. The flag is only set
+	// once the read is over, so the first requests of a cold process — the
+	// listing, the live stream's own counts, the album build behind them —
+	// each saw "not loaded" and each read the whole bucket, and each
+	// announced a change afterwards: a version bump apiece, and every
+	// per-version cache discarded again for a load that had already
+	// happened. The others wait here and find the answer already in memory.
+	flagStore.Lock()
+	defer flagStore.Unlock()
+	l.mu.RLock()
+	loaded = l.flagsLoaded
+	l.mu.RUnlock()
+	if loaded {
+		return
+	}
 	l.LoadFlags(db)
 }
+
+// flagStore serializes what touches the stored flags: the lazy load above,
+// and the decision-and-writing-down in SetFlags. It is a package lock rather
+// than one of the library's own because this must not be the index's lock —
+// a commit and an fsync are no reason to hold every listing still, and a
+// flush of a cold enrichment pass can leave bolt's writer busy for seconds.
+// A process serves one library; a test with two pays only the wait.
+var flagStore sync.Mutex
 
 // Flags returns what the owner recorded about one item.
 func (l *Library) Flags(id string) Flags {
@@ -84,6 +123,19 @@ func (l *Library) SetFlags(ids []string, hidden, favourite, noCrop *bool, rotati
 	l.ensureFlags()
 	out := make(map[string]Flags, len(ids))
 	write := make(map[string]blob.Flags)
+
+	// The database is written in the order the values were settled in, and
+	// that is what this lock is for. The decision is made under the index's
+	// lock and the writing-down happens after it is let go, so two presses
+	// on one item — the rotation button twice, a hide and an unhide — could
+	// reach bolt the other way round: memory takes the press that held l.mu
+	// last and the database takes the press that entered bolt last, and
+	// those are not always the same press. Nothing on screen says so, and
+	// the database is the one that comes back at the next restart — a clip
+	// at the rotation it was turned away from, or an item hidden again after
+	// being let out, an all-false record being spelled as a deletion.
+	flagStore.Lock()
+	defer flagStore.Unlock()
 
 	l.mu.Lock()
 	for _, id := range ids {
@@ -169,6 +221,16 @@ type stamper struct {
 }
 
 func (l *Library) stamper() *stamper {
+	// The flags are loaded on first use, and this is where a page of them is
+	// about to be handed out — so the load belongs here rather than at each
+	// producer, which is exactly what the album sheet forgot: reached first
+	// on a cold process, by a shortlink straight to a release or by the zip,
+	// it stamped every track from an empty map and answered that nothing was
+	// hidden, favourite or turned, while the same request a moment later —
+	// after any other endpoint had triggered the load — answered properly.
+	// Every producer builds the stamper before taking l.mu, which is where
+	// this may run and nowhere else.
+	l.ensureFlags()
 	plays, _ := l.plays.snapshot()
 	likes, _ := l.likes.snapshot()
 	sv := l.scaledVectors()
@@ -225,6 +287,16 @@ func (l *Library) hiddenCounts(version int64) Counts {
 	}
 	var c Counts
 	l.mu.RLock()
+	// The stamp is the version this walk saw, never the one the caller asked
+	// about. Counts reads its per-kind totals and the version under one lock
+	// and comes here under another, so a change landing between the two
+	// makes this answer newer than the question — and stored under the older
+	// stamp it was then handed to every other request still holding that
+	// version, which subtracted a hidden set counted over one index from
+	// totals taken of another. Stamped with what it actually counted, a
+	// caller behind walks for itself and nobody is told a number the library
+	// never held.
+	at := l.groupVersion
 	for id, f := range l.flags {
 		if !f.Hidden {
 			continue
@@ -234,7 +306,11 @@ func (l *Library) hiddenCounts(version int64) Counts {
 		}
 	}
 	l.mu.RUnlock()
-	l.hiddenTotals, l.hiddenVersion, l.hiddenValid = c, version, true
+	// And the stamp never goes backwards: a caller running behind must not
+	// replace a newer memo with an older count.
+	if !l.hiddenValid || at >= l.hiddenVersion {
+		l.hiddenTotals, l.hiddenVersion, l.hiddenValid = c, at, true
+	}
 	return c
 }
 
