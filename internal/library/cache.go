@@ -28,10 +28,23 @@ type perVersion[T any] struct {
 // is this lock, then whatever locks the build takes beneath it — and the
 // build may itself ask another cache, which is how the artists and genres
 // are grouped from the albums.
+//
+// A cache newer than the asker satisfies it, and that is what the test has
+// to say. The version is read before the lock, so two callers whose reads
+// straddle a bump arrive here asking about different versions — and under
+// equality the one holding the older number rebuilt the whole list behind
+// the one that had just built it, stamped the cache back to its own older
+// number, and so sent the next caller round again. Measured on the busiest
+// build there is, that is up to one full rebuild per caller that straddled
+// the bump, each blocking the others on this lock: precisely the repeated
+// rebuild the group version exists to stop while a disk is being written
+// to. It is sound because a build always reads the live index, so what is
+// stored is never older than the number stamped on it — the cache can be
+// under-labelled, never over-labelled.
 func (c *perVersion[T]) get(version int64, build func() []*T) []*T {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.items != nil && c.version == version {
+	if c.items != nil && c.version >= version {
 		return c.items
 	}
 	c.items = build()

@@ -300,7 +300,10 @@ type Library struct {
 	// lastQuery caches the filtered, sorted result of the most recent
 	// listing query. The grid pages through one query at a time, so with
 	// this a page request costs a copy of 200 items instead of a fresh
-	// sort of the whole library.
+	// sort of the whole library. queryMu guards that one field and is taken
+	// in one place (cachedQuery): it is the lock every listing in the
+	// process passes through, so whatever is done under it is done by one
+	// listing at a time.
 	queryMu   sync.Mutex
 	lastQuery *queryResult
 
@@ -531,6 +534,18 @@ func PathID(path string) string {
 // Get returns a copy of the item with the given ID.
 func (l *Library) Get(id string) (Item, bool) {
 	l.ensureFlags()
+	// Asked for before the index lock is taken, because withFlags reads two
+	// caches that rebuild themselves when they are stale rather than
+	// answering with what they have: the scaled vectors and the affinity,
+	// together about half a second over a library of this size. Asked for
+	// the first time under the read lock — which is every Get after a
+	// verdict, after a release verdict moves, or after the analysis
+	// publishes — that half second is a read lock held against every writer,
+	// and a waiting writer stops every reader behind it. It is the rule a
+	// listing already follows by building its stamper before the lock; this
+	// is the same rule at the door every by-id request comes through, and
+	// the lowest tier of background work is among them, once per track.
+	l.affinities()
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	it, ok := l.items[id]
@@ -644,6 +659,17 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 		l.byInode[key] = path
 	}
 	l.countKind(kind, 1)
+	// The two sets the persist loop reads must never hold one id at once,
+	// and this is the door where a removed id comes back: a file unlinked
+	// and re-created under the same name — the two halves of an atomic
+	// rename, a directory moved away and back — drops through dropItem and
+	// returns here inside the same two-second window. flush applies every
+	// delete after every put in one transaction, so the record just written
+	// for a live item was deleted again in the same tick, and nothing
+	// re-dirties an item a later walk finds unchanged: the item stayed in
+	// the index with no mirrored record, which is exactly the warm start
+	// the mirror exists to give.
+	delete(l.removed, id)
 	l.markDirty(id)
 	return true, false, false
 }
@@ -1111,8 +1137,15 @@ func (l *Library) Counts() Counts {
 	// Hidden items are indexed but out of the way, so a chip that counted
 	// them would disagree with the grid beneath it.
 	c = visibleCounts(c, l.hiddenCounts(version))
+	// The two are published by one build at two moments — the audiobook
+	// count while it runs, the list's own total once it is stored — so a
+	// reader landing between them pairs one build's books with the last
+	// build's releases. On the first build of a library that holds any, the
+	// last build's total is nought and the subtraction goes negative: a chip
+	// reading "-7 albums". Never that, whatever the pair says; publishing
+	// the two together is a change in the build itself.
 	c.Audiobooks = int(l.spokenAlbums.Load())
-	c.Albums = l.albums.total() - c.Audiobooks
+	c.Albums = max(0, l.albums.total()-c.Audiobooks)
 	c.Artists = l.artists.total()
 	c.Genres = l.genres.total()
 	c.Series = l.series.total()
@@ -1159,6 +1192,30 @@ type queryResult struct {
 	items      []*Item
 }
 
+// cachedQuery answers with the filtered, sorted result for this query,
+// building it where the one kept answers another question or another
+// version. The seed belongs in that comparison as much as the sort key
+// does: rebuilding a shuffle for page two would deal a different hand.
+func (l *Library) cachedQuery(q Query, version int64) *queryResult {
+	l.queryMu.Lock()
+	defer l.queryMu.Unlock()
+	res := l.lastQuery
+	if res == nil || res.version != version ||
+		// A position is saved every few seconds while something plays, so it
+		// gets a counter of its own: only a query that filters on watching
+		// has to be rebuilt when one moves.
+		(q.Watch != "" && res.watchVer != l.watchVersion()) ||
+		res.kind != q.Kind || res.kinds != q.Kinds || res.watch != q.Watch ||
+		res.played != q.Played || res.series != q.Series || res.season != q.Season ||
+		res.paths != q.Paths || res.search != q.Search ||
+		res.sort != q.Sort || res.seed != q.Seed || res.desc != q.Desc ||
+		res.showHidden != q.ShowHidden || res.favourites != q.FavouritesOnly {
+		res = l.buildQuery(q, version)
+		l.lastQuery = res
+	}
+	return res
+}
+
 // List returns a filtered, sorted page of items. The full result is cached
 // per (query, version): the grid pages through a single query, so only the
 // first page of a new query — or the first after a change — pays for the
@@ -1182,29 +1239,19 @@ func (l *Library) List(q Query) Result {
 	}
 	l.ensureFlags()
 
-	l.queryMu.Lock()
-	defer l.queryMu.Unlock()
-
 	l.mu.RLock()
 	version := l.version
 	l.mu.RUnlock()
 
-	res := l.lastQuery
-	// The seed belongs in the comparison as much as the sort key does:
-	// rebuilding a shuffle for page two would deal a different hand.
-	if res == nil || res.version != version ||
-		// A position is saved every few seconds while something plays, so it
-		// gets a counter of its own: only a query that filters on watching
-		// has to be rebuilt when one moves.
-		(q.Watch != "" && res.watchVer != l.watchVersion()) ||
-		res.kind != q.Kind || res.kinds != q.Kinds || res.watch != q.Watch ||
-		res.played != q.Played || res.series != q.Series || res.season != q.Season ||
-		res.paths != q.Paths || res.search != q.Search ||
-		res.sort != q.Sort || res.seed != q.Seed || res.desc != q.Desc ||
-		res.showHidden != q.ShowHidden || res.favourites != q.FavouritesOnly {
-		res = l.buildQuery(q, version)
-		l.lastQuery = res
-	}
+	// queryMu covers the one cached result and nothing beyond it. It used to
+	// be held for the whole request, which put the counting below inside it —
+	// and a narrowed count walks the index and may ask for an album build,
+	// which reads playlists off the disk. Every listing in the process passes
+	// through this one lock, so a request whose own answer was a cached page
+	// of two hundred items queued behind that. What comes back is immutable
+	// once built, so reading it afterwards needs nothing but the index's own
+	// read lock.
+	res := l.cachedQuery(q, version)
 
 	total := len(res.items)
 	end := min(q.Offset+q.Limit, total)
@@ -1284,9 +1331,23 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	if q.Watch != "" {
 		watch = l.watchSnapshot()
 	}
+	// The popular orders need the same three, and they have to be taken
+	// here rather than in the sort below: the affinity is a lazy rebuild —
+	// every analysed track measured against every verdict, about half a
+	// second — and asking for it from inside the sort held the index's read
+	// lock for the whole of it, which stops a waiting writer and, through
+	// it, every reader behind. It is the rule annotate.go states for
+	// exactly this work: taken by whoever is about to hand out a page,
+	// before the lock. The snapshots are shared with the filter above,
+	// which wanted two of the three already.
+	popular := q.Sort == "plays" || q.Sort == "popular"
 	var plays, likes map[string]int
-	if q.Played {
+	if q.Played || popular {
 		plays, likes = l.playsSnapshot(), l.likesSnapshot()
+	}
+	var aff *affinity
+	if popular {
+		aff = l.affinities()
 	}
 
 	l.mu.RLock()
@@ -1372,9 +1433,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		// each of them would cost more than the sort. The verdict outranks
 		// the count (popularity); "plays" is the key's old name, kept so an
 		// address minted before the rename still sorts.
-		plays := l.playsSnapshot()
-		likes := l.likesSnapshot()
-		aff := l.affinities()
 		order = byField(func(it *Item) int64 {
 			return trackPopularity(likes[it.ID], aff.bucket[it.ID], plays[it.ID])
 		})

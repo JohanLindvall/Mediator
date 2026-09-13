@@ -126,6 +126,26 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	if music {
 		albums = l.AllowedAlbums(l.Albums(), q.Paths)
 	}
+	// The performer and genre lists go the same way, and for the same
+	// reason: both are grouped from the albums, so asking for one under the
+	// counts lock could run a whole album build — playlists read off the
+	// disk — with every other narrowed count queued behind it. It does not
+	// even need a rebuild of its own to hurt: the grouped caches take their
+	// lock unconditionally, so a listing that merely arrives while the
+	// broadcast loop is rebuilding waits for that build with this lock
+	// held, and a listing holds the one lock every listing passes through.
+	// Only the album list was hoisted when this was first written; these
+	// two were left inside, which is the arm that was measured.
+	var allArtists []*Artist
+	var allGenres []*Genre
+	if music && !q.Paths.Restricted() {
+		if q.Genre == "" {
+			allArtists = l.Artists()
+		}
+		if q.Artist == "" {
+			allGenres = l.Genres()
+		}
+	}
 
 	l.counts.mu.Lock()
 	defer l.counts.mu.Unlock()
@@ -185,8 +205,8 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 
 	// Albums and artists are their own collections and are matched as such —
 	// an album whose name matches counts once, however many of its tracks do.
-	// Both are already built and cached per version; asking for them here
-	// takes their own locks, which is why it happens outside the one above.
+	// All three lists are already built and cached per version; asking for
+	// them takes their own locks, which is why it happens above this one.
 	// The performers and genres of the releases that match, gathered in the
 	// album pass: inside a genre the Artists chip has to say how many
 	// performers are in *it*, and inside a performer the Genres chip has to
@@ -234,7 +254,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 		// everything and would count performers this caller cannot see.
 		out.Artists = len(performers)
 	} else {
-		for _, ar := range l.Artists() {
+		for _, ar := range allArtists {
 			if q.Artist != "" && !strings.EqualFold(ar.Name, q.Artist) {
 				continue
 			}
@@ -249,7 +269,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 		// And narrowed to a performer, the genres they are filed under.
 		out.Genres = len(genres)
 	} else {
-		for _, g := range l.Genres() {
+		for _, g := range allGenres {
 			if q.Genre != "" && !strings.EqualFold(g.Name, q.Genre) {
 				continue
 			}
