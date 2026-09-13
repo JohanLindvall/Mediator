@@ -270,27 +270,50 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// This request drives the set from here to the seek, and takes it from
+	// whatever was driving it before (castClaim).
+	//
+	// **The claim is taken before the preparation, not after it**, and that
+	// ordering is the whole of what it is worth. Nearly all the waiting in a
+	// cast is above the first SOAP call: the probe, and — where the viewer
+	// chose a soundtrack the set cannot be told about — a copy of the whole
+	// film, which has a budget of minutes and which the page does not cancel
+	// when it changes its mind. Claimed at the first SOAP call, the order
+	// the slot was taken in was the order the *copies finished* in and not
+	// the order the gestures were made in: a film abandoned in favour of
+	// another could finish its copy afterwards, find the slot free, and put
+	// itself on the set at its own resume point, minutes after the viewer
+	// asked for something else. Claimed here, the newer request's claim
+	// cancels the older one's wait, and the copy carries on for whoever asks
+	// for it next (a production outlives the request that started it).
+	ctx, done := s.castClaim(r.Context(), d.ID)
+	defer done()
+
 	// The soundtrack list and the embedded captions come from the probe that
 	// runs when a video is opened. A cast *is* an opening — and the indexes
 	// the player sends were numbered against the probed listing, so a cast
 	// resolved without the probe would count a shorter list and hand the set
 	// the wrong subtitle, or none.
-	it = s.probed(r.Context(), it)
+	it = s.probed(ctx, it)
 
-	src, mimeType, note, err := s.castSourceNoted(r.Context(), d, it, r.URL.Query().Get("audio"))
+	src, mimeType, note, err := s.castSourceNoted(ctx, d, it, r.URL.Query().Get("audio"))
 	if err != nil {
+		if s.castTaken(ctx, w, r, d, it) {
+			return
+		}
 		castSourceError(w, err)
+		return
+	}
+	// Preparation can also succeed after the set has been taken — a copy
+	// that was already on disk, or one that finished in the moment between.
+	// Nothing further may be said to the set in that case.
+	if s.castTaken(ctx, w, r, d, it) {
 		return
 	}
 
 	meta := s.castMeta(r, d, it, src, mimeType)
-	// This request drives the set from here to the seek, and takes it from
-	// whatever was driving it before (castClaim).
-	ctx, done := s.castClaim(r.Context(), d.ID)
-	defer done()
 	if err := d.SetURI(ctx, src, meta); err != nil {
-		if superseded(r.Context(), ctx) {
-			s.castSuperseded(w, d, it)
+		if s.castTaken(ctx, w, r, d, it) {
 			return
 		}
 		// A set that has not answered has not necessarily failed. Measured
@@ -301,6 +324,14 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 		// beginning. What matters is whether it is showing what it was
 		// given, so ask it that instead of believing the silence.
 		if !showing(ctx, d, src) {
+			// The supersession can equally have landed while we were
+			// asking — that is six seconds of polling — and a set that
+			// answered nothing because we stopped talking to it has
+			// refused nothing. Reporting that as "did not accept the
+			// file" is the very mis-report the 409 exists to end.
+			if s.castTaken(ctx, w, r, d, it) {
+				return
+			}
 			s.log.Warn("cast failed", "renderer", d.Name, "item", it.Name, "err", err)
 			http.Error(w, castFault(d.Name, "did not accept the file", err), http.StatusBadGateway)
 			return
@@ -309,8 +340,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 			"renderer", d.Name, "item", it.Name, "err", err)
 	}
 	if err := d.Play(ctx); err != nil {
-		if superseded(r.Context(), ctx) {
-			s.castSuperseded(w, d, it)
+		if s.castTaken(ctx, w, r, d, it) {
 			return
 		}
 		s.log.Warn("cast failed to start", "renderer", d.Name, "item", it.Name, "err", err)
@@ -322,8 +352,17 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	// fault rather than with the position.
 	if t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64); t > 0 {
 		if err := d.Seek(ctx, time.Duration(t*float64(time.Second))); err != nil {
+			if s.castTaken(ctx, w, r, d, it) {
+				return
+			}
 			s.log.Debug("cast seek refused", "renderer", d.Name, "err", err)
 		}
+	}
+	// And the last word is the same question: every step above can succeed
+	// and still be overtaken, in which case this answer describes a film
+	// that is no longer the one on the set.
+	if s.castTaken(ctx, w, r, d, it) {
+		return
 	}
 	s.log.Info("casting", "renderer", d.Name, "item", it.Name, "type", mimeType)
 	writeJSON(w, CastStatus{State: "TRANSITIONING", URI: src, Note: note})
@@ -439,9 +478,19 @@ func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it libra
 		// down for it. Nothing else marks it here: the production is
 		// detached from any request, and a cast is the one route where no
 		// delivery is in flight meanwhile to hold the gate instead.
-		release := s.lib.StartStream()
-		_, err := s.remux.File(ctx, it, audio, kind)
-		release()
+		//
+		// Deferred inside a closure rather than released in a line of its
+		// own: a panic anywhere under remux.File is recovered by net/http
+		// and the handler simply ends, and a stream count that is never
+		// given back reads as "something is playing" for the life of the
+		// process — thumbnails collapsed to one job, enrichment paused and
+		// every hover sheet refused, for ever. Every other site marking the
+		// gate defers; this is not the one to be clever in.
+		err := func() error {
+			defer s.lib.StartStream()()
+			_, err := s.remux.File(ctx, it, audio, kind)
+			return err
+		}()
 		if err == nil {
 			path = "remux/" + url.PathEscape(it.ID) + "?a=" + strconv.Itoa(audioTrack(audio)) + remuxQuery(kind)
 			mimeType = remuxMime(it, kind)
@@ -757,18 +806,24 @@ func (s *Server) handleCastControl(w http.ResponseWriter, r *http.Request) {
 // diagnosing the set can read it, and not onto a screen where it reads as
 // the page having broken. A set that answered nothing at all is said to
 // have gone quiet, which is the one distinction a viewer can act on.
-// castSuperseded is what a request is told when another one took the set out
-// from under it. It is not a fault of the set's and must not be reported as
-// one: the film the viewer actually asked for last is the one now playing,
-// and the page's own generation guard discards this answer anyway.
-func (s *Server) castSuperseded(w http.ResponseWriter, d *dlna.Renderer, it library.Item) {
-	s.log.Debug("cast superseded by a later request", "renderer", d.Name, "item", it.Name)
-	http.Error(w, "another request took "+d.Name, http.StatusConflict)
-}
-
 func castFault(name, what string, err error) string {
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return name + " did not answer in time"
 	}
 	return name + " " + what
+}
+
+// castTaken reports whether another request has taken the set out from under
+// this one, and tells this one so when it has. Every step of a cast asks it,
+// which is the point: a superseded request must say nothing further to the
+// set, and must not report the silence that follows as a fault of the set's.
+// It is not one — the film the viewer actually asked for last is the one now
+// playing, and the page's own generation guard discards this answer anyway.
+func (s *Server) castTaken(ctx context.Context, w http.ResponseWriter, r *http.Request, d *dlna.Renderer, it library.Item) bool {
+	if !superseded(r.Context(), ctx) {
+		return false
+	}
+	s.log.Debug("cast superseded by a later request", "renderer", d.Name, "item", it.Name)
+	http.Error(w, "another request took "+d.Name, http.StatusConflict)
+	return true
 }

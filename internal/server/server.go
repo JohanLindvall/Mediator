@@ -318,35 +318,48 @@ const (
 // collect pages through List for up to max items. The paging costs nothing
 // beyond the copies: the library caches the filtered, sorted result per
 // (query, version), so only the first call does the work.
-//
-// **Every page has to come from the same version of the library**, and that
-// is what the loop below is for. An offset names a row in a particular
-// filtered, sorted result, and this library is written to constantly by
-// design — a download bumps the version dozens of times a second, and under
-// the default order a file that merely grew moves in it. A change between
-// two pages therefore re-sorted what the offsets referred to: the queue came
-// out holding one track twice and missing another, and because the running
-// total was compared against a `Total` read from a later snapshot it also
-// stopped short (measured: 3047 collected, 3004 of them distinct). So the
-// version each page answered at is checked, and a collection that spanned
-// two starts again from the top. Bounded, because a library being written to
-// need never settle: the last attempt is taken as it stands, which is one
-// listing's worth of drift rather than a loop that cannot end.
 func (s *Server) collect(q library.Query, max int) []library.Item {
-	const attempts = 3
+	return collectPages(s.lib.List, q, max)
+}
+
+// collectPages is the paging itself, over whatever answers a listing — which
+// is what makes the rule below testable without a library.
+//
+// **Every page has to come from the same version of the library.** An offset
+// names a row in a particular filtered, sorted result, and this library is
+// written to constantly by design — a download bumps the version dozens of
+// times a second, and under the default order a file that merely grew moves
+// in it. A change between two pages therefore re-sorted what the offsets
+// referred to: the queue came out holding one track twice and missing
+// another, and because the running total was compared against a `Total` read
+// from a later snapshot it also stopped short (measured: 3047 collected, of
+// which 3004 were distinct). So the version each page answered at is
+// checked, and a collection that spanned two is taken again from the top.
+//
+// **Once, and then it is taken as it stands.** One retry settles the case
+// this can be settled in — a single change landing in the middle of a
+// collection, which is what an otherwise quiet library produces — and a
+// library being written to continuously cannot be made to settle from up
+// here at all: it will move under the second pass exactly as it moved under
+// the first. Paying a third pass to discover that costs a queue-all of a
+// large library hundreds more List calls, each of them under the library's
+// one query lock and so in front of every other listing in the server, for
+// an answer no better than the second's. A page's worth of drift in a
+// million-row queue is the cheaper wrong. (The right cure is a listing that
+// can be held open across its pages, which belongs to the library and not to
+// a caller of it.)
+func collectPages(list func(library.Query) library.Result, q library.Query, max int) []library.Item {
 	var out []library.Item
-	for attempt := range attempts {
-		// The last attempt pages on through a change rather than starting
-		// over: an answer with a row's worth of drift in it is better than
-		// an answer cut short, and better than a loop a busy library can
-		// keep alive for ever.
-		last := attempt == attempts-1
+	for attempt := range 2 {
+		// The second pass pages on through a change rather than starting
+		// over again, for the reason above.
+		last := attempt == 1
 		out = nil
 		var version int64
 		moved := false
 		for len(out) < max {
 			q.Offset, q.Limit = len(out), min(listPage, max-len(out))
-			res := s.lib.List(q)
+			res := list(q)
 			if len(out) == 0 {
 				version = res.Version
 			} else if res.Version != version && !last {
@@ -1490,13 +1503,19 @@ func (s *Server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// One turn for the pair (see owning): the store and the library must
-	// agree about which write was the last one.
-	unlock := s.owning(id)
-	s.st.Set(id, body.Time, body.Duration)
-	// The listing filters on how far things have been watched, so it is told
-	// as the position moves rather than being made to ask the store.
-	s.lib.SetWatch(id, library.Watch{Pos: body.Time, Len: body.Duration})
-	unlock()
+	// agree about which write was the last one. Taken in a closure so the
+	// release is deferred — a panic under either store is recovered by
+	// net/http and the handler simply ends, and a stripe left locked wedges
+	// every later save, play and clear whose id hashes to it, with
+	// goroutines piling up behind it — and so that the turn ends before the
+	// response is written, which is a wait on the reader.
+	func() {
+		defer s.owning(id)()
+		s.st.Set(id, body.Time, body.Duration)
+		// The listing filters on how far things have been watched, so it is
+		// told as the position moves rather than being made to ask the store.
+		s.lib.SetWatch(id, library.Watch{Pos: body.Time, Len: body.Duration})
+	}()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1516,14 +1535,18 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 	}
 	// The count is read out of the store and written into the library as an
 	// absolute number, so the two writes are one turn (see owning) — or a
-	// second play of the same track could apply the lower count last.
-	unlock := s.owning(id)
-	n := s.st.Play(id)
-	// The listings sort and filter on this, so the library is told rather
-	// than made to ask the store — the same arrangement as the positions
-	// above, and for the same reason.
-	s.lib.SetPlays(id, n)
-	unlock()
+	// second play of the same track could apply the lower count last. The
+	// turn is given back before the answer is written: a stripe is not
+	// something to hold while a reader takes its time.
+	n := func() int {
+		defer s.owning(id)()
+		n := s.st.Play(id)
+		// The listings sort and filter on this, so the library is told
+		// rather than made to ask the store — the same arrangement as the
+		// positions above, and for the same reason.
+		s.lib.SetPlays(id, n)
+		return n
+	}()
 	writeJSON(w, PlayResponse{Plays: n})
 }
 
@@ -1542,10 +1565,11 @@ func (s *Server) handleStateDelete(w http.ResponseWriter, r *http.Request) {
 	// The same turn a save takes, so a clear racing one cannot leave the
 	// library calling a film finished that the store no longer has a
 	// position for.
-	unlock := s.owning(id)
-	s.st.Delete(id)
-	s.lib.SetWatch(id, library.Watch{})
-	unlock()
+	func() {
+		defer s.owning(id)()
+		s.st.Delete(id)
+		s.lib.SetWatch(id, library.Watch{})
+	}()
 	w.WriteHeader(http.StatusNoContent)
 }
 

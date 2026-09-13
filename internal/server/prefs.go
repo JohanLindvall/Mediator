@@ -96,16 +96,27 @@ func (s *Server) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 	// nobody sees until the next restart quietly puts the other set back.
 	// The answer is read under the same lock, or a request could report the
 	// set the other one applied.
-	s.rootsMu.Lock()
-	defer s.rootsMu.Unlock()
-	applied, err := s.setRoots(clean)
+	//
+	// In a closure so the release is deferred — a panic under the callback
+	// would otherwise leave the lock held and every later change of the
+	// directories waiting on it for the life of the process — and so that
+	// the lock is given back before the answer is written out.
+	p, err := func() (PrefsResponse, error) {
+		s.rootsMu.Lock()
+		defer s.rootsMu.Unlock()
+		applied, err := s.setRoots(clean)
+		if err != nil {
+			return PrefsResponse{}, err
+		}
+		p := s.prefs()
+		p.Roots = applied
+		return p, nil
+	}()
 	if err != nil {
 		s.log.Warn("could not change the scanned directories", "err", err)
 		http.Error(w, "could not change the directories", http.StatusInternalServerError)
 		return
 	}
-	p := s.prefs()
-	p.Roots = applied
 	writeJSON(w, p)
 }
 
