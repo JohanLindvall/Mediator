@@ -546,9 +546,9 @@ func (l *Library) Get(id string) (Item, bool) {
 	// is the door every by-id request comes through, the lowest tier of
 	// background work among them, once per track.
 	//
-	// It is the stamper rather than withFlags for the same accounting.
-	// Warming the caches and then calling withFlags would ask for the
-	// affinity twice — and the warm ask is not free: it compares the
+	// It is the stamper rather than a per-item stamping for the same
+	// accounting. Warming the caches and then stamping one item would ask
+	// for the affinity twice — and the warm ask is not free: it compares the
 	// release verdicts by content, which is a walk of the whole map. One
 	// ask and a copy of the owner's own play and verdict maps — which hold
 	// only what has ever been played or judged — is less work than two
@@ -949,16 +949,6 @@ func cleanYear(y int) int {
 		return 0
 	}
 	return y
-}
-
-// markEnriched records that an item's metadata has been looked for.
-func (l *Library) markEnriched(id string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if it, ok := l.items[id]; ok && (!it.enriched || it.shape < shapeVersion) {
-		it.enriched, it.shape = true, shapeVersion
-		l.markDirty(id)
-	}
 }
 
 // setProbe stores what probing learned about a video (duration, codecs).

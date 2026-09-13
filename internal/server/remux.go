@@ -267,7 +267,11 @@ func (r *Remuxer) Close() error {
 		}
 	}
 	r.entries = map[string]*remuxEntry{}
-	r.total = 0
+	// Both halves of the books, not just the one: a copy still being written
+	// subtracts what it reserved when it ends, and leaving pending behind
+	// would take it negative. Nothing reads it after this — File declines
+	// once closed — but a figure that means nothing is worse than a zero.
+	r.total, r.pending = 0, 0
 	r.mu.Unlock()
 	return nil
 }

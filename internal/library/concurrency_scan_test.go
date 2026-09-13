@@ -334,8 +334,11 @@ func TestAContainersParseIsInsideItsLock(t *testing.T) {
 	<-done
 
 	items := l.List(Query{Limit: 10}).Items
-	if len(items) != 1 || items[0].Size != 1200 {
-		t.Fatalf("got %d titles, the first of %d bytes; want one of 1200 — the parse ran before the lock", len(items), items[0].Size)
+	if len(items) != 1 {
+		t.Fatalf("got %d titles, want one — the parse ran before the lock", len(items))
+	}
+	if items[0].Size != 1200 {
+		t.Fatalf("the title is %d bytes, want 1200 — the parse ran before the lock", items[0].Size)
 	}
 }
 

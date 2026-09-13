@@ -194,6 +194,14 @@ func run(cfg config, log *slog.Logger) error {
 	// wait for it before the deferred db.Close — otherwise the two race and
 	// the last two seconds of index changes lose to "database not open".
 	persistDone := make(chan struct{})
+	// And the same for the analysis, which writes vectors to that database
+	// on its own beat: it is on the request context rather than the stores'
+	// one, so cancelling it is the same gesture that ends the watcher, but
+	// waiting for it is not — and a PutFeatures still in flight when the
+	// deferred close runs is a write to a closed database like any other.
+	// Closed unconditionally below, since the pass starts only after the
+	// first walk and may never start at all.
+	analysisDone := make(chan struct{})
 	var db *blob.DB
 	if cfg.dbPath == "off" {
 		close(persistDone) // no loop to wait for
@@ -265,6 +273,7 @@ func run(cfg config, log *slog.Logger) error {
 		stopStores()
 		<-stateDone
 		<-persistDone
+		<-analysisDone
 	}()
 	// What has been watched is part of what the listing filters on, so the
 	// library is given the positions the store just restored.
@@ -327,6 +336,9 @@ func run(cfg config, log *slog.Logger) error {
 	// Initial scan in the background: the server is reachable immediately and
 	// the UI fills in progressively via SSE while large trees are walked.
 	go func() {
+		// This goroutine ends with the analysis, which is the last thing on
+		// it, so it is the one that says the database has no more writers.
+		defer close(analysisDone)
 		start := time.Now()
 		scanGate.Lock()
 		lib.Scan(watcher.AddDir)
@@ -349,7 +361,7 @@ func run(cfg config, log *slog.Logger) error {
 		lib.EnrichMeta(ctx, busy)
 		// And reading how the music sounds comes after all of them.
 		if cfg.analyze {
-			go lib.AnalyzeLoop(ctx, db, analysisBusy)
+			lib.AnalyzeLoop(ctx, db, analysisBusy)
 		}
 	}()
 

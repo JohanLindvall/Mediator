@@ -65,7 +65,6 @@ func TestAReadEndsWhenNobodyIsWaiting(t *testing.T) {
 func TestDescribeAllSpendsAFixedAmountOfItself(t *testing.T) {
 	release := make(chan struct{})
 	releaseAll := sync.OnceFunc(func() { close(release) })
-	defer releaseAll()
 	var inFlight, peak, served atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := inFlight.Add(1)
@@ -86,6 +85,11 @@ func TestDescribeAllSpendsAFixedAmountOfItself(t *testing.T) {
 			`<controlURL>/ctl</controlURL></service></serviceList></device></root>`)
 	}))
 	defer srv.Close()
+	// Registered last so it runs first: the handlers are parked on this
+	// channel and srv.Close waits for them, so releasing them has to come
+	// before the close. The other order made a failing assertion hang until
+	// the go test timeout rather than say which assertion went.
+	defer releaseAll()
 
 	const many = 200
 	locs := map[string]bool{}

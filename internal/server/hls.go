@@ -994,7 +994,7 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 		// into the same session, whose waiters are still waiting on a first
 		// segment that has not been written. Only where the copy can be
 		// made — a file it cannot help would be attempted twice identically.
-		if aspectRefused(errBuf.String()) && !repaired && repairable(h.ffmpeg, it) {
+		if startOverWithAspect(errBuf.String(), repaired, repairable(h.ffmpeg, it)) {
 			aspects.note(it)
 			h.log.Info("converting again with the declared aspect put right", "path", it.Rel)
 			return attemptAgain

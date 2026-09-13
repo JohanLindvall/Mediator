@@ -22,7 +22,17 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "like must be 1, -1 or 0", http.StatusBadRequest)
 		return
 	}
-	like := s.st.Like(id, body.Like)
-	s.lib.SetLike(id, like)
+	// The store and the library are written in one turn of the id's own
+	// lock, as the play count is: a verdict withdrawn while the record is
+	// being cleared from elsewhere could otherwise leave the thumb lit for
+	// a record the store has already dropped. Given back before the answer
+	// is written — a stripe is not something to hold while a reader takes
+	// its time.
+	like := func() int {
+		defer s.owning(id)()
+		like := s.st.Like(id, body.Like)
+		s.lib.SetLike(id, like)
+		return like
+	}()
 	writeJSON(w, LikeResponse{Like: like})
 }

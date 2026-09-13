@@ -200,34 +200,15 @@ func (l *Library) SetFlags(ids []string, hidden, favourite, noCrop *bool, rotati
 	return out
 }
 
-// withFlags stamps the stored judgement onto a copy of an item. Caller must
-// hold l.mu.
-func (l *Library) withFlags(it Item) Item {
-	f := l.flags[it.ID]
-	it.Hidden, it.Favourite, it.Rotation, it.NoCrop = f.Hidden, f.Favourite, f.Rotation, f.NoCrop
-	// The play count travels the same way and for the same reason: it is the
-	// owner's, not the file's, so it belongs on the copy that goes out and
-	// not on the item the walk rebuilds.
-	it.Plays = l.playsOf(it.ID)
-	it.Like = l.likeOf(it.ID)
-	// And what the analysis says of it, read from caches that are rebuilt
-	// only when a verdict or a vector changes.
-	aff := l.affinities()
-	if b := aff.bucket[it.ID]; b != 0 {
-		it.Affinity = b
-		it.Akin = l.akinName(aff.akin[it.ID])
-	}
-	it.Spoken = l.spokenOf(it.ID)
-	return it
-}
-
-// stamper stamps what withFlags stamps onto many copies with the locks
-// taken once: withFlags takes seven per item — the counts, the verdicts,
-// the affinity's caches and the release verdicts — which over a page, or a
-// queue of the whole library, is most of the work of handing it out. Built
-// by whoever is about to hand out a page, before taking l.mu; stamp is then
-// called under it, like withFlags. It forces no album build, for the reason
-// spokenOf gives: this is asked under the index's lock.
+// stamper stamps the owner's own facts onto many copies with the locks
+// taken once. The per-item form this replaced took seven of them apiece —
+// the counts, the verdicts, the affinity's caches and the release verdicts
+// — which over a page, or a queue of the whole library, was most of the
+// work of handing it out, and it could reach the affinity's rebuild with
+// the index lock held. Built by whoever is about to hand out a page,
+// before taking l.mu; stamp is then called under it. It forces no album
+// build, for the reason spokenOf gives: this is asked under the index's
+// lock, where a build would wait on itself.
 type stamper struct {
 	l      *Library
 	plays  map[string]int
@@ -253,7 +234,8 @@ func (l *Library) stamper() *stamper {
 	return &stamper{l: l, plays: plays, likes: likes, aff: l.affinities(), spoken: l.spokenSet(sv)}
 }
 
-// stamp is withFlags from the snapshots. Caller must hold l.mu.
+// stamp puts the owner's facts on one copy, from the snapshots the stamper
+// took. Caller must hold l.mu.
 func (s *stamper) stamp(it Item) Item {
 	f := s.l.flags[it.ID]
 	it.Hidden, it.Favourite, it.Rotation, it.NoCrop = f.Hidden, f.Favourite, f.Rotation, f.NoCrop

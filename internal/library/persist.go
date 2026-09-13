@@ -204,6 +204,15 @@ func (l *Library) flush(db *blob.DB) {
 			l.dirty[it.ID] = struct{}{}
 		}
 		for _, id := range remove {
+			if _, live := l.items[id]; live {
+				// It came back while the write was in flight, and markDirty
+				// has already put it in the other set. Putting the deletion
+				// back as well is how one id comes to be in both, which is
+				// the very pair the forward path above refuses — and bolt
+				// applies deletions after puts, so the record would be
+				// written and deleted in one transaction.
+				continue
+			}
 			l.removed[id] = struct{}{}
 		}
 		l.mu.Unlock()
