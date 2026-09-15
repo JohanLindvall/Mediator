@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
-import { withoutTrackNumber } from './format.ts';
+import { trackTitle, withoutTrackNumber } from './format.ts';
 import {
   castStep,
   shouldSave,
@@ -429,6 +429,71 @@ test('titles: a number that is part of the title stays', () => {
   assert.equal(withoutTrackNumber('01.'), '01.');
 });
 
+test('titles: a tag is somebody else\'s statement and passes through whole', () => {
+  // Every shape the file-name rules below would have taken something off,
+  // carried by a tag instead: not one of them fires.
+  const tagged = { name: 'HARBOUR LIGHTS - 01.At the Harbour Wall_320.mp3', title: '01. At the Harbour Wall_320.mp3', artist: 'Harbour Lights' };
+  assert.equal(trackTitle(tagged), '01. At the Harbour Wall_320.mp3');
+});
+
+test('titles: a file name is a title with the ripper still on it', () => {
+  // The shape this came from: performer in capitals, a two-digit number with
+  // a full stop and no space after it, the title, then the bitrate.
+  assert.equal(
+    trackTitle({ name: 'HARBOUR LIGHTS - 01.At the Harbour Wall_320.mp3', artist: 'Harbour Lights' }),
+    'At the Harbour Wall',
+  );
+  // The number in front of the performer rather than behind it.
+  assert.equal(
+    trackTitle({ name: '03 - Harbour Lights - Low Tide.flac', artist: 'Harbour Lights' }),
+    'Low Tide',
+  );
+  // The performer the track does not carry itself comes from the release it
+  // is being shown in, which is where the server's answer for it lives.
+  assert.equal(
+    trackTitle({ name: 'Harbour Lights_Low Tide.mp3' }, 'Harbour Lights'),
+    'Low Tide',
+  );
+  // An extension comes off whatever else is or is not there.
+  assert.equal(trackTitle({ name: 'Low Tide.mp3' }), 'Low Tide');
+});
+
+test('titles: a prefix that is not the performer is part of the title', () => {
+  // Nobody has said this release is theirs, so nothing may be taken off it.
+  assert.equal(trackTitle({ name: 'Gorse Beacon - Low Tide.mp3' }), 'Gorse Beacon - Low Tide');
+  // A compilation's per-track performers are the one place that prefix says
+  // what the tags do not, and the release matches none of them.
+  assert.equal(
+    trackTitle({ name: 'Gorse Beacon - Low Tide.mp3' }, 'Various Artists'),
+    'Gorse Beacon - Low Tide',
+  );
+  // A title that merely begins with the performer's letters is a title.
+  assert.equal(
+    trackTitle({ name: 'Bandana Blues.mp3' }, 'Band'),
+    'Bandana Blues',
+  );
+});
+
+test('titles: a number or a bitrate that means something stays', () => {
+  assert.equal(trackTitle({ name: '44 Winters.mp3' }), '44 Winters');
+  assert.equal(trackTitle({ name: '1979.mp3' }), '1979');
+  // The bitrate rule is bounded to the rates that exist, so a year at the
+  // end of a title survives it — 1979 is not a bitrate, 320 is.
+  assert.equal(trackTitle({ name: 'Low Tide - 1979.mp3' }), 'Low Tide - 1979');
+  assert.equal(trackTitle({ name: 'Low Tide_320.mp3' }), 'Low Tide');
+  assert.equal(trackTitle({ name: 'Low Tide [320k].mp3' }), 'Low Tide');
+  assert.equal(trackTitle({ name: 'Low Tide (256kbps).mp3' }), 'Low Tide');
+  assert.equal(trackTitle({ name: 'Low Tide-192.mp3' }), 'Low Tide');
+});
+
+test('titles: a step that would leave nothing is not taken', () => {
+  // A file called nothing but its number keeps being called that.
+  assert.equal(trackTitle({ name: '01.mp3' }), '01');
+  // And one called nothing but the performer, or nothing but a bitrate.
+  assert.equal(trackTitle({ name: 'Harbour Lights - .mp3' }, 'Harbour Lights'), 'Harbour Lights -');
+  assert.equal(trackTitle({ name: '320.mp3' }), '320');
+});
+
 test('crop: a padded picture fills the screen it can fill', () => {
   // The real case: a 270x480 portrait picture padded into an 854x480 frame.
   // On a phone held upright there is a great deal to give back.
@@ -647,4 +712,23 @@ test('menuShift keeps a menu inside the visible box', () => {
   // Wider than the box: clamped to the left edge rather than the right, so
   // the start of the list is what shows.
   assert.equal(menuShift(0, 500, 0, 300, 8), 8);
+});
+
+test('titles: the release names a track whose own file names nobody', () => {
+  // What the server now supplies on the item (Item.Performer): a release
+  // nothing tagged, whose performer the library derived from the directory
+  // above it. Every list gets the same answer without knowing its collection.
+  const it = { name: 'GORSE BEACON - 01.At the Harbour Wall_320.mp3', performer: 'Gorse Beacon' };
+  assert.equal(trackTitle(it), 'At the Harbour Wall');
+  // The track's own tag still outranks it, and a tag is never edited.
+  assert.equal(
+    trackTitle({ name: 'GORSE BEACON - 01.At the Harbour Wall_320.mp3', title: 'GORSE BEACON - 01.At the Harbour Wall_320', performer: 'Gorse Beacon' }),
+    'GORSE BEACON - 01.At the Harbour Wall_320',
+  );
+  // And a release that names nobody leaves the name alone but for the parts
+  // no list should ever show.
+  assert.equal(
+    trackTitle({ name: 'GORSE BEACON - 01.At the Harbour Wall_320.mp3' }),
+    'GORSE BEACON - 01.At the Harbour Wall',
+  );
 });

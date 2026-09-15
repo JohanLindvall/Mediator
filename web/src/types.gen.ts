@@ -31,6 +31,7 @@ export interface Item {
   episode?: number;
   plays?: number;
   like?: number;
+  performer?: string;
   affinity?: number;
   akin?: string;
   spoken?: boolean;

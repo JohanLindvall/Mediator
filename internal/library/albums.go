@@ -81,6 +81,13 @@ func (l *Library) AlbumByID(id string) (*Album, []Item, bool) {
 	return nil, nil, false
 }
 
+// variousArtists is what fillAlbum writes where the tracks name several
+// performers. It is the one value of Album.Artist that is nobody's name,
+// which is why the build will not hand it to a track: it means "more than
+// one", so putting it under a single track states something false of every
+// one of them, where an empty line says nothing.
+const variousArtists = "Various Artists"
+
 // tracksOfAlbum is the release's tracks as the caller sees them, in its own
 // running order.
 func (l *Library) tracksOfAlbum(a *Album) []Item {
@@ -441,17 +448,39 @@ func (l *Library) buildAlbums() []*Album {
 	// spokenOf can read it without a build of its own (see similar.go).
 	books := 0
 	byRelease := make(map[string]bool)
+	// And who each release is by, for the tracks on it that name nobody.
+	// Kept here rather than stamped where a release's tracks are handed out,
+	// because a track reaches a listing by several doors — the sheet, the
+	// queue, a search, a resemblance — and only two of them have the release
+	// in hand. Answered from the last build, like the spoken verdict beside
+	// it and for the same reason: this is read under the index's lock, where
+	// forcing a build would wait on itself.
+	performers := make(map[string]string)
 	for _, a := range albums {
 		if a.Spoken {
 			books++
 		}
+		credit := a.Artist
+		if strings.EqualFold(credit, variousArtists) {
+			// The marker fillAlbum writes where the tracks name several
+			// performers. It means "more than one" and is nobody's name, so
+			// putting it under a single track would state something false of
+			// every one of them, where an empty line says nothing. Compared
+			// without case, since a release whose own tags spell it is the
+			// same release.
+			credit = ""
+		}
 		for _, id := range a.TrackIDs {
 			byRelease[id] = a.Spoken
+			if credit != "" {
+				performers[id] = credit
+			}
 		}
 	}
 	l.spokenAlbums.Store(int32(books))
 	l.featMu.Lock()
 	l.byRelease = byRelease
+	l.performers = performers
 	l.featMu.Unlock()
 	return albums
 }
@@ -666,7 +695,7 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 		// tagging left half done. One voice is better than silence.
 		a.Artist = artist
 	case len(artistCount) > 1:
-		a.Artist = "Various Artists"
+		a.Artist = variousArtists
 	case a.Source == "dir":
 		// Nothing tagged this release at all — not a disagreement between
 		// tracks, which is a different thing and says something of its own.

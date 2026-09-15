@@ -154,7 +154,18 @@ Go binary with the TypeScript frontend embedded.
   level up — but only where that name is a performer the library already
   knows from tags elsewhere. That keeps folders called "complete" or
   "EP, Single, Demo" from becoming artists, which is what a folder above an
-  untagged release turned out to be more often than not. Panels stay live — metadata
+  untagged release turned out to be more often than not. **Its tracks are
+  then credited to it**, so the queue names the performer the release is by
+  rather than leaving the column blank, and **a name that had to come from
+  the file is tidied on the way to the screen**: the extension, the leading
+  track number the list is already numbering, a leading performer prefix
+  where it matches the performer the library knows, and a trailing bitrate
+  marker. So a row that read "PERFORMER - 01.Some Title_320.mp3" reads "Some
+  Title". Only where the file carries no title tag — a tag is what somebody
+  wrote and is shown as written — and only the rates that exist are taken
+  for bitrates, so a track called "1979" or "Summer of 96" keeps its number.
+  Nothing is written back to the files: this is how the library shows them,
+  not a retagger. Panels stay live — metadata
   appears as background enrichment reads it, without reopening. Tags are
   normalised where they enter the index: trimmed of whitespace and of the
   byte-order mark a UTF-8 file leaves at the front of a value, and a year

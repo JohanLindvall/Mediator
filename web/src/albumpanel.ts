@@ -3,7 +3,7 @@
  */
 import { albumZipUrl, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
 import { holdScroll, releaseScroll } from './scrollhold';
-import { esc, formatBytes, formatDuration, withoutTrackNumber } from './format';
+import { esc, formatBytes, formatDuration, trackTitle } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
 import { shareAlbum } from './links';
@@ -52,15 +52,6 @@ export function openAlbumPanel(albumId: string, opts: AlbumPanelOpts): void {
  */
 export function reloadAlbumPanel(): void {
   void active?.reload();
-}
-
-/**
- * Tag title, else the filename without its extension — and without the track
- * number either way: the list is numbered already, and reading "1  01. …"
- * down a whole record is the sort of thing nobody notices until it is gone.
- */
-function trackTitle(t: Item): string {
-  return withoutTrackNumber(t.title || t.name.replace(/\.[^./\\]+$/, ''));
 }
 
 class AlbumPanel {
@@ -168,7 +159,7 @@ class AlbumPanel {
             <span class="t-num">${num}</span>
             <span class="t-playing">${icons.volume}</span>
             <span class="t-body">
-              <span class="t-title">${esc(trackTitle(t))}</span>
+              <span class="t-title">${esc(trackTitle(t, a.artist))}</span>
               <span class="t-artist">${esc(artist)}</span>
             </span>
             <span class="t-size">${right}</span>

@@ -215,6 +215,10 @@ type stamper struct {
 	likes  map[string]int
 	aff    *affinity
 	spoken func(string) bool
+	// performers is the last album build's word on who each release is by,
+	// read once for the page rather than per item. The map is replaced
+	// wholesale by the build, so holding it is holding one build's answer.
+	performers map[string]string
 }
 
 func (l *Library) stamper() *stamper {
@@ -231,7 +235,11 @@ func (l *Library) stamper() *stamper {
 	plays, _ := l.plays.snapshot()
 	likes, _ := l.likes.snapshot()
 	sv := l.scaledVectors()
-	return &stamper{l: l, plays: plays, likes: likes, aff: l.affinities(), spoken: l.spokenSet(sv)}
+	l.featMu.RLock()
+	performers := l.performers
+	l.featMu.RUnlock()
+	return &stamper{l: l, plays: plays, likes: likes, aff: l.affinities(),
+		spoken: l.spokenSet(sv), performers: performers}
 }
 
 // stamp puts the owner's facts on one copy, from the snapshots the stamper
@@ -246,6 +254,11 @@ func (s *stamper) stamp(it Item) Item {
 		it.Akin = s.l.akinName(s.aff.akin[it.ID])
 	}
 	it.Spoken = s.spoken(it.ID)
+	// Only where the file names nobody: a track that carries its own
+	// performer has said something, and a release's word does not correct it.
+	if it.Artist == "" {
+		it.Performer = s.performers[it.ID]
+	}
 	return it
 }
 

@@ -153,6 +153,17 @@ type Item struct {
 	// or disliked (negative), graded -2..2, and Akin the title of the track
 	// it was measured against — see similar.go. Spoken says it reads as a
 	// voice rather than music (spoken.go).
+	// Performer is who the release this track is on is by, carried where the
+	// file itself names nobody — a release nothing tagged still has a
+	// performer, derived from the directory above it and corroborated
+	// against the ones the library already knows (artistFromParent). It is
+	// stamped on the copy like the counts above and is deliberately **not**
+	// Artist: Artist is what the tag says, and RecordingKey is built from
+	// it. Writing a derived name into Artist would give one file two
+	// identities depending on which endpoint it left by — the queue's copy
+	// folding against a radio candidate's, which is the one comparison that
+	// must never disagree with itself.
+	Performer string `json:"performer,omitempty"`
 	Affinity  int    `json:"affinity,omitempty"`
 	Akin      string `json:"akin,omitempty"`
 	Spoken    bool   `json:"spoken,omitempty"`
@@ -342,6 +353,10 @@ type Library struct {
 	// own — see spokenOf.
 	spokenAlbums atomic.Int32
 	byRelease    map[string]bool
+	// performers is who each track's release is by, for the tracks whose
+	// own tags name nobody — written by the same build, read by the stamper
+	// so that every door agrees. See Item.Performer.
+	performers map[string]string
 
 	version int64
 	changed chan struct{}

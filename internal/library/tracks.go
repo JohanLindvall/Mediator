@@ -27,6 +27,10 @@ func (l *Library) TracksOf(albums []*Album, f PathFilter, max int) []Item {
 				return out
 			}
 			if it, ok := l.items[id]; ok && allowed(it.Path) {
+				// The release's own performer where the track names none
+				// (credit, albums.go): the queue's artist column is the
+				// place that showed the gap, a row of a wholly untagged
+				// release reading as a file name with nothing beside it.
 				out = append(out, st.stamp(*it))
 			}
 		}

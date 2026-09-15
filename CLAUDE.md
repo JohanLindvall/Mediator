@@ -1514,6 +1514,35 @@ Change propagation is the core loop:
   made them. And the spelling handed back is the **tagged** one, matched
   case-insensitively, since a directory shouts where a tag does not and a
   second spelling would be a second performer.
+- **A track that names nobody is credited to the release it is on**
+  (`Item.Performer`). 532 of this library's 28,686 tracks carry no title tag
+  and are drawn by file name; 382 of those sit in a release whose performer
+  the library derived without one file in it being tagged. So the library
+  knew whose the release was and the row did not say so — an empty artist
+  column beside a file name that usually opens with the performer in
+  capitals, and nothing for the client to measure that prefix against before
+  stripping it.
+  It is **not** written into `Artist`, and that is the load-bearing part.
+  `Artist` is what the tag says, `RecordingKey` is built from it, and the
+  client builds the same key over the queue to keep radio from offering back
+  what is already queued (`freshForRadio`). A derived name in `Artist` would
+  give one file two identities depending on which endpoint it left by — the
+  queue's copy against a radio candidate's — and defeat exactly that
+  comparison. A separate field changes no identity anywhere.
+  It is answered **from the album build**, beside the release's spoken
+  verdict and through the same door (`performers`, under `featMu`, read by
+  `stamper`), rather than stamped where a release's tracks are handed out. A
+  track reaches a listing by several routes — the sheet, the queue, a search,
+  a resemblance — and only two of them hold the release; answering from the
+  build is what makes all of them agree, and it is read without forcing a
+  build for the reason `spokenOf` gives. Three limits: it rides the copy and
+  never the indexed item, since the build votes on the indexed tags and would
+  become evidence for itself; a track naming its own performer is not
+  corrected, the mirror of `artistFromParent` firing only where nothing
+  tagged the release; and a compilation credits nobody, since its marker
+  means "more than one" and stating it of one track is false of all of them
+  (compared without case, a release whose own tags spell it being the same
+  release).
 - `fillAlbum` also derives `Genre`, `Year` (majority of tagged tracks) and
   `Duration` (sum, left 0 unless *every* track is measured, so the UI never
   shows a half-counted album length).
@@ -2102,10 +2131,41 @@ Frontend (`web/src`, no framework, no runtime deps):
   because the library changed, so without a retry one failure left a grey
   tile for as long as the failure is remembered (`negTTL`, ten minutes). Renderers must not delete the `img` on error — the
   retry needs it, and it is invisible without `.ok` anyway.
-- Track titles in the album panel lose the number the file carries
-  (`withoutTrackNumber`, tested): the list numbers its rows already, so every
-  line otherwise reads "1  01. …". Only where a separator says the digits are
-  a number and not the title — "44 Winters" and "1979" keep theirs.
+- **A track is named in one place, because three had begun to differ**
+  (`trackTitle` in `format.ts`, tested). The album sheet dropped the
+  extension and the leading number; the queue row and the music bar rendered
+  `it.title || it.name`, which for a file with no title tag is the file name
+  entire — extension and all. Measured over this library's 28,686 audio
+  items, 532 (1.9%) carry no title tag and are therefore drawn by file name,
+  so a queue of such a release read "PERFORMER - 01.Some Title_320.mp3" down
+  the screen, under a row that already carries its own number and beside an
+  artist column that was blank because nothing tagged the file.
+  **A tag is somebody's statement and is never edited**: where the file
+  carries a title, that is the title, verbatim, and none of the cleaning
+  happens. That is the same care the server takes in the other direction —
+  `RecordingKey` refuses to read a title out of a file name at all, two
+  different songs called "01" not being one recording.
+  What is left is a file name, which is a title with everything a filesystem
+  and a ripper needed wrapped round it, and off that comes, in order: the
+  extension (all 532); a leading performer prefix (15); the leading track
+  number, through `withoutTrackNumber` rather than a second copy of that rule
+  (230); and a trailing bitrate marker (13). A step that would leave nothing
+  is not taken — a noisy name is worth more than none.
+  Two of those carry their own limit. The **performer prefix comes off only
+  where it matches the performer already known for the track**, with a
+  separator after it, which is the whole safety of it: a compilation matches
+  none of its tracks and keeps every one of them, and "Bandana Blues" does
+  not lose its first four letters to a performer called "Band". It is asked
+  twice, before the number and after it, since "BAND - 01.Title" and
+  "01 - Band - Title" are both ordinary shapes. And the **bitrate marker is
+  bounded to the rates that exist** rather than to any number, because what
+  stands on the other side of that rule is a title ending in a year or a
+  number somebody meant: "_320", "[320k]" and "(256kbps)" come off, while
+  "1979", "Studio 54", "Low Water_1979" and "Summer of 96" keep theirs.
+  `withoutTrackNumber` is unchanged beneath it: the list numbers its rows
+  already, so every line otherwise reads "1  01. …", and only where a
+  separator says the digits are a number and not the title — "44 Winters"
+  and "1979" keep theirs.
 - The album panel renders from tags first (ID3 title, tag track number,
   duration; filename/size only as fallback) and is re-fetched on every SSE
   change via `reloadAlbumPanel` — a panel opened during a scan would

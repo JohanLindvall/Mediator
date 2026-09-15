@@ -14,7 +14,7 @@ import { CastTransport, type CastHooks } from './casting';
 import type { RendererInfo } from './types.gen';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
 import { playingAudio } from './nowplaying';
-import { clamp, esc, formatDuration } from './format';
+import { clamp, esc, formatDuration, trackTitle } from './format';
 import { playButtonIcon } from './playback';
 import { recall, remember } from './remember';
 import { icons } from './icons';
@@ -1180,11 +1180,11 @@ export class AudioPlayer {
    * anything, and the bar still has to follow.
    */
   private showTrack(item: Item): void {
-    const title = item.title || item.name;
+    const title = trackTitle(item);
     this.els.title.textContent = title;
     playingAudio(title);
     this.els.title.title = item.path;
-    this.els.artist.textContent = item.artist || item.album || '';
+    this.els.artist.textContent = item.artist || item.performer || item.album || '';
     this.markLike(item.like ?? 0);
     void this.topUp();
     // The sleeve. Another release's never stands under this title: an <img>
@@ -1635,8 +1635,8 @@ export class AudioPlayer {
       const current = oi === cur;
       rows += `<button class="${current ? 'q-row current' : 'q-row'}" data-oi="${oi}" style="top:${oi * Q_ROW}px"${current ? ' aria-current="true"' : ''}>
           <span class="q-num">${current ? icons.volume : oi + 1}</span>
-          <span class="q-title">${esc(it.title || it.name)}</span>
-          <span class="q-artist">${esc(it.artist ?? '')}</span>
+          <span class="q-title">${esc(trackTitle(it))}</span>
+          <span class="q-artist">${esc(it.artist || it.performer || '')}</span>
           <span class="q-time">${it.duration ? formatDuration(it.duration / 1000) : ''}</span>
         </button>`;
     }

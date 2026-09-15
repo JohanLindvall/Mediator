@@ -95,6 +95,97 @@ export function withoutTrackNumber(title: string): string {
 }
 
 /**
+ * The bitrate some rippers write into the file name, at the end of it.
+ *
+ * Bounded to the rates that exist rather than to any number, because the
+ * thing on the other side of this rule is a title that ends in a year or in
+ * a number somebody meant: "_320" and "(256kbps)" come off, "1979" and
+ * "Studio 54" stay. A bracketed form must say `k` — unbracketed digits after
+ * a dash or an underscore are the shape this was measured on ("_320",
+ * "-192"), where inside brackets a bare number is far likelier to be a year.
+ */
+const RATES = '32|40|48|56|64|80|96|112|128|160|192|224|256|320';
+const bitrateEnd = new RegExp(
+  `(?:[ _-]?[[(]\\s*(?:${RATES})\\s*k(?:bps|bit|b)?\\s*[\\])]|[_-](?:${RATES})\\s*k?(?:bps|bit|b)?)$`,
+  'i',
+);
+
+/**
+ * A leading "SOMEBODY - " taken off, but only where somebody is the
+ * performer this library already knows for the track.
+ *
+ * That limit is the whole safety of the rule, and it is self-limiting in a
+ * useful way: a release by several performers matches none of its tracks, so
+ * a compilation whose files are named "Performer - Title" keeps every one of
+ * them — which is the one place that prefix carries what the tags do not. An
+ * untagged release under one performer is where it fires.
+ */
+function withoutPerformer(title: string, who: string | undefined): string {
+  const name = (who ?? '').trim();
+  if (name === '' || !title.toLowerCase().startsWith(name.toLowerCase())) return title;
+  // The separator has to be there: "Bandana Blues" does not begin with the
+  // performer "Band", it begins with a word that does.
+  const rest = title.slice(name.length);
+  const sep = /^\s*[-_]\s*/.exec(rest);
+  if (!sep) return title;
+  const bare = rest.slice(sep[0].length).trim();
+  return bare === '' ? title : bare;
+}
+
+/** What a list has to know about a track in order to name it. */
+export interface TrackNamed {
+  name: string;
+  title?: string;
+  artist?: string;
+  /**
+   * Who the release this track is on is by, where the file itself names
+   * nobody. The server fills it in from the release (Item.Performer), so
+   * every list gets the same answer without having to know which collection
+   * it happens to be drawing.
+   */
+  performer?: string;
+}
+
+/**
+ * What a track is called, wherever one is named — the queue row, the bar's
+ * own title, the album sheet. One spelling, because three had begun to
+ * differ: two of them showed the file name with its extension still on it.
+ *
+ * **A tag is somebody's statement and is never edited.** Where the file
+ * carries a title that is the title, verbatim, and nothing below happens.
+ * The server takes the same care in the other direction — it refuses to read
+ * a title out of a file name at all (`RecordingKey`), two different songs
+ * called "01" not being one recording — and editing what a tag says is the
+ * same mistake wearing the other hat.
+ *
+ * What is left is a file name, which is a title with everything a filesystem
+ * and a ripper needed wrapped round it. Measured over this library's 28,686
+ * audio items, 532 (1.9%) carry no title tag and are shown this way: all 532
+ * would otherwise show an extension, 230 carry a leading track number, 15 a
+ * leading performer prefix, and 13 a trailing bitrate marker. Off they come,
+ * in that order — and the performer is asked about twice, since a number in
+ * front of the performer ("01 - Band - Title") is as ordinary a shape as the
+ * other way round ("BAND - 01.Title"), and the second ask costs one
+ * comparison and refuses on exactly the same terms as the first.
+ *
+ * A step that would leave nothing is not taken. A name that is noisy is
+ * worth more than no name at all.
+ */
+export function trackTitle(t: TrackNamed, performer?: string): string {
+  if (t.title) return t.title;
+  // The track's own performer first, then the release's as the server
+  // worked it out, then whoever the collection being drawn belongs to. An
+  // untagged file has no artist of its own, and the release above it is
+  // where the library's answer lives — 382 of those 532 sit in a release
+  // named that way and nothing else. The last of the three is a fallback for
+  // a list that knows its collection before the server has built one.
+  const who = t.artist || t.performer || performer;
+  const named = t.name.replace(/\.[^./\\]+$/, '') || t.name;
+  const bare = withoutPerformer(withoutTrackNumber(withoutPerformer(named, who)), who);
+  return bare.replace(bitrateEnd, '').trim() || bare;
+}
+
+/**
  * How a codec is spelled for a reader, given the name a probe uses for it.
  *
  * ffprobe's names are the ones the rest of this app reasons with — "h264",
