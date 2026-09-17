@@ -41,6 +41,27 @@ import (
 // spokenThreshold is the score at which a track is taken to be speech.
 const spokenThreshold = 0.6
 
+// spokenMargin is how far speech has to beat music over a release before the
+// whole release is shelved as a reading.
+//
+// A bare majority is not a verdict, and on a short release it is barely an
+// opinion. Measured on a two-track record of long atmospheric songs: one
+// track scored 0.100 and the other 0.892 — quiet passages minutes long, no
+// tempo the window could find, no beat — and the release was shelved because
+// the speech-scoring track ran **forty seconds longer** than the other, 24.0
+// minutes against 23.3. Its tags said Black Metal.
+//
+// Two to one is the bar. It is deliberately strict, because the two ways of
+// being wrong are not equal and this file already says so: a book taken for
+// music stays where it always was, where a song taken for a book leaves the
+// releases, the performers, the genres, the queue groupings and radio. On a
+// two-track release it means both tracks must read as speech, which is what
+// a reading in two parts looks like; one of each is not evidence of
+// anything. A release nothing tagged and nobody narrated is unaffected —
+// the genuine readings here clear it by their whole length, one of them
+// with no music-scoring track at all.
+const spokenMargin = 2.0
+
 // spokenMinSound is how many seconds have to have actually sounded before
 // a verdict is given at all. Measured on a grindcore release of ninety-nine
 // tracks with a median length of four seconds: its long songs scored as

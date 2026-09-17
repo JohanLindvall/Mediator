@@ -1108,8 +1108,9 @@ Change propagation is the core loop:
   window of sound to be judged at all (column 55, `spokenMinSound` — nineteen
   seconds, a twenty-second window measuring 19.99 once its tail frame is
   dropped; `spokenVerdict`; the unjudged are music), a release votes by playing time
-  rather than by count, and a genre tag naming an audiobook in the spellings
-  these libraries carry (`spokenGenre`) shelves it outright. Then a black
+  rather than by count **and has to win by a margin rather than by a hair**
+  (`spokenMargin`, two to one), and a genre tag naming an audiobook in the
+  spellings these libraries carry (`spokenGenre`) shelves it outright. Then a black
   metal EP, shelved while only its first track had been read: an ambient
   intro whose quiet gaps sit at the same -48 to -58 dBFS as a reader's
   pauses, so no level floor tells them apart, outweighed four to one once
@@ -1119,7 +1120,25 @@ Change propagation is the core loop:
   `spokenOf` without forcing one, since it is asked under the index's lock
   where a build would wait on itself): an intro on a record is music for the
   tile, for radio and for the similarity listings, a chapter is a reading,
-  and only a track in no release keeps its own verdict. Both verdicts are
+  and only a track in no release keeps its own verdict.
+  **A bare majority was the third false positive, and the thinnest.** A
+  two-track record of long atmospheric songs: one track scored 0.100 and the
+  other 0.892 — quiet passages minutes long, no tempo a twenty-second window
+  could find, no beat — and the release was shelved because the
+  speech-scoring track ran **forty seconds longer** than the other, 24.0
+  minutes against 23.3, under tags that said Black Metal. `speech > music`
+  is a majority and not a verdict; two to one is the bar now, which on a
+  two-track release means both tracks must read as speech — what a reading
+  in two parts actually looks like, where one of each is evidence of
+  nothing. It is deliberately strict because the two ways of being wrong are
+  not equal, which is what this whole rule turns on: a book taken for music
+  is filed where it always was, where a song taken for a book leaves the
+  releases, the performers, the genres, the queue groupings and radio.
+  Measured on the library it was found in, five releases were shelved as
+  readings — three by a genre tag naming one, one a genuine thirteen-hour
+  reading in a single file, and this. The margin drops the last and keeps
+  the other four, the genuine one having no music-scoring track to beat.
+  Both verdicts are
   taken on the **raw** vector — the scaled one has the library's mean taken
   out of every column, the seconds of sound included, which is how the first
   version judged nothing at all. A release whose judged playing time is

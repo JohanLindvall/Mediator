@@ -945,7 +945,10 @@ func markSpoken(a *Album, tracks []*Item, sv *scaled) {
 			music += w
 		}
 	}
-	if tagged || (speech > music && (speech+music)*2 >= total) {
+	// The tag settles it outright. The analysis has to have heard half the
+	// playing time, and then to win by a margin rather than by a hair.
+	judged := speech > 0 && (speech+music)*2 >= total
+	if tagged || (judged && speech >= music*spokenMargin) {
 		a.Spoken = true
 		a.lower += " audiobook"
 	}

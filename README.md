@@ -459,7 +459,12 @@ Go binary with the TypeScript frontend embedded.
   unvoiced sounds, and keeps no tempo. The rule was set against real files
   and the two sit far apart; a track needs a full window of sound (nineteen
   seconds) to be judged at all, a release votes by playing time once half of it has been
-  read, an intro on a record is music by its release's word, and a genre
+  read **and has to win two to one rather than by a hair** — a two-track
+  record whose speech-scoring song ran forty seconds longer than its other
+  one is not a reading, and being strict is the safe direction here, since a
+  book left in the music is merely filed where it always was while a record
+  taken for a book leaves the releases, the performers, the genres and radio
+  — an intro on a record is music by its release's word, and a genre
   tag that says audiobook (in the usual spellings) shelves it outright.
   Audiobooks get a
   chip of their own, leave the Albums, Artists and Genres views (a narrator
