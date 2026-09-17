@@ -39,7 +39,16 @@ Go binary with the TypeScript frontend embedded.
   see [Signed media URLs](#signed-media-urls), which is the one piece of
   configuration this needs. A film in a codec the television is unlikely to
   have — AV1, most often — is converted the moment playback moves there,
-  since otherwise it arrives as sound with a black screen behind it. Older sets that cannot agree with a modern
+  since otherwise it arrives as sound with a black screen behind it. **A
+  soundtrack no television decodes** — DTS and the other cinema formats,
+  which set makers have been dropping rather than pay a licence for — is
+  converted before the set is given the film, because that failure is the
+  silent one: the picture plays, nothing says why there is no sound, and a
+  television has no menu to put it right. A set that says it decodes DTS is
+  handed the film untouched. **And a set the search happens to miss is still
+  offered**: discovery is multicast and lossy, one round in twelve came back
+  empty against a television that was plainly on, and the button for it used
+  to vanish for the next minute. Older sets that cannot agree with a modern
   certificate will still sit on a spinner; that part is theirs.
 - **Hover a film and it moves** — the pointer resting on a tile plays ten
   frames from across the film in place of the still, a five-second tour of

@@ -52,10 +52,11 @@ func TestACancelledSearchIsNotRemembered(t *testing.T) {
 }
 
 // A datagram is lost or a description times out, and one round comes back
-// without a set that is still in the room playing a film. What the picker is
-// shown is what was found — but an id a client is already holding must go on
-// resolving, or every transport command, status poll and handover for that
-// television answers "no such renderer" until the stamp goes stale.
+// without a set that is still in the room playing a film. Measured against a
+// television that was on and answering, one search in twelve found nothing
+// at all — so neither the picker nor an id already in a client's hand may be
+// answered from that round alone: the button offering the set simply
+// vanished, and every transport command for it answered "no such renderer".
 func TestALosingSearchKeepsASetAddressable(t *testing.T) {
 	s := &Server{log: testLog()}
 	one := &dlna.Renderer{ID: "tv-1", Name: "Set One"}
@@ -71,8 +72,14 @@ func TestALosingSearchKeepsASetAddressable(t *testing.T) {
 	// The next round loses the second set's reply.
 	found = []*dlna.Renderer{one}
 	s.cast.at = time.Time{}
-	if got := s.renderers(ctx, false); len(got) != 1 {
-		t.Fatalf("the losing search listed %d renderers, want the 1 it actually found", len(got))
+	got := s.renderers(ctx, false)
+	if len(got) != 2 {
+		t.Fatalf("the losing search listed %d renderers, want both: one search missing a set is not the set being gone", len(got))
+	}
+	// The one that answered leads, so the menu is headed by what is
+	// certainly there.
+	if got[0].ID != "tv-1" || got[1].ID != "tv-2" {
+		t.Errorf("the list reads %q then %q, want the set that answered first", got[0].ID, got[1].ID)
 	}
 
 	r, ok := s.renderer(ctx, "tv-2")
@@ -81,6 +88,23 @@ func TestALosingSearchKeepsASetAddressable(t *testing.T) {
 	}
 	if r.ID != "tv-2" {
 		t.Fatalf("looking up tv-2 answered %q", r.ID)
+	}
+
+	// But a set that has really been switched off leaves, or the menu
+	// collects ghosts for the life of the process. Nothing has heard from
+	// this one for longer than the memory holds.
+	s.cast.mu.Lock()
+	k := s.cast.known["tv-2"]
+	k.at = time.Now().Add(-rendererMemory - time.Second)
+	s.cast.known["tv-2"] = k
+	s.cast.mu.Unlock()
+
+	s.cast.at = time.Time{}
+	if got := s.renderers(ctx, false); len(got) != 1 || got[0].ID != "tv-1" {
+		t.Errorf("a set nothing has heard from in %v is still offered: %d listed", rendererMemory, len(got))
+	}
+	if _, ok := s.renderer(ctx, "tv-2"); ok {
+		t.Error("a set long gone still resolves; its commands would wait out the SOAP budget for nothing")
 	}
 }
 

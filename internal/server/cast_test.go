@@ -146,3 +146,56 @@ func TestRemuxTrackIsItsOwnFile(t *testing.T) {
 		t.Error("a part-written copy parsed as a finished one")
 	}
 }
+
+// A television's fetch is marked as one, because the endpoint refuses a copy
+// for a reason that is a browser's alone: a picture that reorders further
+// than it declares plays correctly only where something re-encodes it, which
+// a browser needs and a set does not. Unmarked, that refusal reached a
+// television as "716 Resource not found" with the copy sitting ready on disk.
+func TestARewrapForASetSaysSo(t *testing.T) {
+	for _, c := range []struct {
+		kind remuxKind
+		want string
+	}{
+		{remuxCopy, "&tv=1"},
+		{remuxSound, "&tv=1"},
+		{remuxTrack, "&tv=1&mode=track"},
+	} {
+		if got := remuxQuery(c.kind); got != c.want {
+			t.Errorf("kind %q asks %q, want %q", c.kind, got, c.want)
+		}
+	}
+}
+
+// A soundtrack no television decodes is converted before the set is given
+// it, because that failure is silent: the film plays, there is no error, and
+// a set has no menu to put it right. The picture is the other way round — it
+// fails visibly — which is why only the sound is decided here.
+func TestASoundtrackNoSetDecodesIsConvertedFirst(t *testing.T) {
+	takesAnything := func(string) bool { return true }
+	takesNoDTS := func(mime string) bool { return !strings.Contains(mime, "dts") }
+
+	cinema := library.Item{Name: "a film.mkv", Kind: library.KindVideo, VCodec: "h264", ACodec: "dts"}
+	kind, ok := castSoundKind(cinema, takesNoDTS)
+	if !ok || kind != remuxSound {
+		t.Errorf("a DTS film asked for %q (%v); want the sound copy", kind, ok)
+	}
+	// A set that says it decodes DTS is taken at its word and handed the file.
+	if _, ok := castSoundKind(cinema, takesAnything); ok {
+		t.Error("a set that lists DTS was made to wait for a copy anyway")
+	}
+	// Everything a television does decode is left alone.
+	for _, codec := range []string{"aac", "ac3", "eac3", "mp3", "opus", "flac", ""} {
+		it := cinema
+		it.ACodec = codec
+		if _, ok := castSoundKind(it, takesNoDTS); ok {
+			t.Errorf("a %q soundtrack was converted for no reason", codec)
+		}
+	}
+	// And a film whose picture cannot be copied into an MP4 is left alone
+	// too: the copy would not be a copy.
+	odd := library.Item{Name: "a film.mkv", Kind: library.KindVideo, VCodec: "mpeg2video", ACodec: "dts"}
+	if _, ok := castSoundKind(odd, takesNoDTS); ok {
+		t.Error("a picture no MP4 can hold was sent through the sound copy")
+	}
+}

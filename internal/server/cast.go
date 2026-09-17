@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,6 +43,16 @@ const (
 	// How long to wait for answers. The M-SEARCH says MX 2, so a device may
 	// legitimately hold its reply back that long to avoid a stampede.
 	searchWait = 2500 * time.Millisecond
+	// How long a set stays offerable after the last search that saw it.
+	//
+	// Discovery is lossy in both directions — a datagram either way, and a
+	// description fetch that can time out — and measured against a
+	// television that was on and answering, one round in twelve came back
+	// with nothing. At a search every renderersTTL, five minutes rides out
+	// four or five consecutive misses, which at that rate is a chance in
+	// tens of thousands, while a set genuinely switched off is gone from
+	// the menu inside the time it takes to notice it was ever there.
+	rendererMemory = 5 * time.Minute
 	// How large the cover sent to a television is. It is looked at from
 	// across a room on a screen measured in feet, so the grid's own size
 	// would be a smear; this is one generation and one cache entry per
@@ -60,18 +71,30 @@ type casting struct {
 	found map[string]*dlna.Renderer
 	order []string
 	at    time.Time
-	// known is every set this process has ever been told about, and it is
-	// what an id a client already holds is resolved against when the last
-	// search did not report it. A search loses things — the M-SEARCH goes
-	// out twice per interface precisely because nobody retries a datagram,
-	// and a description is a fetch that can time out — so a losing round
-	// used to evict a television that was still in the room, and every
-	// transport command, status poll and handover for it answered "no such
-	// renderer" until the stamp went stale a minute later. What the picker
-	// is shown is still only what was just found; this is for the id in a
-	// client's hand. It grows by the number of distinct renderers on the
-	// network, which is a handful.
-	known map[string]*dlna.Renderer
+	// known is every set this process has been told about lately, with when
+	// it was last seen. A search loses things — the M-SEARCH goes out twice
+	// per interface precisely because nobody retries a datagram, and a
+	// description is a fetch that can time out — so a losing round used to
+	// evict a television that was still in the room, and every transport
+	// command, status poll and handover for it answered "no such renderer"
+	// until the stamp went stale a minute later.
+	//
+	// **The picker is answered from here too**, which it was not at first:
+	// it was shown only what the round just found, on the reasoning that a
+	// stale entry in a menu is worse than a missing one. Measured against a
+	// television that was plainly on and answering, one search in twelve
+	// found nothing at all — so the button offering it simply vanished for
+	// the length of the client's own minute of caching, which is what a
+	// viewer sees as "no television to cast to" while watching that
+	// television across the room. A set that really has been switched off
+	// leaves the list after rendererMemory instead, and pressing it before
+	// then fails with "did not answer", which is the wording a viewer gets
+	// anyway and a far better answer than no button.
+	//
+	// It grows by the number of distinct renderers on the network, which is
+	// a handful, and entries older than rendererMemory are dropped as the
+	// list is built.
+	known map[string]seenRenderer
 	// driving is the request currently walking one set through a play
 	// sequence, by renderer id (see castClaim), and gen names them in turn.
 	driving map[string]*castDrive
@@ -83,6 +106,12 @@ type casting struct {
 	// discover is the search itself. A test stands in for the network here;
 	// nil is the network.
 	discover func(ctx context.Context, wait time.Duration) []*dlna.Renderer
+}
+
+// seenRenderer is a set and when a search last reported it.
+type seenRenderer struct {
+	r  *dlna.Renderer
+	at time.Time
 }
 
 // SetLocalPort tells the server which port it is reachable on, so it can
@@ -129,19 +158,16 @@ func (s *Server) renderers(ctx context.Context, force bool) []*dlna.Renderer {
 	s.cast.found = map[string]*dlna.Renderer{}
 	s.cast.order = nil
 	if s.cast.known == nil {
-		s.cast.known = map[string]*dlna.Renderer{}
+		s.cast.known = map[string]seenRenderer{}
 	}
+	now := time.Now()
 	for _, r := range found {
 		s.cast.found[r.ID] = r
 		s.cast.order = append(s.cast.order, r.ID)
-		s.cast.known[r.ID] = r
+		s.cast.known[r.ID] = seenRenderer{r: r, at: now}
 	}
-	s.cast.at = time.Now()
-	out := make([]*dlna.Renderer, 0, len(found))
-	for _, id := range s.cast.order {
-		out = append(out, s.cast.found[id])
-	}
-	return out
+	s.cast.at = now
+	return s.castListLocked()
 }
 
 // search asks the network, or whatever a test has put in its place.
@@ -155,9 +181,38 @@ func (s *Server) search(ctx context.Context) []*dlna.Renderer {
 func (s *Server) castList() []*dlna.Renderer {
 	s.cast.mu.Lock()
 	defer s.cast.mu.Unlock()
+	return s.castListLocked()
+}
+
+// castListLocked is castList with the lock already held: what the last search
+// found, and then anything seen lately that it missed.
+//
+// The order matters and is not alphabetical: the sets that answered this
+// round come first, in the order they answered, so the menu a viewer reads
+// is led by what is certainly there. A set the round lost follows, and one
+// nothing has heard from for rendererMemory is dropped from the memory as we
+// pass — this is the only place that walks it, so it is the only place that
+// needs to forget.
+func (s *Server) castListLocked() []*dlna.Renderer {
 	out := make([]*dlna.Renderer, 0, len(s.cast.order))
 	for _, id := range s.cast.order {
 		out = append(out, s.cast.found[id])
+	}
+	cutoff := time.Now().Add(-rendererMemory)
+	missed := make([]seenRenderer, 0, len(s.cast.known))
+	for id, k := range s.cast.known {
+		if k.at.Before(cutoff) {
+			delete(s.cast.known, id)
+			continue
+		}
+		if _, answered := s.cast.found[id]; !answered {
+			missed = append(missed, k)
+		}
+	}
+	// Newest first among them, so the one most recently heard from leads.
+	slices.SortFunc(missed, func(a, b seenRenderer) int { return b.at.Compare(a.at) })
+	for _, k := range missed {
+		out = append(out, k.r)
 	}
 	return out
 }
@@ -187,8 +242,11 @@ func (s *Server) renderer(ctx context.Context, id string) (*dlna.Renderer, bool)
 	// far better answer than a film that cannot be paused.
 	s.cast.mu.Lock()
 	defer s.cast.mu.Unlock()
-	r, ok = s.cast.known[id]
-	return r, ok
+	k, ok := s.cast.known[id]
+	if !ok || k.at.Before(time.Now().Add(-rendererMemory)) {
+		return nil, false
+	}
+	return k.r, true
 }
 
 // castDrive is the request currently walking one renderer through a play
@@ -471,7 +529,15 @@ func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it libra
 	// that renames it and never reached this at all — which is every video
 	// that ships automatic dubs, the one kind of file where the choice is the
 	// whole reason for the feature.
-	if kind, ok := castTrackKind(it, audio); ok {
+	kind, wantCopy := castTrackKind(it, audio)
+	if !wantCopy {
+		// No choice to honour, but the soundtrack may still be one no
+		// television decodes — and that failure is silent, so it is worth
+		// the copy rather than a film playing mutely with nothing to say
+		// why.
+		kind, wantCopy = castSoundKind(it, d.Accepts)
+	}
+	if wantCopy {
 		// Making the copy is a read of the whole film at disk speed with a
 		// television waiting on it, which is playback by every measure the
 		// priority order recognises — so thumbnails and tag reading stand
@@ -649,6 +715,61 @@ func (s *Server) localBase(d *dlna.Renderer) string {
 	return "http://" + net.JoinHostPort(ip, strconv.Itoa(s.port))
 }
 
+// noReceiverAudio is the soundtracks a television is not to be handed
+// without converting them: the cinema formats, which carry a licence fee per
+// decoder and which set makers have been dropping rather than paying. The
+// list is the browser's own (NO_BROWSER_AUDIO in playback.ts) — codecs with
+// no decoder in any browser — and it holds for a set for the same reason.
+//
+// **Why this is decided from the codec and not from the set**: a renderer
+// says which *containers* it takes and nothing about what is inside them.
+// Probed on a television here, 43 of its 69 sink entries carry a DLNA
+// profile naming an exact codec combination — and every one of those is a
+// legacy profile it will never be sent, while `video/x-matroska`, which is
+// what this server actually hands over, is listed as a bare `*`. The set is
+// saying "send me any Matroska and I will try", which is the truth and is no
+// help at all. Its audio-only sinks are the one hint it gives, and they are
+// for playing a music file rather than a film — so they are taken as an
+// exception rather than as the rule: a set that does list the codec is
+// handed the film untouched.
+//
+// The asymmetry with the picture is deliberate. A set that cannot decode the
+// video fails **visibly** — a black screen, and the viewer knows to do
+// something else — which is why castAliases leaves that judgement to the
+// set. A soundtrack it cannot decode fails **silently**: the film plays, and
+// there is no error, no message and no menu on the television to put it
+// right. That is the same argument the player already makes for the browser,
+// where a codec it cannot decode "produces no error, only silence".
+var noReceiverAudio = map[string]bool{"dts": true, "dca": true, "truehd": true, "mlp": true}
+
+// castSoundKind says whether this film's soundtrack has to be converted
+// before a set is given it, and answers the kind of copy that does it.
+//
+// dtsSinks are the names a set that really does decode DTS lists among its
+// audio sinks; where it says so, nothing is converted.
+var dtsSinks = []string{"audio/vnd.dts", "audio/vnd.dts.hd", "audio/x-dts"}
+
+func castSoundKind(it library.Item, accepts func(string) bool) (remuxKind, bool) {
+	if !noReceiverAudio[strings.ToLower(it.ACodec)] {
+		return remuxCopy, false
+	}
+	for _, name := range dtsSinks {
+		if accepts(name) {
+			return remuxCopy, false // it says it can; take it at its word
+		}
+	}
+	// The picture is copied through and only the sound is re-encoded, so the
+	// question is whether this film can take a sound fix at all — the same
+	// question the player asks before it orders one, and the same answer.
+	// Pointedly not `remuxable`, which asks about the soundtrack too and
+	// would refuse every film this exists for, the soundtrack being exactly
+	// what is wrong with them.
+	if !soundFixable(it) {
+		return remuxCopy, false
+	}
+	return remuxSound, true
+}
+
 // castTrackKind is which copy the viewer's soundtrack choice needs, if it
 // needs one at all. Its own container where the streams belong to no MP4 —
 // which is what a dubbed download is — and the MP4 rewrap otherwise.
@@ -673,12 +794,30 @@ func remuxMime(it library.Item, kind remuxKind) string {
 	return "video/mp4"
 }
 
-// remuxQuery asks the endpoint for the same kind of copy again.
+// remuxQuery asks the endpoint for the same kind of copy again — and says
+// that a television is what will fetch it.
+//
+// `tv=1` turns off one refusal and nothing else. `handleRemux` answers 404
+// where the picture reorders further than it declares, which is the honest
+// answer to a *browser*: copying would not help it, and the player acts on
+// that by converting instead. A set is not a browser. It fetches the file
+// and decodes it with the generosity VLC has, so the copy plays there
+// perfectly — and the 404 reached it as "716 Resource not found", a cast
+// that simply failed with the film sitting ready on disk. The rule was
+// already documented as not being a television's ("re-encoding a film for a
+// player that was never going to drop a frame would be paying the whole
+// cost for nothing"); what was missing was any way for the handler to know
+// which of the two had come knocking.
+//
+// It authorises nothing — the same posture as the internal-read marker. A
+// browser that sent it would be handed a copy that may stutter on its own
+// screen, which is a self-inflicted wound and not a way past anything.
 func remuxQuery(kind remuxKind) string {
+	q := "&tv=1"
 	if kind == remuxTrack {
-		return "&mode=track"
+		q += "&mode=track"
 	}
-	return ""
+	return q
 }
 
 // castAliases are other names the same bytes can honestly be handed over

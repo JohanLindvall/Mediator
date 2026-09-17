@@ -2831,6 +2831,21 @@ set that has gone away should be given up on in seconds, and no more than
   film that cannot be paused. `known` is unbounded on purpose — it grows by
   the number of distinct renderers on the network, a handful, and ids are
   derived from the UDN, so a lease change mints none.
+  **A set the search lost is still offered** (`rendererMemory`, 5 minutes).
+  Discovery is lossy in both directions — a datagram either way, and a
+  description that can time out — and measured against a television that was
+  on and answering, **one round in twelve came back with nothing**. The
+  picker was shown only what the round just found, so the button offering
+  that set vanished for the length of the client's own minute of caching:
+  what a viewer sees as "no television to cast to" while watching that
+  television across the room. The list is answered from what the process has
+  been told about lately instead, the sets that answered this round first so
+  the menu is led by what is certainly there. A set really switched off
+  leaves after the memory expires and pressing it before then fails with
+  "did not answer" — the wording a viewer gets anyway, and a far better
+  answer than no button. This is the rule `renderer()` already applied to an
+  id in a client's hand, extended to the list, which is where it was
+  originally and wrongly withheld.
   **The address handed over is ours on the renderer's network**
   (`LocalIPFor`, the mirror of the loopback address the library uses for its
   own reads). Loopback names a server the television cannot see, and the
@@ -2859,6 +2874,32 @@ set that has gone away should be given up on in seconds, and no more than
   says which containers it takes and nothing about the codecs in them — so
   letting it fail on screen is better than refusing on its behalf, which is
   the same judgement made for a set that will not say what it accepts at all.
+  **That was probed rather than assumed.** A television here answers
+  `GetProtocolInfo` with 69 sink entries, 43 of them carrying a
+  `DLNA.ORG_PN` profile that names an exact codec combination — and every one
+  of those is a legacy profile it will never be sent, while
+  `video/x-matroska`, which is what this server actually hands over, is
+  listed as a bare `*`. The set is saying "send me any Matroska and I will
+  try", which is true and no help at all. So the codec question cannot be
+  asked of the device, and what can be done instead is to know which codecs
+  no television decodes.
+  **A soundtrack no set decodes is converted before the set is given it**
+  (`noReceiverAudio`, `castSoundKind`). The list is the browser's own — DTS,
+  DCA, TrueHD, MLP, the cinema formats that carry a licence fee per decoder
+  and that set makers have been dropping rather than paying — and it holds
+  for a television for the same reason it holds for a browser. The asymmetry
+  with the picture is the whole argument: a set that cannot decode the video
+  fails **visibly**, a black screen, and the viewer knows to do something
+  else; a soundtrack it cannot decode fails **silently** — the film plays,
+  there is no error, and a television has no menu to put it right. That is
+  the same reasoning the player already makes for the browser, where a codec
+  it cannot decode "produces no error, only silence". The copy is
+  `remuxSound`: the picture through untouched, the sound re-encoded, a read
+  at disk speed. It is gated on `soundFixable` and pointedly not on
+  `remuxable`, which asks about the soundtrack too and would refuse every
+  film this exists for — the soundtrack being exactly what is wrong with
+  them. And the one thing a set *does* say is taken as the exception: where
+  it lists DTS among its audio sinks it is handed the film untouched.
   **What a file is called comes from our own table, not the system's.**
   `mimeFor` reads the map registered in `server.go`'s `init`, and `.webm` had
   to be added to it because Go's *built-in* table calls it `audio/webm` — the
@@ -2977,6 +3018,20 @@ set that has gone away should be given up on in seconds, and no more than
   so the viewer's choice travels with the request (`?sub=`, `off` for none)
   rather than the server picking; without a choice it sends the first, which
   is what the player defaults to as well.
+  **A television's fetch is marked as one** (`tv=1`, minted by `remuxQuery`
+  and honoured by `handleRemux`). The rewrap endpoint answers 404 where the
+  picture reorders further than it declares — the honest answer to a
+  *browser*, which would drop frames on such a copy, and the one the player
+  acts on by converting instead. A set is not a browser: it decodes with the
+  generosity VLC has and plays that copy perfectly, which is why the verdict
+  is documented as deliberately not a television's. But the refusal lived in
+  the handler, where the two are indistinguishable, so a cast of such a film
+  produced the copy, handed over its URL and then answered the set 404 — which
+  reached the viewer as `716 Resource not found`, a cast that simply failed
+  with the film sitting ready on disk. The marker turns off that one refusal
+  and nothing else, and authorises nothing: a browser that sent it would be
+  handed a copy that may stutter on its own screen, which is a self-inflicted
+  wound rather than a way past anything.
   **A set's refusal reaches the viewer as a sentence** (`castFault`): "did
   not accept the file", "would not start playing it", "did not answer in
   time", naming the set, with the SOAP fault itself in the log — a fault

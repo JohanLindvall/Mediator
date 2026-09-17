@@ -1007,7 +1007,15 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 	// one that reorders further than it declares plays correctly only where
 	// something re-encodes it. 404 is the honest answer — "copying would not
 	// help" — and it is the one the player already acts on.
-	if s.mustReencode(r.Context(), it) {
+	//
+	// Except that it is not a television's answer. A set decodes with the
+	// generosity VLC has and never drops the frames a browser drops, which
+	// is why the verdict is deliberately not asked of one — but the refusal
+	// lived here, where the two are indistinguishable, so a cast of such a
+	// film produced the copy, handed over its URL and then answered the set
+	// 404: "716 Resource not found", with the file ready on disk. The cast
+	// says so in the URL it mints (remuxQuery).
+	if r.URL.Query().Get("tv") != "1" && s.mustReencode(r.Context(), it) {
 		http.NotFound(w, r)
 		return
 	}
