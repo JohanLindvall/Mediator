@@ -75,7 +75,29 @@ type Renderer struct {
 // containers has a fistful of bridges, and a multicast sent out of one of
 // those finds nothing at all.
 func Discover(ctx context.Context, wait time.Duration) []*Renderer {
-	return describeAll(ctx, search(ctx, wait))
+	found, _ := DiscoverReport(ctx, wait)
+	return found
+}
+
+// Skip is a device that answered the search and could not then be described,
+// which is a renderer silently missing from the answer.
+//
+// It exists because the loss was invisible. A set vanished from the picker
+// about once in seventy searches, and nothing anywhere said whether its
+// datagram had failed to arrive or its description had failed to be fetched
+// — describeAll simply passed over the error. Those are different faults
+// with different cures, and neither could be told from the outside. This is
+// the same shape as the rar reader's own skip list, and for the same reason:
+// a thing the library holds and cannot serve is reported, not passed over.
+type Skip struct {
+	Location string
+	Err      error
+}
+
+// DiscoverReport is Discover, and says what it could not describe.
+func DiscoverReport(ctx context.Context, wait time.Duration) ([]*Renderer, []Skip) {
+	locs := search(ctx, wait)
+	return describeAll(ctx, locs)
 }
 
 // describeAll fetches the description behind every location that answered and
@@ -87,11 +109,12 @@ func Discover(ctx context.Context, wait time.Duration) []*Renderer {
 // with a gate in front of it: how many datagrams arrive is decided by other
 // hosts, and the one thing this process can keep constant is how much of
 // itself it spends on them.
-func describeAll(ctx context.Context, locs map[string]bool) []*Renderer {
+func describeAll(ctx context.Context, locs map[string]bool) ([]*Renderer, []Skip) {
 	var (
-		mu    sync.Mutex
-		found []*Renderer
-		wg    sync.WaitGroup
+		mu      sync.Mutex
+		found   []*Renderer
+		skipped []Skip
+		wg      sync.WaitGroup
 	)
 	queue := make(chan string)
 	for range min(describeAtOnce, len(locs)) {
@@ -101,6 +124,13 @@ func describeAll(ctx context.Context, locs map[string]bool) []*Renderer {
 			for loc := range queue {
 				r, err := describe(ctx, loc)
 				if err != nil || r == nil {
+					if ctx.Err() == nil {
+						// Interrupted is not a fault of the device, and the
+						// caller going away is not news about the network.
+						mu.Lock()
+						skipped = append(skipped, Skip{Location: loc, Err: err})
+						mu.Unlock()
+					}
 					continue
 				}
 				mu.Lock()
@@ -124,7 +154,7 @@ func describeAll(ctx context.Context, locs map[string]bool) []*Renderer {
 	}
 	close(queue)
 	wg.Wait()
-	return found
+	return found, skipped
 }
 
 // search sends the M-SEARCH and collects the LOCATION of everything that

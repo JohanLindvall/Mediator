@@ -53,8 +53,8 @@ func TestACancelledSearchIsNotRemembered(t *testing.T) {
 
 // A datagram is lost or a description times out, and one round comes back
 // without a set that is still in the room playing a film. Measured against a
-// television that was on and answering, one search in twelve found nothing
-// at all — so neither the picker nor an id already in a client's hand may be
+// television that was on and answering throughout, one search in seventy-two
+// found nothing at all — so neither the picker nor an id already in a client's hand may be
 // answered from that round alone: the button offering the set simply
 // vanished, and every transport command for it answered "no such renderer".
 func TestALosingSearchKeepsASetAddressable(t *testing.T) {

@@ -99,7 +99,7 @@ func TestDescribeAllSpendsAFixedAmountOfItself(t *testing.T) {
 
 	before := runtime.NumGoroutine()
 	done := make(chan []*Renderer, 1)
-	go func() { done <- describeAll(context.Background(), locs) }()
+	go func() { r, _ := describeAll(context.Background(), locs); done <- r }()
 
 	// Wait until the pool is full, then count what this process is spending.
 	deadline := time.Now().Add(10 * time.Second)

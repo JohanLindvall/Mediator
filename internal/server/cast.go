@@ -47,10 +47,10 @@ const (
 	//
 	// Discovery is lossy in both directions — a datagram either way, and a
 	// description fetch that can time out — and measured against a
-	// television that was on and answering, one round in twelve came back
-	// with nothing. At a search every renderersTTL, five minutes rides out
-	// four or five consecutive misses, which at that rate is a chance in
-	// tens of thousands, while a set genuinely switched off is gone from
+	// television that was on and answering throughout, one round in
+	// seventy-two came back with nothing. At a search every renderersTTL,
+	// five minutes rides out four or five consecutive misses, which at that
+	// rate is a chance in millions, while a set genuinely switched off is gone from
 	// the menu inside the time it takes to notice it was ever there.
 	rendererMemory = 5 * time.Minute
 	// How large the cover sent to a television is. It is looked at from
@@ -82,8 +82,8 @@ type casting struct {
 	// **The picker is answered from here too**, which it was not at first:
 	// it was shown only what the round just found, on the reasoning that a
 	// stale entry in a menu is worse than a missing one. Measured against a
-	// television that was plainly on and answering, one search in twelve
-	// found nothing at all — so the button offering it simply vanished for
+	// television that was on and answering throughout, one search in
+	// seventy-two found nothing at all — so the button offering it vanished for
 	// the length of the client's own minute of caching, which is what a
 	// viewer sees as "no television to cast to" while watching that
 	// television across the room. A set that really has been switched off
@@ -171,11 +171,25 @@ func (s *Server) renderers(ctx context.Context, force bool) []*dlna.Renderer {
 }
 
 // search asks the network, or whatever a test has put in its place.
+//
+// A device that answered and could not then be described is **said out
+// loud**. That loss used to be silent — describeAll passed over the error —
+// and a set missing from the picker looked exactly like a set that was
+// switched off, which is how a fault that shows up about once in seventy
+// searches went unexplained: nothing recorded whether the datagram had
+// failed to arrive or the description had failed to be fetched, and those
+// are different faults with different cures. One line, at the moment it
+// happens, is what the next occurrence needs to name itself.
 func (s *Server) search(ctx context.Context) []*dlna.Renderer {
 	if s.cast.discover != nil {
 		return s.cast.discover(ctx, searchWait)
 	}
-	return dlna.Discover(ctx, searchWait)
+	found, skipped := dlna.DiscoverReport(ctx, searchWait)
+	for _, sk := range skipped {
+		s.log.Warn("a device answered the search and could not be described",
+			"location", sk.Location, "err", sk.Err)
+	}
+	return found
 }
 
 func (s *Server) castList() []*dlna.Renderer {

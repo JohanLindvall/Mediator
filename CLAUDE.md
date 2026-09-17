@@ -2832,9 +2832,25 @@ set that has gone away should be given up on in seconds, and no more than
   the number of distinct renderers on the network, a handful, and ids are
   derived from the UDN, so a lease change mints none.
   **A set the search lost is still offered** (`rendererMemory`, 5 minutes).
-  Discovery is lossy in both directions — a datagram either way, and a
-  description that can time out — and measured against a television that was
-  on and answering, **one round in twelve came back with nothing**. The
+  Discovery can lose a set — a datagram either way, and a description that
+  can time out — and against a television that was on and answering
+  throughout, **one search in seventy-two came back with nothing**. (The
+  first reading of it was one in twelve, from twelve samples; sixty more
+  found it every time. The rarer figure is the one to trust, and the fix is
+  worth it at either rate, costing a map and a timestamp.)
+  **What loses it is not known.** It is not the protocol — twenty raw
+  M-SEARCHes from the same interface were answered in ten milliseconds every
+  time, well inside the two and a half seconds the search waits and the two
+  the `MX` allows. It is not this package either: twenty rounds through
+  `search` and `describeAll` lost nothing. It is not processor load (twenty
+  rounds at a load average of twenty, during a 4K conversion) and not
+  contention with the set (twenty rounds while it was being polled once a
+  second over SOAP). So the mechanism is unreproduced, and rather than guess
+  at one, the loss now **says which half it was**: `DiscoverReport` returns
+  the devices that answered the search and could not then be described, and
+  `Server.search` logs each one. A datagram that never arrived and a
+  description that failed are different faults with different cures, and
+  until now nothing anywhere could tell them apart. The
   picker was shown only what the round just found, so the button offering
   that set vanished for the length of the client's own minute of caching:
   what a viewer sees as "no television to cast to" while watching that

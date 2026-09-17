@@ -46,9 +46,11 @@ Go binary with the TypeScript frontend embedded.
   silent one: the picture plays, nothing says why there is no sound, and a
   television has no menu to put it right. A set that says it decodes DTS is
   handed the film untouched. **And a set the search happens to miss is still
-  offered**: discovery is multicast and lossy, one round in twelve came back
-  empty against a television that was plainly on, and the button for it used
-  to vanish for the next minute. Older sets that cannot agree with a modern
+  offered**: discovery is multicast and can lose a reply — about one search
+  in seventy against a television that was plainly on — and the button for
+  it used to vanish for the next minute. Where a device answers the search
+  and then cannot be described, the log says so rather than leaving the set
+  to go missing quietly. Older sets that cannot agree with a modern
   certificate will still sit on a spinner; that part is theirs.
 - **Hover a film and it moves** — the pointer resting on a tile plays ten
   frames from across the film in place of the still, a five-second tour of
