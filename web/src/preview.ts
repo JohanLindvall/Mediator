@@ -24,6 +24,7 @@
  */
 import { spriteUrl, type Item } from './api';
 import { holdsItem } from './cells';
+import { fitFrame } from './format';
 import { SPRITE } from './types.gen';
 
 /** How long the pointer must rest on a tile before the sheet is asked for. */
@@ -66,12 +67,13 @@ export function previewable(item: Item): boolean {
 class Preview {
   private timer = 0;
   private frame = 0;
+  /** The black backdrop, filling the tile. */
   private el: HTMLElement | null = null;
-  /** One frame's drawn size, and where the first one starts, in CSS px. */
+  /** The window the sheet is painted in: exactly one frame. */
+  private win: HTMLElement | null = null;
+  /** One frame's drawn size, in CSS px. */
   private frameW = 0;
   private frameH = 0;
-  private offX = 0;
-  private offY = 0;
 
   constructor(
     private readonly cell: HTMLElement,
@@ -141,21 +143,33 @@ class Preview {
     // distortion, and not a crop either: a preview is for seeing what is in
     // the film.
     const box = thumb.getBoundingClientRect();
-    const fw = sheet.naturalWidth / SPRITE.cols;
-    const fh = sheet.naturalHeight / SPRITE.rows;
-    if (box.width === 0 || box.height === 0 || fw === 0 || fh === 0) return;
-    const scale = Math.min(box.width / fw, box.height / fh);
-    this.frameW = fw * scale;
-    this.frameH = fh * scale;
-    this.offX = (box.width - this.frameW) / 2;
-    this.offY = (box.height - this.frameH) / 2;
+    const fit = fitFrame(box, { width: sheet.naturalWidth, height: sheet.naturalHeight }, SPRITE);
+    if (!fit) return;
+    this.frameW = fit.frameW;
+    this.frameH = fit.frameH;
 
     const el = document.createElement('div');
     el.className = 'thumb-preview';
-    el.style.backgroundImage = `url("${sheet.src}")`;
-    // In pixels rather than percentages: a percentage is of the box, and the
-    // whole point here is that the frame is not the shape of the box.
-    el.style.backgroundSize = `${this.frameW * SPRITE.cols}px ${this.frameH * SPRITE.rows}px`;
+    // **Two elements, and the inner one is the size of a frame.** The outer
+    // fills the tile and is the black the bars are made of; the sheet is
+    // painted on the inner, which is exactly one frame wide and tall. A
+    // background image is clipped by the element it is painted on and by
+    // nothing else, so painted on an element the size of the tile it showed
+    // the neighbouring columns of the sheet in the room the fitted frame did
+    // not fill — invisible on a wide film, three pictures at once on a clip
+    // shot on a phone.
+    const win = document.createElement('div');
+    win.className = 'thumb-frame';
+    win.style.left = `${fit.offX}px`;
+    win.style.top = `${fit.offY}px`;
+    win.style.width = `${this.frameW}px`;
+    win.style.height = `${this.frameH}px`;
+    win.style.backgroundImage = `url("${sheet.src}")`;
+    // In pixels rather than percentages: a percentage is of the window, and
+    // the window is one frame while the image is the whole sheet.
+    win.style.backgroundSize = `${this.frameW * SPRITE.cols}px ${this.frameH * SPRITE.rows}px`;
+    el.append(win);
+    this.win = win;
     // Under the play badge and the corner marks, over the still: the badge
     // is what says the tile can be opened, and it must not disappear at the
     // moment the pointer is on it.
@@ -169,13 +183,12 @@ class Preview {
   }
 
   private paint(): void {
-    if (!this.el) return;
+    if (!this.el || !this.win) return;
     const col = this.frame % SPRITE.cols;
     const row = Math.floor(this.frame / SPRITE.cols);
-    // Step by whole frames from where the fitted picture begins.
-    const x = this.offX - col * this.frameW;
-    const y = this.offY - row * this.frameH;
-    this.el.style.backgroundPosition = `${x}px ${y}px`;
+    // Step by whole frames. The window is already where the fitted picture
+    // begins, so this is the offset within the sheet and nothing else.
+    this.win.style.backgroundPosition = `${-col * this.frameW}px ${-row * this.frameH}px`;
     if (this.frame === 0) this.el.classList.add('on'); // once, on the first frame
   }
 
@@ -186,6 +199,7 @@ class Preview {
     this.timer = 0;
     this.el?.remove();
     this.el = null;
+    this.win = null;
   }
 }
 

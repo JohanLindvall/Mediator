@@ -239,6 +239,44 @@ export interface MediaShape {
 }
 
 /**
+ * Where one frame of a scrub sheet goes inside a tile, and how big.
+ *
+ * The sheet is one image of `cols` by `rows` frames, and a frame keeps its
+ * own proportions: fitted inside the tile, centred, with whatever is left
+ * over filled black rather than stretched or cropped into. A preview is for
+ * seeing what is in the film.
+ *
+ * **What is returned is the size of the window, not of the picture painted
+ * in it**, and that distinction is the whole of it. A background image is
+ * not clipped to one frame — the element it is painted on is what clips it —
+ * so an element the size of the *tile* shows the neighbouring columns of the
+ * sheet in whatever room the fitted frame does not fill. On a wide film the
+ * frame fills the width, the neighbours fall outside and nobody ever saw it;
+ * on a clip shot on a phone the frame is a third of the tile's width and the
+ * previous and next frames show either side of it. Measured on a 404×720
+ * clip in a 260×146 tile: an 82-pixel frame centred with 89 pixels spare on
+ * each side — one and a tenth frames of room, so three pictures at once.
+ */
+export function fitFrame(
+  box: { width: number; height: number },
+  sheet: { width: number; height: number },
+  grid: { cols: number; rows: number },
+): { frameW: number; frameH: number; offX: number; offY: number } | null {
+  const fw = sheet.width / grid.cols;
+  const fh = sheet.height / grid.rows;
+  if (box.width <= 0 || box.height <= 0 || fw <= 0 || fh <= 0) return null;
+  const scale = Math.min(box.width / fw, box.height / fh);
+  const frameW = fw * scale;
+  const frameH = fh * scale;
+  return {
+    frameW,
+    frameH,
+    offX: (box.width - frameW) / 2,
+    offY: (box.height - frameH) / 2,
+  };
+}
+
+/**
  * What a track belongs to: the release, the year and the genre, in that
  * order and each left out when absent.
  *

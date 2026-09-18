@@ -4977,7 +4977,24 @@ Serving details worth knowing before "fixing" them:
   drawn at 1.52. The sheet's natural size says what shape the frames are (it
   is one image of `cols` by `rows` of them), so the frame is fitted inside
   the tile at that shape, in pixels rather than percentages, and what is left
-  over is painted black. Bars rather than a distortion — and rather than a
+  over is painted black.
+  **And the sheet is painted on a window the size of one frame, which is a
+  second thing entirely.** Fitting a frame says where it goes; it does not
+  say that only that frame is drawn. A background image is clipped by the
+  element it is painted on and by nothing else, so on an element the size of
+  the *tile* the neighbouring columns of the sheet show in whatever room the
+  fitted frame does not fill. On a wide film the frame fills the width and
+  they fall outside, which is why this survived the first fix; on a portrait
+  clip it is a third of the width and the previous and next frames sit
+  either side of it — **three pictures at once**. Measured on a 404×720 clip
+  whose sheet is 1600×1140, in a tile of 260×146: an 82-pixel frame centred
+  with 89 pixels spare on each side, which is one and a tenth frames of
+  room. So there are two elements — the outer one fills the tile and is the
+  black the bars are made of, the inner is exactly one frame and carries the
+  sheet — and stepping through the frames moves the sheet inside that window
+  rather than moving a tile-sized picture about. `fitFrame` (`format.ts`) is
+  the arithmetic, lifted out and tested against those same numbers, since
+  `preview.ts` cannot be imported by the test runner at all. Bars rather than a distortion — and rather than a
   crop, which is what the still beside it does: a preview is for seeing what
   is in the film.
   The element is inserted **before the badge**, so it covers the still and

@@ -2450,3 +2450,16 @@ body.has-audio #toasts {
     display: none;
   }
 }
+
+/* The window the scrub sheet is painted in: exactly one frame of it.
+
+   A background image is clipped by the element it is painted on and by
+   nothing else, so the sheet cannot be painted on the tile-sized backdrop
+   above — there it showed the neighbouring columns in whatever room the
+   fitted frame did not fill, which on a portrait clip is a frame and a tenth
+   on each side. Its size and position are set per tile, from the sheet's own
+   proportions. */
+.thumb-frame {
+  position: absolute;
+  background-repeat: no-repeat;
+}

@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
-import { belongsTo, trackTitle, withoutTrackNumber } from './format.ts';
+import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
 import {
   castStep,
   shouldSave,
@@ -751,4 +751,36 @@ test('titles: what a track belongs to, in one wording for every surface', () => 
   assert.equal(belongsTo({ album: '', genre: '' }), '');
   // A year of zero is a year nobody knows, not the year nought.
   assert.equal(belongsTo({ album: 'Harbour Lights', year: 0 }), 'Harbour Lights');
+});
+
+test('preview: a frame is fitted at its own shape, and the window is one frame', () => {
+  const grid = { cols: 5, rows: 2 };
+  // The clip this was found on: 404×720, whose sheet is 1600×1140, in a grid
+  // tile of about 16:9. The fit is limited by the height.
+  const portrait = fitFrame({ width: 260, height: 146 }, { width: 1600, height: 1140 }, grid)!;
+  assert.ok(portrait);
+  assert.equal(Math.round(portrait.frameH), 146, 'a tall frame fills the height');
+  assert.equal(Math.round(portrait.frameW), 82, 'and keeps its own width');
+  assert.equal(Math.round(portrait.offX), 89, 'centred, with the rest left over');
+  assert.equal(Math.round(portrait.offY), 0);
+  // That leftover is what showed the neighbours: more than a frame of room on
+  // each side. The window being exactly one frame wide is what ends it.
+  assert.ok(260 - portrait.offX - portrait.frameW > portrait.frameW, 'over a frame of room to the right');
+
+  // A wide film fills the width instead, which is why nobody saw this: the
+  // neighbouring columns fall outside the tile.
+  const wide = fitFrame({ width: 260, height: 146 }, { width: 1600, height: 360 }, grid)!;
+  assert.equal(Math.round(wide.frameW), 260);
+  assert.equal(Math.round(wide.offX), 0);
+
+  // A frame exactly the tile's shape fills it with nothing left over.
+  const exact = fitFrame({ width: 320, height: 180 }, { width: 1600, height: 360 }, grid)!;
+  assert.equal(exact.offX, 0);
+  assert.equal(exact.offY, 0);
+  assert.equal(exact.frameW, 320);
+
+  // A tile with no size yet, and a sheet that never loaded, say nothing
+  // rather than dividing by zero.
+  assert.equal(fitFrame({ width: 0, height: 146 }, { width: 1600, height: 1140 }, grid), null);
+  assert.equal(fitFrame({ width: 260, height: 146 }, { width: 0, height: 0 }, grid), null);
 });
