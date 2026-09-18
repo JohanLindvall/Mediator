@@ -12,7 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
-import { trackTitle, withoutTrackNumber } from './format.ts';
+import { belongsTo, trackTitle, withoutTrackNumber } from './format.ts';
 import {
   castStep,
   shouldSave,
@@ -731,4 +731,24 @@ test('titles: the release names a track whose own file names nobody', () => {
     trackTitle({ name: 'GORSE BEACON - 01.At the Harbour Wall_320.mp3' }),
     'GORSE BEACON - 01.At the Harbour Wall',
   );
+});
+
+test('titles: what a track belongs to, in one wording for every surface', () => {
+  // The rule every hover here follows is that it carries what the row does
+  // not already show, so the same facts must be spelled the same way
+  // wherever they surface — the queue's card and anything that follows it.
+  assert.equal(
+    belongsTo({ album: 'Harbour Lights', year: 2019, genre: 'Black Metal' }),
+    'Harbour Lights · 2019 · Black Metal',
+  );
+  // Each part is left out when absent rather than leaving its separator
+  // behind, which is the rule mediaShape already keeps beside it.
+  assert.equal(belongsTo({ album: 'Harbour Lights', genre: 'Black Metal' }), 'Harbour Lights · Black Metal');
+  assert.equal(belongsTo({ year: 2019 }), '2019');
+  assert.equal(belongsTo({ album: 'Harbour Lights' }), 'Harbour Lights');
+  // A track nothing has tagged says nothing, rather than a line of dots.
+  assert.equal(belongsTo({}), '');
+  assert.equal(belongsTo({ album: '', genre: '' }), '');
+  // A year of zero is a year nobody knows, not the year nought.
+  assert.equal(belongsTo({ album: 'Harbour Lights', year: 0 }), 'Harbour Lights');
 });

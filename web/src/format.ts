@@ -239,6 +239,32 @@ export interface MediaShape {
 }
 
 /**
+ * What a track belongs to: the release, the year and the genre, in that
+ * order and each left out when absent.
+ *
+ * **The rule every hover here follows is that it carries what the row does
+ * not already show.** A grid tile prints the performer, the year and the
+ * genre under the name, so its hover is the path and the technical line
+ * instead; a queue row prints the performer and the running time and
+ * nothing else, so its hover is this, the artwork and the technical line.
+ * Saying the same thing twice — once in the row and again a moment later
+ * under the pointer — is how a tooltip becomes noise, and these two
+ * surfaces had drifted into describing a track in different words anyway.
+ * This is the one wording, so they cannot.
+ */
+export function belongsTo(it: {
+  album?: string;
+  year?: number;
+  genre?: string;
+}): string {
+  // Falsy rather than merely absent, because a year of nought is a year
+  // nobody knows rather than the year nought — the wire leaves it out
+  // altogether (omitempty), and a caller building one by hand should not be
+  // able to print it either.
+  return [it.album, it.year, it.genre].filter(Boolean).join(' · ');
+}
+
+/**
  * What a file is, technically: what it was encoded with and how big the
  * picture is. Shown on hover, where there is room for it and where it is not
  * in the way of anybody who does not care.

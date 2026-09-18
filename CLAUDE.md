@@ -2003,6 +2003,35 @@ Frontend (`web/src`, no framework, no runtime deps):
   shifts every index, and index-owned cells would repaint the entire screen,
   while identity-owned cells just move with their DOM and decoded thumbnails
   intact — verified by asserting the same img nodes survive an insertion.
+- **Hover carries what the row does not already show**, and that one rule is
+  what keeps three surfaces from describing a track in three different ways.
+  A grid tile prints the performer, the year and the genre under the name,
+  so its hover is the path and the technical line instead. A **queue row**
+  prints the performer and the running time and nothing else — no picture,
+  no record, no year — so its hover is a card (`trackcard.ts`) carrying the
+  sleeve, what the track belongs to and the technical line. A **track row in
+  an open release** has the release's own facts in the header a finger's
+  width above it, so its hover is the technical line alone. Saying the same
+  thing twice, once in the row and again a moment later under the pointer,
+  is how a tooltip becomes noise.
+  The facts themselves come from one function (`belongsTo` in `format.ts`,
+  tested beside `mediaShape`): the release, the year and the genre, in that
+  order, each dropped when absent — **falsy rather than merely absent**,
+  since a year of nought is a year nobody knows rather than the year nought.
+  The queue's is a card rather than a `title` for exactly one reason, which
+  is that a `title` cannot hold a picture; everything else about it is the
+  cheaper thing. It waits `DWELL_MS` before building anything, because
+  crossing a queue on the way to the close button is not a request for
+  fifteen cards — the same number and the same reasoning as the grid's hover
+  preview, the other place a pointer is answered with more than a tooltip.
+  It reuses one element, takes no pointer events so the row underneath still
+  takes the click that plays it, and it is **fixed to the viewport rather
+  than placed in the panel**: the queue scrolls and clips its own contents,
+  which is the one box a card standing beside it must not be inside. It goes
+  down on a leave, on a scroll, when the panel closes, and on every repaint
+  of the window — the queue rewrites its rows on each track change, so a
+  card left up would be describing a row nothing holds any more. A tile
+  already *is* the sleeve, which is why the artwork is the queue's alone.
 - **A tile says what the file is, technically, on hover** (`mediaShape` in
   `format.ts`, tested): the codecs, the picture's size, the frame rate, and
   for a track the format and what it averages. It is a tooltip rather than a

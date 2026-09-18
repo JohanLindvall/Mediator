@@ -13,6 +13,7 @@ import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
 import { CastTransport, type CastHooks } from './casting';
 import type { RendererInfo } from './types.gen';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
+import { TrackCard } from './trackcard';
 import { playingAudio } from './nowplaying';
 import { clamp, esc, formatDuration, trackTitle } from './format';
 import { playButtonIcon } from './playback';
@@ -251,6 +252,8 @@ export class AudioPlayer {
   /** The stack above the bar: the queue, and the spectrum under it. */
   private panels: HTMLElement;
   private queuePanel: HTMLElement;
+  /** What a queue row does not say, under the pointer (trackcard.ts). */
+  private card!: TrackCard;
   private spectrum: SpectrumPanel;
   private els!: {
     cover: HTMLImageElement;
@@ -338,6 +341,10 @@ export class AudioPlayer {
     this.queuePanel.className = 'queue-panel';
     this.queuePanel.hidden = true;
     this.panels.append(this.queuePanel, this.spectrum.el);
+    // On the body rather than inside the panel: the card stands beside the
+    // queue, and a panel that scrolls and clips its own contents is the one
+    // place it must not be.
+    this.card = new TrackCard(document.body);
 
     this.els = {
       cover: this.q<HTMLImageElement>('.ab-cover'),
@@ -1555,6 +1562,8 @@ export class AudioPlayer {
   private hideQueue(): void {
     this.queuePanel.classList.remove('open');
     this.queuePanel.hidden = true;
+    // Or it would be left standing beside a queue that is no longer there.
+    this.card.hide();
   }
 
   /**
@@ -1579,6 +1588,10 @@ export class AudioPlayer {
         <div class="q-list"><div class="q-space"></div></div>`;
       this.queuePanel.querySelector('[data-qclose]')!.addEventListener('click', () => this.hideQueue());
       list = this.queuePanel.querySelector<HTMLElement>('.q-list')!;
+      // What the row does not say: the release, the year, the genre and the
+      // sleeve, under the pointer. Delegated on the list because the rows
+      // themselves are rewritten on every track change and every scroll.
+      this.card.watch(list, (row) => this.queue[this.order[Number(row.dataset.oi)]!] ?? null);
       list.addEventListener('click', (ev) => {
         const row = (ev.target as HTMLElement).closest<HTMLElement>('.q-row');
         if (!row) return;
@@ -1628,6 +1641,9 @@ export class AudioPlayer {
     const p = this.queuePainted;
     if (p.first === first && p.last === last && p.cur === cur) return;
     this.queuePainted = { first, last, cur };
+    // Every row in the window is about to be replaced, so a card opened
+    // over one of them would be left pointing at an element nothing holds.
+    this.card.hide();
     let rows = '';
     for (let oi = first; oi < last; oi++) {
       const it = this.queue[this.order[oi]!];

@@ -3,7 +3,7 @@
  */
 import { albumZipUrl, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
 import { holdScroll, releaseScroll } from './scrollhold';
-import { esc, formatBytes, formatDuration, trackTitle } from './format';
+import { esc, formatBytes, formatDuration, mediaShape, trackTitle } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
 import { shareAlbum } from './links';
@@ -154,8 +154,15 @@ class AlbumPanel {
         // Per-track artist is noise on a single-artist album.
         const artist = t.artist && t.artist !== a.artist ? t.artist : '';
         const right = t.duration ? formatDuration(t.duration / 1000) : formatBytes(t.size);
+        // What the row does not already show, which for a track inside an
+        // open release is only what the file is: the release, the year and
+        // the genre are in the header a finger's width above it. The same
+        // rule as the grid's tile and the queue's card, and the reason this
+        // one is a plain tooltip — there is no picture to add that the
+        // sheet is not already showing.
+        const tip = mediaShape(t);
         return `
-          <button class="track" data-i="${i}" data-id="${esc(t.id)}">
+          <button class="track" data-i="${i}" data-id="${esc(t.id)}"${tip ? ` title="${esc(tip)}"` : ''}>
             <span class="t-num">${num}</span>
             <span class="t-playing">${icons.volume}</span>
             <span class="t-body">

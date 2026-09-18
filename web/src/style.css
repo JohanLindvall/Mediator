@@ -2380,3 +2380,73 @@ body.has-audio #toasts {
   font: 12px ui-monospace, monospace;
   text-align: center;
 }
+
+/* What a queue row does not say, under the pointer (trackcard.ts).
+
+   Fixed rather than absolute because it is placed against the viewport: the
+   row it belongs to lives in a panel that scrolls and clips, which is the
+   one box it must not be inside. It takes no pointer events, so the row
+   underneath goes on taking the click that plays it — the card is
+   something to read, never something to hit. */
+.track-card {
+  position: fixed;
+  z-index: 60;
+  pointer-events: none;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  max-width: 340px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  animation: tc-in 0.12s ease-out;
+}
+@keyframes tc-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+}
+.track-card .tc-art {
+  width: 80px;
+  height: 80px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--bg-elev);
+}
+.track-card .tc-body {
+  min-width: 0;
+}
+/* Two lines and then an ellipsis: a card is a glance, and a release with a
+   sentence for a title should not push the facts under it off the screen. */
+.track-card .tc-title {
+  font-weight: 600;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.track-card .tc-facts {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+/* The technical line is the least of it and reads that way. */
+.track-card .tc-shape {
+  margin-top: 2px;
+  color: var(--muted);
+  opacity: 0.75;
+  font-size: 11px;
+}
+/* A pointer is what this answers, and a coarse one has none: on a touch
+   screen the tap is trying to play the row. */
+@media (hover: none) {
+  .track-card {
+    display: none;
+  }
+}

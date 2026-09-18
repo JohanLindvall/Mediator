@@ -405,7 +405,13 @@ Go binary with the TypeScript frontend embedded.
   every track the music listing shows. One request — the server flattens the
   view into its tracks — and there is no limit worth the name: the whole
   library goes into the queue and is shuffled there, the queue panel drawing
-  a window of it rather than every row. The server gathers it a page at a
+  a window of it rather than every row. **Resting the pointer on a row says
+  what the row has no space for**: the sleeve, the release, the year and the
+  genre, with the format and bitrate under them. It is the rule every hover
+  here follows — what you are shown is what the row is not already showing,
+  so a grid tile answers with its path and its codecs instead, and a track
+  inside an open release, whose header already names the record, answers
+  with the codecs alone. The server gathers it a page at a
   time and every page has to come from one version of the library: an offset
   names a row in a particular sorted result, and this library is written to
   constantly by design — a download moves the version dozens of times a
