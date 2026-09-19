@@ -4033,7 +4033,24 @@ Serving details worth knowing before "fixing" them:
   all is well. Converting from the track the file leads with is the whole
   fix. Codecs with no settled type string to ask about (`wmav2` and the
   like) are left to the decode check, and the cinema formats — DTS, TrueHD —
-  are refused outright, having no type string and no decoder anywhere. Audio mode may
+  are refused outright, having no type string and no decoder anywhere.
+  **The frame counter is evidence only where the browser keeps one**
+  (`framesReported`, tested). That a picture did not decode is read off
+  `getVideoPlaybackQuality`, an undecodable codec drawing black rather than
+  raising an error — but on the **segmented path iOS decodes outside the
+  page**, in the system's own media stack, and answers zero frames for a
+  stream that is playing perfectly well. Read as evidence, that zero
+  condemned the cheap conversion and escalated it: measured on a phone
+  against a 1080x2340 file whose soundtrack alone needed converting, the
+  copy was served in milliseconds a segment, the full re-encode that
+  replaced it took five seconds per four seconds of film on a loaded
+  machine, and what had been playing stalled for good. So the count is
+  passed as `null` there, which `pictureRoute` already reads as "this
+  browser will not say" and answers from the video's own width. What is
+  given up is the black-picture check on that one path, and nothing else
+  covers it — a stream iOS cannot decode fails the whole presentation with
+  an error instead, which the player acts on by the shorter route below.
+  Audio mode may
   escalate to full if the copied picture turns out to be undecodable too —
   **including when the element simply errors**, which is the same news by a
   shorter route. It used to be read as the delivery failing: a soundtrack

@@ -46,6 +46,7 @@ import { clamp, esc, formatDuration } from './format';
 import { icons } from './icons';
 import { findKind, type ItemSource } from './sources';
 import {
+  framesReported,
   audioSilent,
   menuShift,
   shouldSave,
@@ -1175,7 +1176,9 @@ class VideoOverlay {
       webkitAudioDecodedByteCount?: number;
       mozHasAudio?: boolean;
     };
-    const q = v.getVideoPlaybackQuality?.();
+    // Only where the browser keeps a count for this stream: the segmented
+    // path is decoded outside the page and reports none (framesReported).
+    const frames = framesReported(v.getVideoPlaybackQuality?.(), this.usingHLS);
     // Nothing decoded is not one situation but two, and they want opposite
     // treatment: a picture the browser could always decode but the file
     // labels in a way it refuses needs its bytes copied, while one it cannot
@@ -1183,7 +1186,7 @@ class VideoOverlay {
     // it would not have helped and arrives as an error, which goes on to the
     // converter exactly as before.
     const route = pictureRoute({
-      frames: q ? q.totalVideoFrames : null,
+      frames,
       width: v.videoWidth,
       rewrapAvailable: !this.remuxed && !this.transcoding,
       hevcDecodes: decodesHEVC((t) => this.video.canPlayType(t)),

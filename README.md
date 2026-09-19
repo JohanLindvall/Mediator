@@ -281,6 +281,10 @@ Go binary with the TypeScript frontend embedded.
   couple of seconds of waiting buys the film itself, playing natively and
   seekable throughout, instead of a conversion that has to be reopened at
   every seek.
+  A picture that decodes is left alone on that path: iOS decodes a segmented
+  stream outside the page and reports no frames for it, and reading that as
+  "nothing decoded" used to escalate a soundtrack conversion into a
+  re-encode of every frame, which on a busy machine is slower than playback.
   **On Safari a conversion is served as HLS** — short segments and a
   playlist, which is the only shape that browser will play, since it opens a
   media URL with a byte-range request and a conversion of unknown length

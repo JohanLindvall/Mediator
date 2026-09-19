@@ -13,7 +13,7 @@ import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, hlsClock, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -805,4 +805,22 @@ test('hlsClock: the film\'s clock only when the playlist says so', () => {
   assert.equal(hlsClock(null), 'session');
   assert.equal(hlsClock(undefined), 'session');
   assert.equal(hlsClock('filmed'), 'session');
+});
+
+test('framesReported: the counter is evidence only where the browser keeps one', () => {
+  // An ordinary stream the page decodes: the count is what it says.
+  assert.equal(framesReported({ totalVideoFrames: 42 }, false), 42);
+  assert.equal(framesReported({ totalVideoFrames: 0 }, false), 0);
+  // The segmented path is decoded outside the page and reports zero for a
+  // stream that is playing, so the zero is not evidence of anything.
+  assert.equal(framesReported({ totalVideoFrames: 0 }, true), null);
+  assert.equal(framesReported({ totalVideoFrames: 42 }, true), null);
+  // A browser with no such API at all, either way.
+  assert.equal(framesReported(undefined, false), null);
+  assert.equal(framesReported(null, true), null);
+  // And what that means downstream: a picture whose track was understood is
+  // left alone rather than sent to be re-encoded frame by frame.
+  const opts = { width: 1080, rewrapAvailable: true, hevcDecodes: true };
+  assert.equal(pictureRoute({ ...opts, frames: framesReported({ totalVideoFrames: 0 }, true) }), 'ok');
+  assert.equal(pictureRoute({ ...opts, frames: framesReported({ totalVideoFrames: 0 }, false) }), 'rewrap');
 });

@@ -145,6 +145,36 @@ export type PictureRoute = 'ok' | 'rewrap' | 'convert';
  * offered once: having already had it and still decoded nothing, there is
  * nothing left to copy.
  */
+/**
+ * What the element's frame counter is worth for the stream it is playing.
+ *
+ * The counter is the only signal there is that a picture decoded — a codec
+ * the browser cannot handle draws black rather than raising an error — but
+ * it is only a signal where the browser actually keeps one. **On the
+ * segmented path it does not.** iOS plays HLS through the system's own
+ * media stack, which decodes outside the page, and `getVideoPlaybackQuality`
+ * there answers zero frames for a stream that is playing perfectly well.
+ * Read as evidence, that zero condemned a copy of the picture — the cheap
+ * conversion that merely re-encodes the soundtrack — and escalated it to a
+ * full re-encode of every frame: measured on a phone against a 1080x2340
+ * file, the copy was served in milliseconds a segment and the re-encode that
+ * replaced it took five seconds per four seconds of film, so what had been
+ * playing stalled and never recovered.
+ *
+ * So the count is offered only where it means something, and null everywhere
+ * else — which pictureRoute already reads as "this browser will not say", and
+ * answers from the video's own width. What is given up is the black-picture
+ * check on that path, and nothing else covers it: a stream iOS cannot decode
+ * fails the whole presentation with an error instead, which the player acts
+ * on by the shorter route.
+ */
+export function framesReported(
+  q: { totalVideoFrames: number } | null | undefined,
+  nativeStream: boolean,
+): number | null {
+  return nativeStream || !q ? null : q.totalVideoFrames;
+}
+
 export function pictureRoute(o: {
   frames: number | null;
   width: number;
