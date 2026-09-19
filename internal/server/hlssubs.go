@@ -35,7 +35,7 @@ import (
 // masterPlaylist names the media playlist and the subtitle renditions, all
 // relative to the master's own URL so they resolve under the session path —
 // signed prefix and all — exactly as segments always have.
-func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string, copyVideo bool) []byte {
+func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string, copyVideo bool, q quality) []byte {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:4\n")
 	def := -1
@@ -80,6 +80,11 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 	// six or eight, and declaring the original tells a player on a thin
 	// connection that it cannot afford what it is about to be sent.
 	bw := int64(convertBitrateGuess)
+	if q.chosen() {
+		// A rung is a ceiling the encoder is held to, so here the figure is
+		// known rather than guessed: the picture's cap and the soundtrack.
+		bw = int64(q.kbps)*1000 + 160_000
+	}
 	if copyVideo && it.Duration > 0 {
 		if v := it.Size * 8 * 1000 / it.Duration; v > 200_000 {
 			bw = v

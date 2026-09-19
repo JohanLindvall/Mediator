@@ -121,7 +121,20 @@ type KeyframeResponse struct {
 
 // InfoResponse is the body of GET /api/info: what the client needs to know
 // about the server it is talking to before it asks for anything else.
+// Quality is one rung of the bitrate ladder a viewer may choose for a film
+// (see quality in convert.go): the picture's ceiling and the box it is
+// scaled into. Offered on /api/info so the menu and the server cannot
+// disagree about what is on the ladder.
+type Quality struct {
+	Kbps   int `json:"kbps"`
+	Height int `json:"height"`
+}
+
 type InfoResponse struct {
+	// Qualities is the bitrate ladder, top rung first. A viewer on a slow
+	// link picks a rung and the film is re-encoded under that ceiling; the
+	// player offers only the rungs that would cost fewer bits than the file.
+	Qualities []Quality `json:"qualities,omitempty"`
 	// ThumbEpoch identifies the store the thumbnails come from. The client
 	// puts it in every thumbnail and sprite URL, because those are served
 	// immutable for a year and are versioned otherwise only by the source

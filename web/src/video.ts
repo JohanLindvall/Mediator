@@ -22,6 +22,7 @@ import {
   transcodeUrl,
   type Item,
   type Subtitle,
+  qualityLadder,
 } from './api';
 import {
   airPlaySupported,
@@ -36,6 +37,7 @@ import { CastTransport, type CastHooks } from './casting';
 import type { CastStatus, RendererInfo } from './types.gen';
 import { preferredLang, rememberTrack, rememberedTrack } from './audiopref';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
+import { canFeed, FedSource } from './mse';
 import { playingVideo } from './nowplaying';
 import { SpectrumPanel, spectrumTakesOutput } from './visualizer';
 import { holdScroll, releaseScroll } from './scrollhold';
@@ -60,6 +62,8 @@ import {
   readFault,
   resumeStart,
   playsOnReceiver,
+  qualityChoices,
+  qualityLabel,
   rewrapWorthTheWait,
   wantsFaststart,
   type CropBox,
@@ -84,6 +88,16 @@ export interface VideoOpts {
 }
 
 const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+/**
+ * The rung of the bitrate ladder the viewer chose, in kbit/s, and 0 for the
+ * film's own rate. Kept for the session rather than per film: a viewer who
+ * picked a rung on a slow link is on that link for the next film too, and
+ * asking again each time is the same annoyance the soundtrack memory
+ * exists to end. Not written down, since the link is the day's and not the
+ * viewer's — the pill on the bar says what is in force.
+ */
+let chosenKbps = 0;
 /**
  * How long an audio-only conversion is given to produce a picture before it
  * is taken for one that never will. Long enough for ffmpeg to start and a
@@ -284,6 +298,15 @@ class VideoOverlay {
   private helpEl!: HTMLElement;
   /** The three menus, so dismissing, closing and asking about them is one loop. */
   private menus: Array<{ el: HTMLElement; button: HTMLElement }> = [];
+  private qualityBtn!: HTMLElement;
+  private qualityMenu!: HTMLElement;
+  /**
+   * The conversion being fed to the element by the page (mse.ts), where
+   * one is; null while the element fetches its own source. It is stopped
+   * wherever the source changes — startSource, beginFile and close — so a
+   * fetch cannot go on filling a buffer nothing is reading.
+   */
+  private feed: FedSource | null = null;
   /** Puts down the receiver watch armed on the element. */
   private stopAirPlayWatch: () => void = () => {};
 
@@ -475,7 +498,11 @@ class VideoOverlay {
     // copied instead the element still has its route and keeps the button. A television driven over DLNA
     // is untouched — the set fetches the file itself and this element is
     // not involved — so the button stays wherever one of those was found.
-    const browser = this.browserReceiver && !this.routed;
+    // And nothing either while a conversion is fed to the element by the
+    // page: AirPlay and remote playback hand a set a URL, and an object URL
+    // is not one a set can fetch. A television over DLNA is still offered,
+    // the set fetching the file itself.
+    const browser = this.browserReceiver && !this.routed && this.feed === null;
     this.airplayBtn.hidden = !(browser || this.netReceivers);
   }
 
@@ -529,6 +556,9 @@ class VideoOverlay {
     // The speed is the element's, and the element is not what is playing.
     this.rateBtn.disabled = this.tv != null;
     this.rateBtn.title = this.tv ? 'The speed is the television\'s' : 'Playback speed';
+    // A set fetches the file itself; there is no stream of ours to lower.
+    (this.qualityBtn as HTMLButtonElement).disabled = this.tv != null;
+    this.qualityBtn.title = this.tv ? 'The television plays the file itself' : 'Bitrate: lower it on a slow connection';
   }
 
   private buildCastMenu(found: RendererInfo[]): void {
@@ -798,12 +828,31 @@ class VideoOverlay {
     // subtitles follow the sound, which is right, and the picture is behind
     // both. Asking for the keyframe puts every stream at the same place,
     // which is also where the clock has been told the stream begins.
-    this.startSource(
-      this.usingHLS
-        ? hlsUrl(this.item.id, origin, this.tcMode, this.audioTrack, this.subIndex)
-        : transcodeUrl(this.item.id, origin, this.tcMode, this.audioTrack),
-      { track: this.audioTrack },
-    );
+    if (this.usingHLS) {
+      this.startSource(hlsUrl(this.item.id, origin, this.tcMode, this.audioTrack, this.subIndex, chosenKbps), {
+        track: this.audioTrack,
+      });
+    } else {
+      const url = transcodeUrl(this.item.id, origin, this.tcMode, this.audioTrack, chosenKbps);
+      // A full conversion is H.264 and AAC, which is what the page can name
+      // to a Media Source buffer, and feeding it that way is what ends the
+      // pipe's re-reads (mse.ts). A soundtrack-only conversion copies the
+      // picture through in whatever it was, and stays on the element's own
+      // fetch — it upgrades itself to a file soon after in any case.
+      if (this.tcMode === 'full' && canFeed()) {
+        const id = this.item.id;
+        const feed = new FedSource(url, {
+          duration: Math.max(0, this.totT() - origin),
+          onError: (why, status) => {
+            if (this.closed || this.item.id !== id || this.feed !== feed) return;
+            this.onFeedError(why, status);
+          },
+        });
+        this.startSource(feed.attach(this.video), { track: this.audioTrack, feed });
+      } else {
+        this.startSource(url, { track: this.audioTrack });
+      }
+    }
     this.retimeSubtitles(); // cues are absolute; this stream's clock is not
   }
 
@@ -817,7 +866,7 @@ class VideoOverlay {
    * much playback the decode check waits for, from there; `track` is the
    * soundtrack the stream carries, which applyAudioChoice reads back.
    */
-  private startSource(url: string, o: { at?: number; track?: number | null; settle?: number }): void {
+  private startSource(url: string, o: { at?: number; track?: number | null; settle?: number; feed?: FedSource }): void {
     // Not while a television is playing it. Every route into here means "the
     // viewer should be watching this now", and while a set holds the film
     // the viewer is watching the set — so handing the element a source puts
@@ -828,7 +877,12 @@ class VideoOverlay {
     // Guarded here because this is the one door: the sound fix, a change of
     // track, an escalation and the rewrap all come through it.
     if (this.tv) return;
+    // Whatever was feeding the element stops before the source moves on,
+    // fed or not: a fetch left running fills a buffer nothing reads.
+    this.feed?.stop();
+    this.feed = o.feed ?? null;
     this.video.src = url;
+    this.showReceiverButton();
     if (o.track !== undefined) this.appliedTrack = o.track;
     this.sourced = true;
     if (o.settle !== undefined) {
@@ -1318,6 +1372,88 @@ class VideoOverlay {
     }
   }
 
+  /**
+   * The bitrate ladder for this film: its own rate, and every rung that
+   * would cost fewer bits (qualityChoices). A film already under the lowest
+   * rung offers nothing, and the pill goes with it — a menu with one entry
+   * is a button that does nothing.
+   */
+  private buildQualityMenu(): void {
+    const rungs = qualityChoices(this.item, qualityLadder());
+    this.qualityBtn.hidden = rungs.length === 0;
+    if (rungs.length === 0) {
+      if (chosenKbps !== 0) chosenKbps = 0;
+      return;
+    }
+    // A rung chosen for an earlier film may not be on this one's ladder:
+    // fall to the film's own rate rather than to a rung it does not offer.
+    if (chosenKbps !== 0 && !rungs.some((r) => r.kbps === chosenKbps)) chosenKbps = 0;
+    const entries = [0, ...rungs.map((r) => r.kbps)];
+    this.qualityMenu.innerHTML = entries
+      .map((k) => `<button class="vo-menu-item" data-kbps="${k}">${esc(qualityLabel(k))}</button>`)
+      .join('');
+    for (const el of this.qualityMenu.querySelectorAll('[data-kbps]')) {
+      el.addEventListener('click', () => {
+        this.selectQuality(Number((el as HTMLElement).dataset.kbps));
+        this.toggleQualityMenu(false);
+      });
+    }
+    this.markQualityMenu();
+  }
+
+  private markQualityMenu(): void {
+    this.qualityBtn.textContent = qualityLabel(chosenKbps);
+    for (const el of this.qualityMenu.querySelectorAll('[data-kbps]')) {
+      el.classList.toggle('on', Number((el as HTMLElement).dataset.kbps) === chosenKbps);
+    }
+  }
+
+  private toggleQualityMenu(show = this.qualityMenu.hidden): void {
+    this.toggleMenu(this.qualityMenu, this.qualityBtn, show);
+  }
+
+  /**
+   * Play this film at another rate, from where it has got to.
+   *
+   * A rung is a conversion whatever the file was — a copied picture is the
+   * file's own rate, which is what was asked to be reduced — so choosing one
+   * starts the full conversion, or reopens the one already running at the
+   * new rate. Choosing the film's own rate again loads the film afresh and
+   * lets it take whatever route it would have taken on its own.
+   */
+  private selectQuality(kbps: number): void {
+    if (this.tv || kbps === chosenKbps) return;
+    chosenKbps = kbps;
+    this.markQualityMenu();
+    const at = this.curT();
+    if (kbps === 0) {
+      this.load(this.item, at);
+      return;
+    }
+    if (this.transcoding && this.tcMode === 'full') {
+      void this.startTranscodeAt(at);
+      return;
+    }
+    this.fallbackToTranscode('full');
+  }
+
+  /**
+   * A fed conversion failed. A 503 is the file itself — the disk will not
+   * hand it over — and is said as such; anything else is a stream that
+   * failed, which the ordinary error path already knows what to do with.
+   */
+  private onFeedError(_why: string, status?: number): void {
+    if (status === 503) {
+      this.giveUp('The server cannot read this file right now');
+      return;
+    }
+    if (status !== undefined && status >= 400) {
+      this.giveUp(`The server could not convert this film (${status})`);
+      return;
+    }
+    void this.onMediaError();
+  }
+
   private toggleAudioMenu(show = this.audioMenu.hidden): void {
     this.toggleMenu(this.audioMenu, this.audioBtn, show);
   }
@@ -1556,6 +1692,10 @@ class VideoOverlay {
             <input class="vol" data-vol type="range" min="0" max="1" step="0.02" value="1" aria-label="Volume">
           </div>
           <span class="vo-time">0:00 / 0:00</span>
+          <div class="vo-menu-wrap">
+            <button class="txt-btn" data-quality aria-label="Bitrate" aria-haspopup="menu" aria-expanded="false" title="Bitrate: lower it on a slow connection">Original</button>
+            <div class="vo-menu" data-qualitymenu role="menu" hidden></div>
+          </div>
           <span class="vo-spacer"></span>
           <button class="txt-btn" data-rate aria-label="Playback speed" title="Playback speed">1×</button>
           <div class="vo-menu-wrap">
@@ -1601,6 +1741,9 @@ class VideoOverlay {
     this.muteBtn = this.q('[data-mute]');
     this.volSlider = this.q('[data-vol]');
     this.rateBtn = this.q('[data-rate]');
+    this.qualityBtn = this.q('[data-quality]');
+    this.qualityMenu = this.q('[data-qualitymenu]');
+    this.qualityBtn.addEventListener('click', () => this.toggleQualityMenu());
     this.ccBtn = this.q('[data-cc]');
     this.subMenu = this.q('[data-ccmenu]');
     this.cropBtn = this.q('[data-crop]');
@@ -1611,6 +1754,7 @@ class VideoOverlay {
     this.audioBtn = this.q('[data-audio]');
     this.audioMenu = this.q('[data-audiomenu]');
     this.menus = [
+      { el: this.qualityMenu, button: this.qualityBtn },
       { el: this.subMenu, button: this.ccBtn },
       { el: this.audioMenu, button: this.audioBtn },
       { el: this.castMenu, button: this.airplayBtn },
@@ -1711,6 +1855,7 @@ class VideoOverlay {
       // pick is applied to it: a choice that differs from what it carries
       // costs a reopen, which is what choosing a soundtrack costs anyway.
       this.buildAudioMenu();
+      this.buildQualityMenu();
       if (direct) this.useKnownCodecs();
       this.applyAudioChoice();
     });
@@ -1734,6 +1879,8 @@ class VideoOverlay {
    * viewer's and are not touched.
    */
   private beginFile(item: Item, at?: number): void {
+    this.feed?.stop();
+    this.feed = null;
     this.item = item;
     this.resume = this.opts.resumeFor?.(item.id);
     this.lastSaved = -1;
@@ -1778,6 +1925,7 @@ class VideoOverlay {
     // tracks may already be here from the listing; refreshItem below covers
     // a first open, whose probe is what discovers them.
     this.buildAudioMenu();
+    this.buildQualityMenu();
     this.subMenu.hidden = true;
     this.subMenu.innerHTML = '';
     this.ccBtn.setAttribute('aria-expanded', 'false');
@@ -2092,6 +2240,7 @@ class VideoOverlay {
     await this.refreshItem();
     if (this.closed || gen !== this.stepGen || this.tv !== tv) return;
     this.buildAudioMenu();
+    this.buildQualityMenu();
     await this.loadSubs();
     if (this.closed || gen !== this.stepGen || this.tv !== tv) return;
     await this.startCast(tv.cast.renderer);
@@ -2624,6 +2773,8 @@ class VideoOverlay {
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     this.video.pause();
     this.video.removeAttribute('src');
+    this.feed?.stop();
+    this.feed = null;
     this.video.load();
     // The graph and its context go with the element that was routed into
     // it: a browser allows only a handful of contexts, and a viewer who

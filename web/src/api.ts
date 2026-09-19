@@ -32,7 +32,7 @@ import type {
   KeyframeResponse,
   SubtitlesResponse,
 } from './types.gen';
-import { SPRITE } from './types.gen';
+import { SPRITE, Quality } from './types.gen';
 
 import type { QueueSource } from './content';
 
@@ -288,6 +288,16 @@ export function streamUrl(id: string, download = false): string {
 
 /** The credential the media URLs carry. See sign.go and loadInfo. */
 let streamToken = '';
+/**
+ * The bitrate ladder the server offers, top rung first — read off /api/info
+ * so the menu and the server cannot disagree about what is on it.
+ */
+let qualities: Quality[] = [];
+
+/** The rungs a viewer may choose from; empty until /api/info has answered. */
+export function qualityLadder(): Quality[] {
+  return qualities;
+}
 
 /**
  * Put the token into a media URL.
@@ -382,6 +392,7 @@ export async function loadInfo(): Promise<void> {
     thumbEpoch = info.thumbEpoch ?? '';
     content = info.content ?? null;
     streamToken = info.streamToken ?? '';
+    qualities = info.qualities ?? [];
     serverInfo = info;
   } finally {
     // Known either way. Without an answer the page offers everything, which
@@ -455,9 +466,17 @@ export function spriteFrame(
  * soundtrack — much cheaper, and enough when only the audio codec is the
  * problem.
  */
-export function transcodeUrl(id: string, t = 0, mode: 'full' | 'audio' = 'full', audio = 0): string {
+export function transcodeUrl(id: string, t = 0, mode: 'full' | 'audio' = 'full', audio = 0, quality = 0): string {
   const m = mode === 'audio' ? '&mode=audio' : '';
-  return signed(`/api/transcode/${encodeURIComponent(id)}`) + `?t=${t.toFixed(2)}${m}${audioParam(audio)}`;
+  return (
+    signed(`/api/transcode/${encodeURIComponent(id)}`) +
+    `?t=${t.toFixed(2)}${m}${audioParam(audio)}${qualityParam(quality)}`
+  );
+}
+
+/** A rung of the bitrate ladder, where the viewer chose one; nothing for the original. */
+function qualityParam(kbps: number): string {
+  return kbps > 0 ? `&q=${kbps}` : '';
 }
 
 /** Which soundtrack, when the film carries more than one. */
@@ -511,6 +530,7 @@ export function hlsUrl(
   mode: 'full' | 'audio' = 'full',
   audio = 0,
   sub = -1,
+  quality = 0,
 ): string {
   const m = mode === 'audio' ? '&mode=audio' : '';
   // Which subtitle rendition the master marks DEFAULT — the stream is what
@@ -520,7 +540,7 @@ export function hlsUrl(
   const c = sub >= 0 ? `&sub=${sub}` : '';
   return (
     signed(`/api/hls/${encodeURIComponent(id)}/index.m3u8`) +
-    `?t=${t.toFixed(2)}${m}${audioParam(audio)}${c}`
+    `?t=${t.toFixed(2)}${m}${audioParam(audio)}${c}${qualityParam(quality)}`
   );
 }
 

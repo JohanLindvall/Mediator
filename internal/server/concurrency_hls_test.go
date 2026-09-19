@@ -188,7 +188,7 @@ func TestNoSessionStartsAfterClose(t *testing.T) {
 	h := NewHLS("ffmpeg", nil, NewScratch(base, 0), testLog())
 	h.Close()
 
-	if _, err := h.session(context.Background(), library.Item{ID: "x"}, 0, true, ""); err == nil {
+	if _, err := h.session(context.Background(), library.Item{ID: "x"}, 0, true, "", quality{}); err == nil {
 		t.Fatal("a conversion was started after the converter was closed")
 	}
 	h.mu.Lock()
@@ -282,7 +282,7 @@ func TestARetryNeverWipesAPlayablePrefix(t *testing.T) {
 	h.sessions["k"] = s
 	h.byID["aaaa"] = s
 
-	h.run(context.Background(), s, it, 0, true, "")
+	h.run(context.Background(), s, it, 0, true, "", quality{})
 
 	if !hasSegment(dir) {
 		t.Error("the retry threw away the prefix the waiters had been let through to")

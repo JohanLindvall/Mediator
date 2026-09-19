@@ -59,7 +59,7 @@ type hwBackend struct {
 	input func(dev string) []string
 	// encode is the filter chain and the encoder, for frames wherever this
 	// backend leaves them.
-	encode func(dev string, maxWidth int, tonemap string) []string
+	encode func(dev string, maxWidth int, q quality, tonemap string) []string
 	// decodes are the pictures this hardware is asked to decode. Short on
 	// purpose: the failure is silent and total — a DivX file through Intel's
 	// video engine produced *no frames at all*, where software converts it
@@ -85,17 +85,17 @@ var videoEngines = []hwBackend{
 				"-hwaccel_output_format", "vaapi",
 			}
 		},
-		encode: func(_ string, w int, tonemap string) []string {
+		encode: func(_ string, w int, q quality, tonemap string) []string {
 			// The scale, and — for a wide-colour picture — a detour back to
 			// the processor for the tone-map the engine cannot do (hdr.go).
 			// The scale comes first, so what the processor is handed is a
 			// 1080p frame rather than a 4K one.
-			vf := "scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=nv12"
+			vf := hwScale("scale_vaapi", w, q) + ":format=nv12"
 			if tonemap != "" {
-				vf = "scale_vaapi=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:format=p010," +
+				vf = hwScale("scale_vaapi", w, q) + ":format=p010," +
 					"hwdownload,format=p010le," + tonemap + ",format=nv12,hwupload"
 			}
-			return []string{
+			return append([]string{
 				// No deinterlacer here, where the software chain has one.
 				// Two reasons, and the second is why it was removed rather
 				// than fixed: nothing that reaches the hardware can be
@@ -110,14 +110,10 @@ var videoEngines = []hwBackend{
 				// that never resolved.
 				"-vf", vf,
 				"-c:v", "h264_vaapi",
-				// A ceiling rather than a quality target. Everything that
-				// reaches the hardware is demanding by definition — that is
-				// what put it here — so what matters is that the stream stays
-				// something a phone on a mobile connection can pull. Measured
-				// on the 4K clip: 6.2 Mbit/s at this setting, against the
-				// 11.5 software spent on the same content.
-				"-rc_mode", "VBR", "-b:v", "6M", "-maxrate", "10M",
-			}
+				// A ceiling rather than a quality target: the rung's, or the
+				// standing one (hwRate).
+				"-rc_mode", "VBR",
+			}, hwRate(q)...)
 		},
 		decodes: map[string]bool{"h264": true, "hevc": true, "mpeg2video": true, "vp8": true, "vp9": true},
 	},
@@ -130,13 +126,13 @@ var videoEngines = []hwBackend{
 		input: func(dev string) []string {
 			return []string{"-hwaccel", "qsv", "-qsv_device", dev, "-hwaccel_output_format", "qsv"}
 		},
-		encode: func(_ string, w int, _ string) []string {
+		encode: func(_ string, w int, q quality, _ string) []string {
 			// vpp_qsv does both jobs at once; deinterlace=2 is its adaptive
 			// mode, which leaves progressive frames alone.
-			return []string{
+			return append([]string{
 				"-vf", "vpp_qsv=w='min(" + strconv.Itoa(w) + ",iw)':h=-2:deinterlace=2:format=nv12",
-				"-c:v", "h264_qsv", "-b:v", "6M", "-maxrate", "10M",
-			}
+				"-c:v", "h264_qsv",
+			}, hwRate(q)...)
 		},
 		decodes: map[string]bool{"h264": true, "hevc": true, "mpeg2video": true, "vp9": true},
 	},
@@ -147,11 +143,11 @@ var videoEngines = []hwBackend{
 		input: func(string) []string {
 			return []string{"-hwaccel", "cuda", "-hwaccel_output_format", "cuda"}
 		},
-		encode: func(_ string, w int, _ string) []string {
-			return []string{
+		encode: func(_ string, w int, q quality, _ string) []string {
+			return append([]string{
 				"-vf", "yadif_cuda=deint=interlaced,scale_cuda=w='min(" + strconv.Itoa(w) + ",iw)':h=-2",
-				"-c:v", "h264_nvenc", "-preset", "p4", "-b:v", "6M", "-maxrate", "10M",
-			}
+				"-c:v", "h264_nvenc", "-preset", "p4",
+			}, hwRate(q)...)
 		},
 		decodes: map[string]bool{"h264": true, "hevc": true, "mpeg2video": true, "vp8": true, "vp9": true, "av1": true},
 	},
@@ -162,12 +158,12 @@ var videoEngines = []hwBackend{
 		name:    "videotoolbox",
 		devices: func() []string { return []string{""} },
 		input:   func(string) []string { return []string{"-hwaccel", "videotoolbox"} },
-		encode: func(_ string, w int, _ string) []string {
-			return []string{
-				"-vf", videoFilter("scale=w='min(" + strconv.Itoa(w) + ",iw)':h=-2"),
+		encode: func(_ string, w int, q quality, _ string) []string {
+			return append([]string{
+				"-vf", videoFilter(hwScale("scale", w, q)),
 				"-pix_fmt", "yuv420p",
-				"-c:v", "h264_videotoolbox", "-b:v", "6M", "-maxrate", "10M",
-			}
+				"-c:v", "h264_videotoolbox",
+			}, hwRate(q)...)
 		},
 		decodes: map[string]bool{"h264": true, "hevc": true, "mpeg2video": true, "vp9": true},
 	},
@@ -289,9 +285,34 @@ func (h *hwaccel) input() []string {
 	return engine.input(device)
 }
 
-func (h *hwaccel) encode(w int, tonemap string) []string {
+func (h *hwaccel) encode(w int, q quality, tonemap string) []string {
 	engine, device := h.chosen()
-	return engine.encode(device, w, tonemap)
+	return engine.encode(device, w, q, tonemap)
+}
+
+// hwRate is the ceiling an engine encodes to: the rung's where one was
+// chosen, and otherwise the standing pair — 6 Mbit/s aimed at, 10 at most.
+// Everything that reaches the hardware is demanding by definition, which is
+// what put it here, so what matters is that the stream stays something a
+// phone on a mobile connection can pull. Measured on a 4K clip: 6.2 Mbit/s
+// at this setting, against the 11.5 software spent on the same content.
+func hwRate(q quality) []string {
+	if q.chosen() {
+		return q.rateCap()
+	}
+	return []string{"-b:v", "6M", "-maxrate", "10M"}
+}
+
+// hwScale is the engine's scale for a rung: the box, where one was chosen,
+// and the ordinary width cap otherwise. The box form is proved on the VAAPI
+// driver here — a 886x1920 portrait clip into a 1280x720 box came out
+// 332x720 — and the other engines take the same option names.
+func hwScale(filter string, w int, q quality) string {
+	if q.chosen() {
+		return filter + "=w='min(" + strconv.Itoa(q.width()) + ",iw)':h='min(" + strconv.Itoa(q.height) + ",ih)'" +
+			":force_original_aspect_ratio=decrease:force_divisible_by=2"
+	}
+	return filter + "=w='min(" + strconv.Itoa(w) + ",iw)':h=-2"
 }
 
 // find works out what this machine can do, once.
@@ -354,7 +375,7 @@ func hwProve(ffmpeg string, e *hwBackend, dev string) error {
 	args = append(args, "-vf", "format=nv12"+upload)
 	// The encoder alone: the backend's own filter chain is for frames coming
 	// out of a decoder, and this is proving the device and the encoder.
-	encode := e.encode(dev, 320, "")
+	encode := e.encode(dev, 320, quality{}, "")
 	for i, a := range encode {
 		if a == "-vf" || (i > 0 && encode[i-1] == "-vf") {
 			continue
@@ -386,7 +407,7 @@ func hwProveToneMap(ffmpeg string, e *hwBackend, dev string) error {
 	// its BT.2020/PQ tags; the proof has to as well.
 	args = append(args, "-vf",
 		"format=p010le,setparams=colorspace=bt2020nc:color_primaries=bt2020:color_trc=smpte2084"+upload)
-	encode := e.encode(dev, 320, tonemapSoftware)
+	encode := e.encode(dev, 320, quality{}, tonemapSoftware)
 	for i, a := range encode {
 		if a == "-vf" && i+1 < len(encode) {
 			// Onto the end of the upload rather than as a second -vf, which

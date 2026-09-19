@@ -36,6 +36,7 @@ var rootTypes = []any{
 	library.Subtitle{},
 	state.Position{},
 	server.Build{},
+	server.Quality{},
 	server.Capabilities{},
 	server.ListQueryParams{},
 	server.AlbumsResponse{},

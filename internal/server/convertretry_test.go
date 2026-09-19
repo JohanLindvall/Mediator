@@ -68,7 +68,7 @@ func TestHLSFailureIsNotRemembered(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if _, err := h.session(ctx, it, 0, true, ""); err == nil {
+	if _, err := h.session(ctx, it, 0, true, "", quality{}); err == nil {
 		t.Fatal("first ask should fail: the converter refused")
 	}
 	// The forget runs just after the waiters are released; give it a moment.
@@ -89,7 +89,7 @@ func TestHLSFailureIsNotRemembered(t *testing.T) {
 	if err := os.WriteFile(marker, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	s, err := h.session(ctx, it, 0, true, "")
+	s, err := h.session(ctx, it, 0, true, "", quality{})
 	if err != nil {
 		t.Fatalf("second ask should be a fresh attempt, got %v", err)
 	}
@@ -168,7 +168,7 @@ func TestHLSConcurrentSessionsEvict(t *testing.T) {
 		wg.Add(1)
 		go func(at float64) {
 			defer wg.Done()
-			_, _ = h.session(ctx, it, at, true, "")
+			_, _ = h.session(ctx, it, at, true, "", quality{})
 		}(float64(i) * 10)
 	}
 	wg.Wait()

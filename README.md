@@ -57,6 +57,20 @@ Go binary with the TypeScript frontend embedded.
   and then cannot be described, the log says so rather than leaving the set
   to go missing quietly. Older sets that cannot agree with a modern
   certificate will still sit on a spinner; that part is theirs.
+- **A bitrate to suit the connection** — a pill at the lower left of the
+  player, reading *Original*, opens a short ladder: 6, 3 and 1.5 Mbit/s,
+  showing only the rungs that would cost fewer bits than the film itself.
+  A film plays at its own rate by default, whatever the link, and a phone
+  recording at 10 Mbit/s over a link carrying eight stalls no matter what
+  the player does; pick a rung and the film is re-encoded under that
+  ceiling from where it has got to, fitted into a smaller picture so the
+  bits go further, and the choice stays for the session. On browsers other
+  than Safari the converted stream is fed to the player by the page itself,
+  which is what keeps a lower bitrate from costing more link than the
+  original — a browser fetching such a stream on its own re-reads it from
+  the start every time its buffer fills. While a rung is playing the
+  browser's own AirPlay and cast buttons are away, since those hand a set a
+  URL and this stream has none; a television over DLNA is still offered.
 - **Hover a film and it moves** — the pointer resting on a tile plays ten
   frames from across the film in place of the still, a five-second tour of
   what is in it. It is the same sheet the seek bar scrubs with, so it costs
@@ -1105,15 +1119,15 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/thumb/{id}?w=360`               | Cached JPEG thumbnail                    |
 | `GET /api/item/{id}`                      | One item, with its metadata read first if it has not been |
 | `GET /api/remux/{id}?a=&mode=`            | The same streams in a container the browser opens, served as an ordinary seekable file, keeping soundtrack `a`; `mode=audio` copies the picture and converts the soundtrack instead; 404 when copying would not help |
-| `GET /api/transcode/{id}?t=0[&mode=audio]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video) |
-| `GET /api/hls/{id}/index.m3u8?t=&mode=`   | The same conversion as HLS — what Safari plays; redirects into a session |
+| `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
+| `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays; redirects into a session, one per rung |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
 | `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
 | `GET /api/albums/{id}/zip`                | The release as one download                |
 | `GET /api/sprite/{id}`                    | Scrub sheet: ten frames across a video, taken by ten seeks (3.5 s for an 87-minute film) |
 | `GET /api/playlist.m3u?…`                 | The current query as an m3u                |
-| `GET /api/info`                           | What the client needs before anything else: the thumbnail epoch, and which classes of media this face may show |
+| `GET /api/info`                           | What the client needs before anything else: the thumbnail epoch, which classes of media this face may show, and the bitrate ladder (`qualities`) |
 | `POST /api/links`                         | Mint a shortlink to a view or to one item; asking twice for the same place returns the same code |
 | `GET /s/{code}`                           | Follow one, redirecting to the address it names; an unknown code opens the library |
 | `GET /api/prefs`, `PUT /api/prefs`        | The directories being indexed              |

@@ -13,7 +13,7 @@ import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -769,4 +769,29 @@ test('route: a file whose index sits behind its data opens as the rewrap', () =>
   // An index at the front is the ordinary file, and plays as one.
   assert.equal(wantsFaststart({ moovLate: false, size: 762_000_000 }, false), false);
   assert.equal(wantsFaststart({ size: 762_000_000 }, false), false, 'unread is not late');
+});
+
+test('quality: only the rungs that cost fewer bits than the film are offered', () => {
+  const ladder = [
+    { kbps: 6000, height: 1080 },
+    { kbps: 3000, height: 720 },
+    { kbps: 1500, height: 480 },
+  ];
+  // The phone clip this was built for: 762 MB over 631 s is 9.7 Mbit/s.
+  // Every rung is under it by a fifth or more.
+  assert.deepEqual(qualityChoices({ size: 762_000_000, duration: 631_000 }, ladder), ladder);
+  // A 6.5 Mbit/s film: the 6 Mbit/s rung is a re-encode for nothing.
+  assert.deepEqual(
+    qualityChoices({ size: (6_500_000 / 8) * 600, duration: 600_000 }, ladder).map((t) => t.kbps),
+    [3000, 1500],
+  );
+  // A 1.2 Mbit/s film is already under every rung.
+  assert.deepEqual(qualityChoices({ size: (1_200_000 / 8) * 600, duration: 600_000 }, ladder), []);
+  // Nothing measured yet: nothing says any rung is pointless.
+  assert.deepEqual(qualityChoices({ size: 762_000_000 }, ladder), ladder);
+  assert.deepEqual(qualityChoices({ size: 762_000_000, duration: 0 }, ladder), ladder);
+  assert.equal(qualityLabel(0), 'Original');
+  assert.equal(qualityLabel(6000), '6 Mbps');
+  assert.equal(qualityLabel(1500), '1.5 Mbps');
+  assert.equal(qualityLabel(800), '800 kbps');
 });

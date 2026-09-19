@@ -194,6 +194,11 @@ export interface Build {
   arch: string;
 }
 
+export interface Quality {
+  kbps: number;
+  height: number;
+}
+
 export interface Capabilities {
   ffmpeg: boolean;
   ffprobe: boolean;
@@ -294,6 +299,7 @@ export interface LinkResponse {
 }
 
 export interface InfoResponse {
+  qualities?: Quality[];
   thumbEpoch: string;
   content?: string[];
   streamToken?: string;

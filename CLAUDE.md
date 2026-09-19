@@ -4003,6 +4003,79 @@ Serving details worth knowing before "fixing" them:
   and the film fell back to the pipe, which those browsers cannot play at
   all. The picture being copied through is what makes the difference — an
   error there is about the picture, and the answer is to re-encode it.
+- **A viewer can ask for fewer bits** (`q=` on `/api/transcode` and
+  `/api/hls`; `quality` and `qualityTiers` in `convert.go`; the ladder on
+  `/api/info` as `qualities`). The converter's rate was never the viewer's
+  to choose: a file the browser decodes plays natively at its own rate
+  whatever the link, and a phone recording at 9.7 Mbit/s over a link
+  delivering about eight stalled throughout — while a 4K film *converted*
+  needed less link than that native clip. Nothing here can measure the
+  viewer's link, so the viewer is offered the choice: a pill at the lower
+  left of the player reading "Original", which opens a ladder of three
+  rungs — 6, 3 and 1.5 Mbit/s, each half the one above, top rung first —
+  and only the rungs that would cost fewer bits than the file are listed
+  (`qualityChoices`, `playback.ts`, tested: a rung has to come in under the
+  file by a fifth, or it is a re-encode for nothing). Measured on the file
+  that asked for it: 3.3 Mbit/s at twice real time, the same picture size.
+  A rung is **a re-encode whatever the mode asked for** (`effectiveCopy`): a
+  copied picture is the file's own bits at the file's own rate, which is
+  exactly what was asked to be reduced. It is a ceiling, not a target
+  (`rateCap`: `-b:v` and `-maxrate` at the rung, `-bufsize` twice it) — a
+  viewer who asked for three megabits has a link that carries about that,
+  and a burst above it is the stall they were ending. And the picture is
+  fitted into the rung's **box** rather than merely capped in width
+  (`boxScale`, `hwScale`): 1080, 720 and 480 high and 16:9 as wide, either
+  way up, so a portrait clip is bounded by the height where the standing
+  width cap would not have touched it at all. Proved on both scalers before
+  being relied on: an 886×1920 clip into the 1280×720 box came out 332×720
+  on `scale` and on `scale_vaapi` alike. The engines that are not measured
+  here take the rung's rate and keep their width-only scale. A rate off the
+  ladder is refused (`parseQuality`): an arbitrary ceiling is a budget
+  nobody set. The rung is part of the segmented session's key (`hlsKey`,
+  tested — last, so a key written before there was one still reads back),
+  and the master playlist's `BANDWIDTH` is then a figure known rather than
+  guessed: the rung and the soundtrack.
+  The choice is kept for the session (`chosenKbps`, `video.ts`), not per
+  film and not written down: a viewer who picked a rung on a slow link is
+  on that link for the next film too, and the link is the day's rather than
+  the viewer's. The pill is disabled while a set plays, since a set fetches
+  the file itself and there is no stream of ours to lower.
+- **A conversion the page can name is fed to the element by the page**
+  (`mse.ts`). This is what makes a rung usable on the one link it is for.
+  The piped conversion is one response of unknown length with no ranges,
+  and a browser managing its own buffer reads until it is full, drops the
+  connection, and reconnects asking for the byte it wants next — which the
+  pipe answers with the conversion from the beginning. The waste measured
+  below, 963 MB to move 167, grows with the playback position and is not a
+  constant anything can tune; on a slow link it *is* the link, and a lower
+  bitrate through the browser's own fetch would have made that link worse.
+  So where the conversion is H.264 and AAC — every full conversion — the
+  page holds the connection: one `fetch`, read once from start to end, each
+  chunk handed to a Media Source Extensions buffer as it arrives. The
+  browser decodes out of the buffer and never sees a URL to reconnect to.
+  Back-pressure is the page's — it stops reading when `FEED_AHEAD_S` is
+  buffered, which stalls the response, which stalls ffmpeg on its write,
+  so a paused film costs the server nothing — and what is more than
+  `FEED_BEHIND_S` behind the playhead is dropped so the buffer's unannounced
+  quota is never reached, with one eviction-and-retry as the belt. The
+  buffer cannot be made until its codec string is known, and the string is
+  inside the initialisation segment, which may take more than one chunk to
+  arrive whole: `initSegmentEnd` says when it has, and `codecStringOf` reads
+  the profile, compatibility and level bytes out of the `avcC` box (both
+  tested against the box layout ffmpeg actually writes — measured on a live
+  conversion, `avc1.64002A` and `mp4a.40.2`). A seek is what it always was:
+  the conversion reopened at the keyframe, which here is a new feed and a
+  new source, so `tcOffset` and everything built on it are unchanged.
+  What it costs is the browser's own receiver: AirPlay and remote playback
+  hand a set a *URL*, and an object URL is nothing a set can fetch, so the
+  receiver button goes while a feed is up — a television over DLNA is still
+  offered, the set fetching the file itself. Safari does not come through
+  here: it has native HLS, whose segments are ordinary files with ranges,
+  and a soundtrack-only conversion stays on the element's own fetch, its
+  picture being copied through in whatever codec it was and its file
+  arriving behind it in any case. And it is written by hand rather than
+  taken from a library, because the one thing this frontend does not have
+  is a runtime dependency, and one fragmented MP4 stream is a hundred lines.
 - `/api/remux/{id}` rewraps rather than converts, for the files where the
   container is the only thing the browser will not open — an FLV or an MKV
   holding H.264 and AAC holds exactly what every browser decodes. `-c copy`

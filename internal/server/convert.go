@@ -19,6 +19,80 @@ import (
 // itself, and the two diverging once is how a fault got in — so the common
 // part is built here, and each converter adds its own delivery.
 
+// quality is one rung of the bitrate ladder a viewer can choose from: a
+// ceiling on the picture's rate, and the box the picture is scaled into so
+// the bits go further. The zero value is no rung — the file's own rate, or
+// the converter's ordinary output where a conversion was needed anyway.
+//
+// The ladder exists for the link, not the screen. Measured on the file that
+// asked for it: a phone recording at 9.7 Mbit/s, watched over a link that
+// delivered about eight, stalled throughout — and the same file converted
+// came out at 3.3 Mbit/s at twice real time, the same picture size. Native
+// playback sends the file's own rate whatever the link, and a converted 4K
+// film needed *less* link than a native phone clip. Nothing here can measure
+// the viewer's link, so the viewer is offered the choice.
+type quality struct {
+	kbps   int // the picture's ceiling, in kbit/s
+	height int // the box it is scaled into: this tall, and 16:9 as wide
+}
+
+// qualityTiers is the ladder, top rung first. Three rungs, each half the
+// one above: enough to reach a link of a few megabits from a film of ten,
+// and few enough that the menu reads at a glance. A rung is named by its
+// rate, since the rate is what it costs.
+var qualityTiers = []quality{{6000, 1080}, {3000, 720}, {1500, 480}}
+
+// parseQuality reads a rung off the query. Empty or "0" is no rung; anything
+// else has to be a rung on the ladder exactly, since an arbitrary rate is a
+// budget nobody set and a way to spend the encoder on nothing.
+func parseQuality(q string) (quality, bool) {
+	if q == "" || q == "0" {
+		return quality{}, true
+	}
+	n, err := strconv.Atoi(q)
+	if err != nil {
+		return quality{}, false
+	}
+	for _, t := range qualityTiers {
+		if t.kbps == n {
+			return t, true
+		}
+	}
+	return quality{}, false
+}
+
+// chosen says whether a rung was asked for.
+func (q quality) chosen() bool { return q.kbps > 0 }
+
+// width is the box's width for a 16:9 picture, even, which the encoders
+// require. The box is what the scale fits the picture into either way up:
+// a portrait clip is bounded by the height, a wide film by the width.
+func (q quality) width() int { return (q.height*16/9 + 1) &^ 1 }
+
+// rateCap is the encoder's ceiling for a rung: a rate to aim at and the same
+// rate as the most it may ever spend, since a viewer who asked for three
+// megabits has a link that carries about that and a burst above it is the
+// stall they were trying to end.
+func (q quality) rateCap() []string {
+	k := strconv.Itoa(q.kbps) + "k"
+	return []string{"-b:v", k, "-maxrate", k, "-bufsize", strconv.Itoa(q.kbps*2) + "k"}
+}
+
+// boxScale is the software scaler's rule for a rung: fit inside the box,
+// keeping the picture's shape, at a size the encoder takes.
+func (q quality) boxScale() string {
+	return "scale=w='min(" + strconv.Itoa(q.width()) + ",iw)':h='min(" + strconv.Itoa(q.height) + ",ih)'" +
+		":force_original_aspect_ratio=decrease:force_divisible_by=2"
+}
+
+// effectiveCopy is whether the picture may still be copied through once a
+// rung is asked for: it may not. A copied picture is the file's own bits at
+// the file's own rate, which is exactly what the viewer asked to have less
+// of, so a rung is a re-encode however the file was going to be handled.
+func effectiveCopy(copyVideo bool, q quality) bool {
+	return copyVideo && !q.chosen()
+}
+
 // conversion is a planned run: the arguments up to the output, and the pipe
 // feeding standard input where that is the only way to the bytes.
 type conversion struct {
@@ -51,7 +125,8 @@ func (c *conversion) close() {
 // it could not measure one. A seek already done by byte position (a DVD
 // title, see convertInput) gets no -ss: the stream simply starts where it
 // was put.
-func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, repair bool, log *slog.Logger) (*conversion, error) {
+func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, q quality, repair bool, log *slog.Logger) (*conversion, error) {
+	copyVideo = effectiveCopy(copyVideo, q)
 	input, byPosition, err := convertInput(it, t)
 	if err != nil {
 		return nil, err
@@ -98,19 +173,28 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		// The filters and the encoder run where the frames already are —
 		// except the tone-map, which the engine cannot do and the processor
 		// takes over for, after the engine has scaled the picture down.
-		args = append(args, hw.encode(convertMaxWidth, hw.toneMap(toneCurve(ffmpeg, it.HDR)))...)
+		args = append(args, hw.encode(convertMaxWidth, q, hw.toneMap(toneCurve(ffmpeg, it.HDR)))...)
 		args = append(args, convertColourArgs(it.HDR)...)
 	default:
 		// A wide-colour picture is brought back to ordinary colour on the
 		// way through; see hdr.go for why a stream that keeps it is refused.
 		// The scale comes first here too, for the same reason it does there.
-		filters := convertScale
+		// A rung swaps the ordinary width cap for its own box, and puts a
+		// ceiling on the rate that the quality target otherwise has none of.
+		scale := convertScale
+		if q.chosen() {
+			scale = q.boxScale()
+		}
+		filters := scale
 		if tm := toneCurve(ffmpeg, it.HDR); tm != "" {
-			filters = convertScale + ",format=p010le," + tm
+			filters = scale + ",format=p010le," + tm
 		}
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
 			"-vf", videoFilter(filters), "-pix_fmt", "yuv420p")
+		if q.chosen() {
+			args = append(args, q.rateCap()...)
+		}
 		args = append(args, convertColourArgs(it.HDR)...)
 	}
 	c.args = append(args, audioEncodeArgs(false)...)

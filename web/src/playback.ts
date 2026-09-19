@@ -184,6 +184,36 @@ export const REWRAP_WAIT_LIMIT = 2 * 1024 * 1024 * 1024;
  * real thing is not.
  */
 /**
+ * One rung of the bitrate ladder the server offers: a ceiling on the
+ * picture's rate, and the box it is scaled into to make those bits go
+ * further.
+ */
+export interface QualityTier {
+  kbps: number;
+  height: number;
+}
+
+/**
+ * Which rungs are worth offering for this film: only the ones that would
+ * actually cost fewer bits than the file itself. A 6 Mbit/s rung under a
+ * 6.5 Mbit/s film is a re-encode for nothing, so a rung has to come in
+ * under the file by a margin — a fifth — to be listed. A film whose rate
+ * is unknown (no length measured yet) is offered every rung, since nothing
+ * says any of them is pointless.
+ */
+export function qualityChoices(film: { size: number; duration?: number }, tiers: QualityTier[]): QualityTier[] {
+  if (!film.duration || film.duration <= 0 || film.size <= 0) return tiers;
+  const kbps = (film.size * 8) / (film.duration / 1000) / 1000;
+  return tiers.filter((t) => t.kbps <= kbps * 0.8);
+}
+
+/** How a rung is named in the menu: its rate, since that is what it costs. */
+export function qualityLabel(kbps: number): string {
+  if (kbps <= 0) return 'Original';
+  return kbps >= 1000 ? `${(kbps / 1000).toFixed(kbps % 1000 === 0 ? 0 : 1)} Mbps` : `${kbps} kbps`;
+}
+
+/**
  * Whether a file the browser opens should nonetheless start as the rewrap,
  * because its index sits behind its data.
  *

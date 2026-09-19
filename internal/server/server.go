@@ -275,7 +275,12 @@ func (s *Server) FindHardware() {
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	token, expires, _ := s.sign.mint(time.Now())
+	ladder := make([]Quality, 0, len(qualityTiers))
+	for _, t := range qualityTiers {
+		ladder = append(ladder, Quality{Kbps: t.kbps, Height: t.height})
+	}
 	writeJSON(w, InfoResponse{
+		Qualities:     ladder,
 		ThumbEpoch:    s.thumbs.StoreEpoch(),
 		Content:       contentOf(r).names(),
 		StreamToken:   token,
@@ -1105,6 +1110,15 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	// as asked: /api/keyframe measured where this very seek lands, and the
 	// client has arranged its timeline around that answer.
 	copyVideo := r.URL.Query().Get("mode") == "audio"
+	// A rung on the bitrate ladder, where the viewer chose one. A rung is a
+	// re-encode whatever the mode asked for, since a copied picture is the
+	// file's own rate — exactly what was asked to be reduced.
+	q, ok := parseQuality(r.URL.Query().Get("q"))
+	if !ok {
+		http.Error(w, "unknown quality", http.StatusBadRequest)
+		return
+	}
+	copyVideo = effectiveCopy(copyVideo, q)
 	// Which is a copy of the picture, so it carries the same fault as the
 	// rewrap: a stream that reorders further than it declares has to be
 	// re-encoded whatever the client asked for. The client cannot know this
@@ -1133,7 +1147,7 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt < 3; attempt++ {
 		// The same plan the segmented converter runs (convert.go); only the
 		// delivery is this endpoint's own: fragmented MP4 down the response.
-		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), repaired, s.log)
+		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), q, repaired, s.log)
 		if err != nil {
 			// Known and unopenable, not unknown: the same answer the stream
 			// gives, with the same reason, so the player says what happened

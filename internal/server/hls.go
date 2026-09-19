@@ -116,7 +116,10 @@ type hlsSession struct {
 	// at the start of the film.
 	item  library.Item
 	start float64
-	last  time.Time // when a request last arrived for it
+	// q is the rung of the bitrate ladder this session was made at, for
+	// the master playlist to declare honestly.
+	q    quality
+	last time.Time // when a request last arrived for it
 	// converting is true while ffmpeg is still working. A session that has
 	// finished costs only disk, and disk is what the budget is for.
 	converting bool
@@ -318,6 +321,14 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 		t = 0
 	}
 	copyVideo := r.URL.Query().Get("mode") == "audio"
+	// A rung on the bitrate ladder is a re-encode whatever the mode asked
+	// for; see effectiveCopy.
+	q, ok := parseQuality(r.URL.Query().Get("q"))
+	if !ok {
+		http.Error(w, "unknown quality", http.StatusBadRequest)
+		return
+	}
+	copyVideo = effectiveCopy(copyVideo, q)
 	// The same fault the pipe has: a soundtrack-only conversion copies the
 	// picture through, and a stream that reorders further than it declares
 	// has to be re-encoded whatever was asked for (reorder.go).
@@ -330,7 +341,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	// itself. This is the moment the probe exists for: something is opening.
 	it = s.probed(r.Context(), it)
 
-	sess, err := s.hls.session(r.Context(), it, t, copyVideo, r.URL.Query().Get("a"))
+	sess, err := s.hls.session(r.Context(), it, t, copyVideo, r.URL.Query().Get("a"), q)
 	if err != nil {
 		if !errors.Is(err, context.Canceled) {
 			s.log.Warn("hls session", "path", it.Rel, "err", err)
@@ -358,7 +369,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	// its segments are untouched: one conversion serves every choice, and
 	// the choice picks which rendition is marked DEFAULT.
 	if subs := s.lib.Subtitles(it); len(subs) > 0 {
-		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"), copyVideo)
+		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"), copyVideo, sess.q)
 		defer s.lib.StartStream()()
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")
@@ -540,14 +551,8 @@ func (h *HLS) byToken(id string) *hlsSession {
 
 // session returns the conversion for what was asked for, starting it if this
 // is the first ask, and waits until there is something to play.
-func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo bool, audio string) (*hlsSession, error) {
-	mode := "full"
-	if copyVideo {
-		mode = "audio"
-	}
-	// The soundtrack is part of what a session is: two viewers watching the
-	// same film in different languages are watching two conversions.
-	key := fmt.Sprintf("%s|%d|%d|%.3f|%s|%s", it.ID, it.ModTime, it.Size, t, mode, audio)
+func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo bool, audio string, q quality) (*hlsSession, error) {
+	key := hlsKey(it, t, copyVideo, audio, q)
 
 	h.mu.Lock()
 	if h.closed {
@@ -609,7 +614,7 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 	}
 	h.seq++
 	s := &hlsSession{
-		key: key, id: hex.EncodeToString(raw[:]), dir: dir, item: it, start: t,
+		key: key, id: hex.EncodeToString(raw[:]), dir: dir, item: it, start: t, q: q,
 		cancel: cancel, ready: make(chan struct{}), used: h.seq, last: time.Now(),
 	}
 	s.converting = true
@@ -629,9 +634,25 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 	// again must not leave a second watcher reading the dead attempt's
 	// playlist beside the new one.
 	go h.watchFirst(cctx, s)
-	go h.run(cctx, s, it, t, copyVideo, audio)
+	go h.run(cctx, s, it, t, copyVideo, audio, q)
 	go h.reap(cctx, s)
 	return h.await(ctx, s)
+}
+
+// hlsKey is what a session is: the film, the file it was when the session
+// was made, where it starts, what is converted, which soundtrack — and which
+// rung of the bitrate ladder. The soundtrack is part of it because two
+// viewers watching one film in different languages are watching two
+// conversions, and the rung for the same reason: a viewer who moved down
+// the ladder must not be handed the session made before they did. The rung
+// is last, so a key written before there was one still reads back
+// (hlsSessionItem takes the start from the fourth field).
+func hlsKey(it library.Item, t float64, copyVideo bool, audio string, q quality) string {
+	mode := "full"
+	if copyVideo {
+		mode = "audio"
+	}
+	return fmt.Sprintf("%s|%d|%d|%.3f|%s|%s|q%d", it.ID, it.ModTime, it.Size, t, mode, audio, q.kbps)
 }
 
 // await blocks until the session has something to play, or the caller leaves.
@@ -876,9 +897,9 @@ func (h *HLS) forget(s *hlsSession) {
 // delivered as segments — made again where an attempt taught something
 // (the aspect repair, the hardware written off), and judged only once the
 // last attempt has had its turn.
-func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) {
+func (h *HLS) run(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string, q quality) {
 	for attempt := 1; ; attempt++ {
-		switch h.attempt(ctx, s, it, t, copyVideo, audio) {
+		switch h.attempt(ctx, s, it, t, copyVideo, audio, q) {
 		case attemptAbandoned:
 			return
 		case attemptAgain:
@@ -951,7 +972,7 @@ const (
 
 // attempt is one ffmpeg over the session: planned, run, and read for what
 // stopped it.
-func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string) attemptOutcome {
+func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t float64, copyVideo bool, audio string, q quality) attemptOutcome {
 	// Read once, and read again nowhere: this run either went through the
 	// repair or it did not, and the retry below is about that. Asked of the
 	// verdict a second time, the answer could be another goroutine's — a
@@ -960,7 +981,7 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 	// have worked was refused on the strength of a repair this run never
 	// made.
 	repaired := aspects.has(it)
-	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, repaired, h.log)
+	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, q, repaired, h.log)
 	if err != nil {
 		s.fail(err)
 		h.forget(s)

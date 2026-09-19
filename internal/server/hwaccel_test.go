@@ -62,7 +62,7 @@ func TestHardwareKeepsFramesWhereTheyAre(t *testing.T) {
 // system memory, which these are not — and only where the file says it is
 // needed, which is what auto=1 means.
 func TestHardwareScalesAndDoesNotDeinterlace(t *testing.T) {
-	args := videoEngines[0].encode("/dev/dri/renderD128", 1920, "")
+	args := videoEngines[0].encode("/dev/dri/renderD128", 1920, quality{}, "")
 	var vf string
 	for i, a := range args {
 		if a == "-vf" && i+1 < len(args) {
@@ -119,7 +119,7 @@ func TestEveryEngineIsWellFormed(t *testing.T) {
 					t.Errorf("%q is not safe to send to hardware", bad)
 				}
 			}
-			args := strings.Join(e.encode("/dev/x", 1920, ""), " ")
+			args := strings.Join(e.encode("/dev/x", 1920, quality{}, ""), " ")
 			if !strings.Contains(args, "-c:v") {
 				t.Error("no encoder")
 			}
@@ -182,8 +182,8 @@ func TestHardwareOnlyWhereSoftwareCannotCope(t *testing.T) {
 // front of a picture that is already BT.709 would drain the colour out of
 // every ordinary film.
 func TestHardwareToneMapsOnlyWideColour(t *testing.T) {
-	plain := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, ""), " ")
-	wide := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, tonemapSoftware), " ")
+	plain := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, quality{}, ""), " ")
+	wide := strings.Join(videoEngines[0].encode("/dev/dri/renderD128", 1920, quality{}, tonemapSoftware), " ")
 	if strings.Contains(plain, "tonemap") {
 		t.Errorf("an ordinary picture is tone-mapped: %s", plain)
 	}
