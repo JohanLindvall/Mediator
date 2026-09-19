@@ -388,47 +388,58 @@ func run(cfg config, log *slog.Logger) error {
 		}
 	}()
 
-	if cfg.rescan > 0 {
-		go func() {
+	// The safety-net walk: on a timer, and after the watcher has said it
+	// lost events. The two are one function, since a walk that answers a
+	// loss is a completed scan like any other and owes the same prune and
+	// the same reading pass.
+	rescanNow := func() {
+		scanGate.Lock()
+		lib.Scan(watcher.AddDir)
+		// A completed scan, like the first: what it found gone is gone from
+		// the caches and the records too.
+		pruneAll()
+		scanGate.Unlock()
+		// And what it found *arrived* is read, which nothing did before.
+		// Only two things ever read a file's tags: the sweep here, which
+		// used to run once per process, and the watcher's debounced read on
+		// the events for that file. So a file the watcher did not see — a
+		// directory created and filled inside the window before its watch
+		// exists, past what the settle walks cover; a tree moved in while
+		// the queue was draining; anything under a directory whose watch
+		// could not be installed — was indexed by this walk and then never
+		// opened: no duration, no codecs, no shape, until the process was
+		// restarted. Measured on a live library: four videos sitting in the
+		// listing with no playing time on them, hours after they finished
+		// arriving, each readable by ffprobe in a tenth of a second. The
+		// pass is a walk of the index and a return where nothing needs
+		// reading, so a rescan that found nothing new costs nothing.
+		//
+		// Outside the gate deliberately: it yields to playback and to the
+		// thumbnailer and can take a while on a big arrival, and the next
+		// walk must not queue behind it.
+		lib.EnrichMeta(ctx, busy)
+	}
+	go func() {
+		// With -rescan 0 the timer never fires and only a loss walks: the
+		// operator asked for no walks on a clock, not for a library that
+		// stays wrong about what it was never told.
+		var tick <-chan time.Time
+		if cfg.rescan > 0 {
 			t := time.NewTicker(cfg.rescan)
 			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					scanGate.Lock()
-					lib.Scan(watcher.AddDir)
-					// A completed scan, like the first: what it found gone
-					// is gone from the caches and the records too.
-					pruneAll()
-					scanGate.Unlock()
-					// And what it found *arrived* is read, which nothing did
-					// before. Only two things ever read a file's tags: the
-					// sweep here, which used to run once per process, and the
-					// watcher's debounced read on the events for that file.
-					// So a file the watcher did not see — a directory created
-					// and filled inside the window before its watch exists,
-					// past what the settle walks cover; a tree moved in while
-					// the queue was draining; anything under a directory
-					// whose watch could not be installed — was indexed by
-					// this walk and then never opened: no duration, no
-					// codecs, no shape, until the process was restarted.
-					// Measured on a live library: four videos sitting in the
-					// listing with no playing time on them, hours after they
-					// finished arriving, each readable by ffprobe in a tenth
-					// of a second. The pass is a walk of the index and a
-					// return where nothing needs reading, so a rescan that
-					// found nothing new costs nothing.
-					//
-					// Outside the gate deliberately: it yields to playback
-					// and to the thumbnailer and can take a while on a big
-					// arrival, and the next walk must not queue behind it.
-					lib.EnrichMeta(ctx, busy)
-				}
+			tick = t.C
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick:
+				rescanNow()
+			case <-watcher.Lost():
+				rescanNow()
 			}
-		}()
-	}
+		}
+	}()
 
 	dist, err := fs.Sub(distFS, "web/dist")
 	if err != nil {

@@ -2,21 +2,27 @@ package library
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/fsnotify/fsnotify"
 )
 
-// Watcher keeps the library in sync with filesystem changes using fsnotify.
-// Watches are installed recursively on every directory under the roots.
+// Watcher keeps the library in sync with filesystem changes, as the
+// operating system reports them (fswatch.go). Watches are installed
+// recursively on every directory under the roots.
 type Watcher struct {
 	lib *Library
-	fsw *fsnotify.Watcher
+	fsw fsBackend
+	// lost is signalled once a run of lost events has ended: the kernel's
+	// queue overflowed, so something happened that nobody was told about,
+	// and a walk is the only way to learn what. Buffered by one and never
+	// blocked on, so a burst that ends while a walk is already running is
+	// one more walk and not a queue of them.
+	lost chan struct{}
 
 	mu      sync.Mutex
 	settles int // re-walks outstanding, so a mass move cannot spawn timers without end
@@ -52,14 +58,31 @@ var settleWalks = []time.Duration{5 * time.Second, 30 * time.Second, 2 * time.Mi
 // what it is for.
 const maxSettles = 512
 
-// NewWatcher creates the underlying fsnotify watcher.
+// NewWatcher creates the underlying watcher.
 func NewWatcher(lib *Library) (*Watcher, error) {
-	fsw, err := fsnotify.NewWatcher()
+	fsw, err := newFSBackend()
 	if err != nil {
 		return nil, err
 	}
-	return &Watcher{lib: lib, fsw: fsw, timers: map[int64]*time.Timer{}}, nil
+	return newWatcherOn(lib, fsw), nil
 }
+
+// newWatcherOn is NewWatcher over a given backend, which is how a test hands
+// it one that reports what the test says.
+func newWatcherOn(lib *Library, fsw fsBackend) *Watcher {
+	return &Watcher{lib: lib, fsw: fsw, timers: map[int64]*time.Timer{}, lost: make(chan struct{}, 1)}
+}
+
+// Lost is signalled after a run of lost events. The walk that answers it is
+// main's to run, since a walk and the pruning after it are one operation
+// under a gate this package does not hold.
+func (w *Watcher) Lost() <-chan struct{} { return w.lost }
+
+// overflowQuiet is how long after the last overflow a burst is taken to have
+// ended, and the walk that answers it worth starting: while a burst lasts
+// events are still being lost, and a walk made during it would be stale by
+// the time it finished. A variable so a test need not wait it out.
+var overflowQuiet = 10 * time.Second
 
 // AddDir installs a watch on a single directory. Errors (e.g. inotify limits)
 // are logged, not fatal — the periodic rescan still picks changes up.
@@ -98,8 +121,8 @@ func (w *Watcher) Reset() {
 
 // eventQueue is how many events wait here while the work behind them is done.
 //
-// fsnotify's inotify backend hands events over on an unbuffered channel, so
-// whoever consumes them is what keeps the kernel's own queue drained — and
+// The backend hands events over on an unbuffered channel, so whoever
+// consumes them is what keeps the kernel's own queue drained — and
 // the work behind one event is not small: a recursive walk of a directory
 // moved in wholesale, or a reparse of every volume of an eighty-nine part
 // set, which is seconds of disk while the writer that caused it goes on
@@ -120,7 +143,7 @@ func (w *Watcher) Run(ctx context.Context) {
 	// walk armed two minutes ago. This runs after the worker has stopped
 	// (the defer below), so nothing can arm another behind it.
 	defer w.lib.stopMemberReads()
-	events := make(chan fsnotify.Event, eventQueue)
+	events := make(chan fsEvent, eventQueue)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -132,11 +155,21 @@ func (w *Watcher) Run(ctx context.Context) {
 		close(events)
 		<-done
 	}()
+	// A run of overflows is reported as one thing: a line when it begins
+	// and a line when it ends, with the count — not a line per overflow,
+	// which at eight a second for three hours was the log. The kernel
+	// reports one overflow per fill of its queue, so the count is how many
+	// times it filled, not how many events went.
+	quiet := time.NewTimer(time.Hour)
+	quiet.Stop()
+	defer quiet.Stop()
+	overflows := 0
+	var since time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case ev, ok := <-w.fsw.Events:
+		case ev, ok := <-w.fsw.Events():
 			if !ok {
 				return
 			}
@@ -145,18 +178,35 @@ func (w *Watcher) Run(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			}
-		case err, ok := <-w.fsw.Errors:
+		case err, ok := <-w.fsw.Errors():
 			if !ok {
 				return
 			}
-			w.lib.log.Warn("watcher error", "err", err)
+			if !errors.Is(err, errEventOverflow) {
+				w.lib.log.Warn("watcher error", "err", err)
+				continue
+			}
+			if overflows == 0 {
+				since = time.Now()
+				w.lib.log.Warn("filesystem events are being lost: the kernel's queue overflowed; a walk follows once it stops")
+			}
+			overflows++
+			quiet.Reset(overflowQuiet)
+		case <-quiet.C:
+			w.lib.log.Info("filesystem events were lost; walking the directories to find what was missed",
+				"overflows", overflows, "over", time.Since(since).Round(time.Second))
+			overflows = 0
+			select {
+			case w.lost <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
 
 // work does what each event asks for, one at a time and in the order they
-// arrived: a Create and the Write that follows it must not be reordered.
-func (w *Watcher) work(ctx context.Context, events <-chan fsnotify.Event) {
+// arrived: a Create and the close that follows it must not be reordered.
+func (w *Watcher) work(ctx context.Context, events <-chan fsEvent) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -170,14 +220,14 @@ func (w *Watcher) work(ctx context.Context, events <-chan fsnotify.Event) {
 	}
 }
 
-func (w *Watcher) handle(ev fsnotify.Event) {
+func (w *Watcher) handle(ev fsEvent) {
 	path := filepath.Clean(ev.Name)
 	base := filepath.Base(path)
 	if strings.HasPrefix(base, ".") {
 		return
 	}
 	switch {
-	case ev.Op.Has(fsnotify.Create):
+	case ev.Op.Has(fsCreate):
 		if isDir(path) {
 			// New directory: watch it and index anything already inside
 			// (e.g. a directory moved in wholesale).
@@ -185,13 +235,17 @@ func (w *Watcher) handle(ev fsnotify.Event) {
 		} else {
 			w.lib.AddFile(path)
 		}
-	case ev.Op.Has(fsnotify.Remove) || ev.Op.Has(fsnotify.Rename):
+	case ev.Op.Has(fsRemove):
 		w.lib.Remove(path)
-	case ev.Op.Has(fsnotify.Write):
-		// Content changed: refresh size/mtime. Writers often emit many Write
-		// events; upsert is cheap and notify is coalesced downstream.
+	case ev.Op.Has(fsWrite):
+		// A writer closed the file: its size and time are worth reading
+		// now, and its contents are as settled as a close makes them. On
+		// Linux this is the only word about a file's contents there is —
+		// individual writes are deliberately not watched (fswatch.go);
+		// elsewhere it arrives per write, and upsert is cheap enough for
+		// that.
 		w.lib.AddFile(path)
-	case ev.Op.Has(fsnotify.Chmod):
+	case ev.Op.Has(fsChmod):
 		// Attributes changed, which for our purposes means the mtime: every
 		// tool that preserves timestamps stamps them after the copy, and the
 		// mtime is part of what an item is here — it keys the metadata cache,

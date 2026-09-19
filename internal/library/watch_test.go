@@ -2,8 +2,10 @@ package library
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -131,4 +133,79 @@ func TestWatcherNoticesAStampedTime(t *testing.T) {
 		items := l.List(Query{Limit: 5}).Items
 		return len(items) == 1 && items[0].ModTime == stamp.UnixMilli()
 	})
+}
+
+// fakeBackend reports what a test says.
+type fakeBackend struct {
+	events chan fsEvent
+	errs   chan error
+	once   sync.Once
+}
+
+func newFakeBackend() *fakeBackend {
+	return &fakeBackend{events: make(chan fsEvent), errs: make(chan error)}
+}
+
+func (f *fakeBackend) Add(string) error       { return nil }
+func (f *fakeBackend) Remove(string) error    { return nil }
+func (f *fakeBackend) WatchList() []string    { return nil }
+func (f *fakeBackend) Events() <-chan fsEvent { return f.events }
+func (f *fakeBackend) Errors() <-chan error   { return f.errs }
+func (f *fakeBackend) Close() error {
+	f.once.Do(func() {
+		close(f.events)
+		close(f.errs)
+	})
+	return nil
+}
+
+// A run of overflows is one loss, reported once it ends: a burst that lasted
+// three hours used to be a warning eight times a second, and nothing walked
+// afterwards to find what the burst had hidden.
+func TestLostEventsAreReportedOncePerBurstAndAnsweredWithAWalk(t *testing.T) {
+	old := overflowQuiet
+	overflowQuiet = 100 * time.Millisecond
+	t.Cleanup(func() { overflowQuiet = old })
+
+	l := quietLib(t.TempDir())
+	fb := newFakeBackend()
+	w := newWatcherOn(l, fb)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go w.Run(ctx)
+
+	// Three overflows in quick succession, inside one burst.
+	for range 3 {
+		fb.errs <- errEventOverflow
+		time.Sleep(20 * time.Millisecond)
+	}
+	select {
+	case <-w.Lost():
+		t.Fatal("a loss was announced while the burst was still going")
+	default:
+	}
+	select {
+	case <-w.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the burst ended and nothing was announced")
+	}
+	select {
+	case <-w.Lost():
+		t.Fatal("one burst was announced twice")
+	case <-time.After(200 * time.Millisecond):
+	}
+	// A later burst is a later loss.
+	fb.errs <- errEventOverflow
+	select {
+	case <-w.Lost():
+	case <-time.After(2 * time.Second):
+		t.Fatal("a second burst was not announced")
+	}
+	// Any other error is only logged, and never announced as a loss.
+	fb.errs <- errors.New("something else")
+	select {
+	case <-w.Lost():
+		t.Fatal("an ordinary error was announced as lost events")
+	case <-time.After(300 * time.Millisecond):
+	}
 }

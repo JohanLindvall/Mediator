@@ -577,7 +577,16 @@ Go binary with the TypeScript frontend embedded.
   this removed 355 duplicate entries.
 - **Live library** — directories are scanned recursively and watched with
   inotify; new/changed/deleted files stream to the UI over server-sent events.
-  A periodic rescan (default 10 min) acts as a safety net. What the kernel
+  A periodic rescan (default 10 min) acts as a safety net. **A file is taken
+  up when its writer closes it**, not on every write: a watch that reports
+  writes reports one per write call, at whatever size the writer chooses —
+  measured here, a downloader writing 46 bytes a call made 464,000 events a
+  second, overflowed the kernel's queue eight times a second and cost a
+  whole core for hours, for files that were not even media. So a file still
+  being written shows the size it had when it appeared until its writer
+  closes it or the next rescan measures it. When the kernel does overflow,
+  the loss is logged once per burst and answered with a walk once the burst
+  ends, `-rescan 0` or not. What the kernel
   reports is taken off it immediately and acted on behind it, because the
   work behind a single event is not small — a recursive walk of a directory
   moved in whole, or a re-read of every volume of an eighty-nine part set —
@@ -993,7 +1002,7 @@ Multiple libraries: mount them and list them —
 
 The image answers Docker's health check from `/api/info`, which is served
 the moment the listener is bound, before any scan. It includes `ffmpeg` for
-video thumbnails. Watching relies on inotify;
+video thumbnails. Watching relies on inotify, spoken directly on Linux;
 for very large trees raise `fs.inotify.max_user_watches` on the host.
 
 ## Troubleshooting

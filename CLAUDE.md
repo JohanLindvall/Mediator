@@ -467,6 +467,43 @@ Change propagation is the core loop:
   them after the copy, and the mtime is part of what an item *is* here — it
   keys the metadata cache, the grid cell and the thumbnail URL — so a
   `Chmod` event re-reads the file rather than being dropped.
+  **A write is not an event; a close is** (`fswatch.go`, `fswatch_linux.go`).
+  The watcher used to subscribe to `IN_MODIFY`, which is one event per
+  `write()` call at whatever size the writer chooses — decided by other
+  people's programs. Measured: a downloader of the owner's own, writing
+  three files at 21 MB/s in calls of about 46 bytes, made **464,000 events a
+  second**; the kernel's queue of 16,384 filled eight times a second for
+  three hours, every fill a `Q_OVERFLOW` that dropped whatever else had
+  happened, and this process spent a whole core (108%) discarding events
+  for `.part` files that were never media, logging the overflow five hundred
+  times a minute. Merging in the kernel cannot help — it folds an event only
+  into an identical one at the tail of the queue, and three files alternate.
+  fsnotify's public API cannot choose the mask (`WithOps` is unexported in
+  every released version, v1.10.1 included), so on Linux inotify is spoken
+  directly: `IN_CLOSE_WRITE` for a file whose writer closed it, `IN_ATTRIB`,
+  `IN_CREATE`/`IN_MOVED_TO`, `IN_DELETE`/`IN_MOVED_FROM`/`*_SELF`, and
+  `IN_ONLYDIR` so a watch on a file is refused rather than made. Other
+  platforms keep fsnotify behind the same four-word interface (`fsBackend`),
+  where a write arrives per write and is treated as a close. The descriptor
+  is opened non-blocking and wrapped as a pollable `os.File`, so the reader
+  waits in the runtime's poller and `Close` wakes it; the raw number is kept
+  beside it for the watch calls, since `File.Fd()` would put the descriptor
+  back into blocking mode and take the poller away. What this costs is the
+  live size of a file still being written — a torrent landing used to grow
+  in the listing with every burst, moving the plain version 45 times a
+  second — which now settles when the writer closes it or at the next
+  rescan, whichever comes first; the enrichment debounce (below) now fires
+  on closes and stamps rather than on every pause in a write stream, which
+  reads fewer half-written files.
+  **A run of lost events is one loss, said once and answered with a walk.**
+  `Q_OVERFLOW` means the kernel dropped events nobody will ever see, so the
+  only honest answer is a walk — and a walk *during* a burst would be stale
+  by the time it finished. `Run` logs the start of a burst, counts the
+  overflows, and `overflowQuiet` (10 s) after the last one logs the count
+  and signals `Watcher.Lost()`; `main`'s rescan goroutine walks on that as
+  it walks on the ticker, through one `rescanNow`, and with `-rescan 0` the
+  loss still walks, since the operator asked for no walks on a clock, not
+  for a library that stays wrong about what it was never told.
   **Reconciliation stats outside the lock**: the paths a walk did not see are
   gathered under a read lock, checked against the disk with no lock held —
   a mass disappearance on a slow or unmounted disk used to stall every
@@ -515,11 +552,13 @@ Change propagation is the core loop:
   the kind of fault nobody can reproduce).
   **The watcher's enrichment is debounced** (`enrichAfterQuiet`,
   `enrichQuiet` 2 s — a variable only so the tests need not wait it out): a
-  file being written — a torrent landing — emits a stream of Write events,
-  and a tag-read goroutine per event was an unbounded number of readers on a
-  file that was about to change again anyway. The read happens once, after
-  the writer goes quiet, and still notifies when it lands, which is the
-  watcher paths' publish contract.
+  file being written — a torrent landing — emitted a stream of Write events
+  when writes were watched, and a tag-read goroutine per event was an
+  unbounded number of readers on a file that was about to change again
+  anyway. The read happens once, after the events go quiet — which on Linux
+  now means after the last close or stamp, a release copied in being one
+  close per file — and still notifies when it lands, which is the watcher
+  paths' publish contract.
   **Every event arms a fresh timer** rather than resetting the one in the map.
   `Reset` cannot tell a timer that is still waiting from one that has already
   fired and is merely blocked on the mutex, so re-arming the second put a
@@ -546,7 +585,7 @@ Change propagation is the core loop:
   anything at all. What going ahead costs is one file's tag read against a
   film that has been playing for half a minute; what waiting for ever costs is
   a library that never learns what arrived while somebody was watching.
-  **The event loop does not do the work.** fsnotify's inotify backend hands
+  **The event loop does not do the work.** The backend hands
   events over on an unbuffered channel, so whoever consumes them is what keeps
   the kernel's own queue drained — while the work behind one event is a
   recursive walk of a directory moved in wholesale, or a reparse of every
@@ -554,7 +593,7 @@ Change propagation is the core loop:
   reading the descriptor, and what the kernel cannot queue it drops: a Create
   nobody will ever report again. `Run` now does nothing but take events; one
   worker does the work behind them **in the order they arrived** (a Create and
-  the Write that follows it must not be reordered), over a buffer of
+  the close that follows it must not be reordered), over a buffer of
   `eventQueue` (4096) — generous rather than unbounded, since a full one still
   blocks. Shutdown closes the queue and waits for the worker to put down
   whatever it is holding, then stops the pending container reads, then the
