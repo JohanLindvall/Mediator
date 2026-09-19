@@ -28,7 +28,7 @@ import (
 // Raising it is how a new fact learned from the same header — the frame rate
 // was the first — reaches the files that were read before it existed: every
 // record below this is read again, once, and written back at this number.
-const shapeVersion = 2
+const shapeVersion = 3
 
 // imageSize reads a still's dimensions, as they are stored.
 //
@@ -84,22 +84,22 @@ func codecOfSampleFormat(format string) string {
 // codec is what is already known, and is handed back unchanged unless nothing
 // knew it: a probe's answer is the better one, this being a translation of a
 // four-character code into the name a probe would have used.
-func shapeOf(it Item, codec string) (width, height int, vcodec string, fps float64) {
+func shapeOf(it Item, codec string) (width, height int, vcodec string, fps float64, moovLate bool) {
 	switch it.Kind {
 	case KindImage:
 		w, h := imageSize(it)
-		return w, h, codec, 0
+		return w, h, codec, 0, false
 	case KindVideo:
-		format, w, h, _, rate := SampleInfo(it)
+		format, w, h, _, rate, late := SampleInfo(it)
 		if w == 0 {
-			return 0, 0, codec, 0
+			return 0, 0, codec, 0, false
 		}
 		if codec == "" {
 			codec = codecOfSampleFormat(format)
 		}
-		return w, h, codec, rate
+		return w, h, codec, rate, late
 	}
-	return 0, 0, codec, 0
+	return 0, 0, codec, 0, false
 }
 
 // soundtrackOf is the same walk asked about the sound, for a film whose
@@ -108,7 +108,7 @@ func soundtrackOf(it Item) string {
 	if it.Kind != KindVideo {
 		return ""
 	}
-	_, _, _, audio, _ := SampleInfo(it)
+	_, _, _, audio, _, _ := SampleInfo(it)
 	return codecOfSampleFormat(audio)
 }
 

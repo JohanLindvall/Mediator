@@ -36,7 +36,7 @@ func TestVideoSampleInfoReadsThePictureSize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		format, w, h, _, _ := SampleInfo(Item{Path: path, Size: info.Size()})
+		format, w, h, _, _, _ := SampleInfo(Item{Path: path, Size: info.Size()})
 		if format != "avc1" {
 			t.Errorf("%s: label %q, want avc1", size, format)
 		}
@@ -95,7 +95,7 @@ func TestSampleInfoReadsTheFrameRate(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, _, _, _, got := SampleInfo(Item{Path: path, Size: info.Size()})
+		_, _, _, _, got, _ := SampleInfo(Item{Path: path, Size: info.Size()})
 		out, err := exec.Command(FFprobePath(), "-v", "error", "-select_streams", "v:0",
 			"-show_entries", "stream=avg_frame_rate", "-of", "csv=p=0", path).Output()
 		if err != nil {

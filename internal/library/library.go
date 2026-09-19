@@ -130,6 +130,19 @@ type Item struct {
 	// stream that claims to be HDR is refused outright by some players, and
 	// a 4K release converted without this played nowhere on a phone.
 	HDR bool `json:"hdr,omitempty"`
+	// MoovLate says the MP4's index (`moov`) sits after its data (`mdat`),
+	// which is how a recorder writes a file — the index is not known until
+	// the recording ends. Such a file cannot be played progressively: nothing
+	// decodes until the last bytes have been fetched, so a browser handed
+	// one over a link first reads the head, then the tail, then starts, and
+	// Safari on a phone hunts. Measured on one such file over a tunnel: 907
+	// requests and eleven times the file's size crossing the link to watch it
+	// once, 284 of the requests under a hundred kilobytes. Read from the box
+	// tree by the shape pass, stored with the shape, and what makes such a
+	// file worth the rewrap — a copy with the index moved to the front,
+	// which is exactly what `-movflags +faststart` does and the only thing a
+	// copy can fix about a file the browser already opens.
+	MoovLate bool `json:"moovLate,omitempty"`
 
 	// The owner's judgement, stamped on by List and Get. Held beside the
 	// index (see annotate.go), not on the indexed item, because a flag
@@ -714,7 +727,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 // file does. Caller must hold l.mu.
 func (it *Item) forgetContent() {
 	it.Duration, it.VCodec, it.ACodec = 0, "", ""
-	it.Width, it.Height, it.FPS, it.HDR = 0, 0, 0, false
+	it.Width, it.Height, it.FPS, it.HDR, it.MoovLate = 0, 0, 0, false, false
 	it.Tracks, it.EmbSubs = nil, nil
 	it.enriched, it.probed, it.shape = false, false, 0
 }
@@ -986,6 +999,9 @@ func (l *Library) setProbe(id string, p Probe) {
 	if p.FPS > 0 {
 		it.FPS = p.FPS
 	}
+	// Only the box reading says so, and nothing but a change of file unsays
+	// it: an ffprobe of the same file carries false for a fact it never read.
+	it.MoovLate = it.MoovLate || p.MoovLate
 	if p.Probed || p.HDR {
 		// A probe that ran is the whole truth about the colour, false
 		// included: a file replaced on disk may be the ordinary-colour

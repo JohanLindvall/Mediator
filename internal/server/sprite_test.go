@@ -139,15 +139,22 @@ func TestSpriteFrameArgs(t *testing.T) {
 // writeClip writes a real (tiny) video of the given length, or skips the
 // test: ffmpeg is optional at runtime, so the tests that need it are optional
 // too.
-func writeClip(t *testing.T, path string, seconds int) {
+//
+// extra is handed to the muxer before the output: ffmpeg writes an MP4's
+// index at the end unless told otherwise, exactly as a recorder does, so a
+// clip built here has its index at the back and "-movflags +faststart" is
+// how a test asks for the ordinary front-indexed kind.
+func writeClip(t *testing.T, path string, seconds int, extra ...string) {
 	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg not installed")
 	}
-	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration="+strconv.Itoa(seconds),
-		"-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y", path)
+	args := []string{"-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration=" + strconv.Itoa(seconds),
+		"-c:v", "mpeg4", "-pix_fmt", "yuv420p"}
+	args = append(args, extra...)
+	cmd := exec.Command(ffmpeg, append(args, "-y", path)...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Skipf("ffmpeg could not build a test clip: %v: %s", err, out)
 	}

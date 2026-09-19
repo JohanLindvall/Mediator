@@ -68,7 +68,7 @@ func TestVideoSampleFormat(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			r := newBytesReaderAt(c.data)
-			if got, _, _, _, _ := sampleInfo(r, int64(len(c.data))); got != c.want {
+			if got, _, _, _, _, _ := sampleInfo(r, int64(len(c.data))); got != c.want {
 				t.Fatalf("sample format = %q, want %q", got, c.want)
 			}
 		})

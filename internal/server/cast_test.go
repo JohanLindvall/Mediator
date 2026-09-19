@@ -199,3 +199,17 @@ func TestASoundtrackNoSetDecodesIsConvertedFirst(t *testing.T) {
 		t.Error("a picture no MP4 can hold was sent through the sound copy")
 	}
 }
+
+// A native MP4 is not rewrapped for its container — the browser opens it —
+// but it is for its index, where that sits behind the data: the copy asks
+// for faststart, which is exactly the thing that moves it to the front.
+func TestAnIndexAtTheBackIsWorthTheCopy(t *testing.T) {
+	it := library.Item{Name: "a clip.mp4", Kind: library.KindVideo, VCodec: "h264", ACodec: "aac", Path: "/nowhere/a clip.mp4"}
+	if remuxable(it) {
+		t.Error("an ordinary MP4 was offered a copy that would hand back the same file")
+	}
+	it.MoovLate = true
+	if !remuxable(it) {
+		t.Error("an MP4 whose index sits behind its data was refused the copy that moves it")
+	}
+}

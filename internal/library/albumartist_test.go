@@ -217,7 +217,7 @@ func TestShapeBackfillsWhatTheBoxTreeCannotRead(t *testing.T) {
 		Size: info.Size(), ModTime: info.ModTime().UnixMilli()}
 
 	// What the native reader makes of it: nothing, which is the premise.
-	if w, _, _, _ := shapeOf(it, ""); w != 0 {
+	if w, _, _, _, _ := shapeOf(it, ""); w != 0 {
 		t.Fatalf("the box tree read %d out of a Matroska file", w)
 	}
 	// And what a probe makes of it, which is what the backfill takes.

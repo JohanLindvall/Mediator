@@ -183,6 +183,22 @@ export const REWRAP_WAIT_LIMIT = 2 * 1024 * 1024 * 1024;
  * while that is the better trade; below the limit, waiting a moment for the
  * real thing is not.
  */
+/**
+ * Whether a file the browser opens should nonetheless start as the rewrap,
+ * because its index sits behind its data.
+ *
+ * A recorder writes the MP4 index after the data — it is not known until
+ * the recording ends — and such a file cannot be played progressively: a
+ * browser fetches the head, then the tail, then starts, and Safari on a
+ * phone hunts (measured: 907 requests and eleven times the file's size to
+ * watch it once over a tunnel). The rewrap moves the index to the front for
+ * the price of a copy at disk speed, kept for next time; whether that wait
+ * is worth it is the same question the container rewrap already answers.
+ */
+export function wantsFaststart(o: { moovLate?: boolean; size: number }, hasNativeHLS: boolean): boolean {
+  return !!o.moovLate && rewrapWorthTheWait(o.size, hasNativeHLS);
+}
+
 export function rewrapWorthTheWait(size: number, hasNativeHLS: boolean): boolean {
   if (!hasNativeHLS) return true;
   return size > 0 && size <= REWRAP_WAIT_LIMIT;

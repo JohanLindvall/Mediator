@@ -13,32 +13,7 @@ import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import {
-  castStep,
-  shouldSave,
-  audioSilent,
-  PLAYER_KEYS, endedOnSet,
-  REWRAP_WAIT_LIMIT,
-  decodesAudio,
-  decodesHEVC,
-  decodesVideo,
-  nativeHLS,
-  opensDirectly,
-  cropScale,
-  pickAudioTrack,
-  pictureRoute,
-  playButtonIcon,
-  playsOnReceiver,
-  readFault,
-  resumeStart,
-  watchState,
-  START_FLOOR_S,
-  WATCHED_FRACTION,
-  trackLabel,
-  rewrapWorthTheWait,
-  tapChoice,
-  menuShift,
-} from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -783,4 +758,15 @@ test('preview: a frame is fitted at its own shape, and the window is one frame',
   // rather than dividing by zero.
   assert.equal(fitFrame({ width: 0, height: 146 }, { width: 1600, height: 1140 }, grid), null);
   assert.equal(fitFrame({ width: 260, height: 146 }, { width: 0, height: 0 }, grid), null);
+});
+
+test('route: a file whose index sits behind its data opens as the rewrap', () => {
+  // The rewrap's own wait rule still applies: a browser with no native HLS
+  // always waits, one with it waits up to a size.
+  assert.equal(wantsFaststart({ moovLate: true, size: 762_000_000 }, false), true);
+  assert.equal(wantsFaststart({ moovLate: true, size: 762_000_000 }, true), true);
+  assert.equal(wantsFaststart({ moovLate: true, size: 40 * 2 ** 30 }, true), false, 'past the wait limit HLS is the better trade');
+  // An index at the front is the ordinary file, and plays as one.
+  assert.equal(wantsFaststart({ moovLate: false, size: 762_000_000 }, false), false);
+  assert.equal(wantsFaststart({ size: 762_000_000 }, false), false, 'unread is not late');
 });

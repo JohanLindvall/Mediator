@@ -43,6 +43,11 @@ type Probe struct {
 	// what comes out is an H.264 stream claiming to be HDR, which a player
 	// is entitled to refuse and Safari does.
 	HDR bool
+	// MoovLate says the container's index follows its data, read off the box
+	// tree by the shape pass (never by ffprobe, which does not say). Only a
+	// reading of the box tree can set it and only forgetContent clears it,
+	// so a later ffprobe of the same file cannot wipe it.
+	MoovLate bool
 	// Tracks is every soundtrack the file carries, in ffmpeg's own order.
 	Tracks []AudioTrack
 	// Subs is every text subtitle stream, ditto. Bitmap subtitles are left

@@ -1609,7 +1609,13 @@ Change propagation is the core loop:
   its own extension: raising `shapeVersion` is how a new fact read from the
   same header reaches the files already read. The frame rate was the first
   such fact, added within the hour of the size, and without the number it
-  would have reached only files the library had never seen.
+  would have reached only files the library had never seen. **Where the
+  index sits** is the second (`Item.MoovLate`, `shapeVersion` 3): the walk
+  that finds the `moov` for the shape passes the `mdat` on the way when the
+  file was written by a recorder, and that one bit is what decides whether
+  a file the browser already opens is still worth a copy. Only the box
+  reading sets it and only a change of file clears it — the ffprobe that
+  runs when a film is opened carries no such fact and must not wipe one.
   The marker is in **both** places a file's state is remembered — the
   metadata record and the mirrored index (`blob.Item.Shape`) — and
   `needsEnrich` consults it. **Every writer of the record carries it**:
@@ -4011,7 +4017,21 @@ Serving details worth knowing before "fixing" them:
   decoders take only `hvc1` and ffmpeg writes `hev1` unless told otherwise,
   so an iPhone that decodes the stream in hardware would not start it, and
   the player, seeing nothing decoded, re-encoded every frame of the film to
-  correct four bytes. That rewrap adds `-tag:v hvc1` and copies. Which case
+  correct four bytes. That rewrap adds `-tag:v hvc1` and copies. The
+  **third** is a file already in the right container with its **index at
+  the back**: a phone records the `moov` after the `mdat`, since the index
+  is not known until the recording ends, and such a file cannot be played
+  progressively — nothing decodes until the last bytes have been fetched. A
+  browser handed one over a link reads the head, then the tail, then starts;
+  Safari on a phone *hunts*. Measured on one such file watched once over the
+  tunnel: **907 requests and eleven times the file's size** crossing the
+  link, 284 of the requests under a hundred kilobytes, and a playback that
+  stalled throughout. The copy already asks for `+faststart`, which is
+  exactly the thing that moves the index to the front, so `remuxable` says
+  yes for such a file and the player opens it as the rewrap
+  (`wantsFaststart` in `playback.ts`, tested) — up front where the listing
+  already carries the fact, and from `useKnownCodecs` where it arrives with
+  the item. The wait is bounded by the same rule as any rewrap. Which case
   applies is read from the file itself (`library.VideoSampleFormat`,
   `mp4box.go`): the video sample entry's four-character code, a handful of
   reads down the box tree in pure Go rather than an ffprobe, since the answer

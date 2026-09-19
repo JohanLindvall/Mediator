@@ -61,6 +61,7 @@ import {
   resumeStart,
   playsOnReceiver,
   rewrapWorthTheWait,
+  wantsFaststart,
   type CropBox,
 } from './playback';
 import { forget, recall, remember } from './remember';
@@ -1141,6 +1142,11 @@ class VideoOverlay {
    */
   private useKnownCodecs(): void {
     if (this.closed || this.remuxed || this.faulted) return;
+    // The index's position arrives with the item where the listing did not
+    // carry it yet, and a copy is the whole answer: asked before the codec
+    // questions, since tryRemux is once per file and a conversion started
+    // below would refuse it.
+    if (wantsFaststart(this.item, playsHLS()) && this.tryRemux()) return;
     // The order of the questions is plannedRoute's, tested. A conversion
     // already running is left alone by fallbackToTranscode, except that
     // the audio mode is escalated to the full one — which is what the
@@ -1672,9 +1678,15 @@ class VideoOverlay {
     // letting the fallback run. Start where it was going to end up.
     const direct = this.opensDirectly(item);
     if (direct) {
-      // Half a second of playback from where it actually starts, not from
-      // zero, which a resume is already past.
-      this.startSource(streamUrl(item.id), { at: this.startAt, settle: 0.5 });
+      // A file the browser opens still starts as the rewrap where its index
+      // sits behind its data: the listing says so once the shape pass has
+      // read it, and a file it has not reached yet is caught by the same
+      // question after refreshItem (useKnownCodecs).
+      if (!(wantsFaststart(item, playsHLS()) && this.tryRemux())) {
+        // Half a second of playback from where it actually starts, not
+        // from zero, which a resume is already past.
+        this.startSource(streamUrl(item.id), { at: this.startAt, settle: 0.5 });
+      }
       if (this.startAt > 0) showToast(`Resuming at ${formatDuration(this.startAt)}`);
     } else {
       void this.convertDirectly();

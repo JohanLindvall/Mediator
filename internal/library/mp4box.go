@@ -41,17 +41,17 @@ func VideoSampleInfo(it Item) (format string, width, height int) {
 		return "", 0, 0
 	}
 	defer f.Close()
-	format, width, height, _, _ = sampleInfo(f, it.Size)
+	format, width, height, _, _, _ = sampleInfo(f, it.Size)
 	return format, width, height
 }
 
 // SampleInfo is the same walk, answering for the soundtrack and the frame
 // rate as well — a film is described by all of them, and the box tree gives
 // the rest for the price of looking at one more track and one more table.
-func SampleInfo(it Item) (video string, width, height int, audio string, fps float64) {
+func SampleInfo(it Item) (video string, width, height int, audio string, fps float64, moovLate bool) {
 	f, err := OpenItem(it)
 	if err != nil {
-		return "", 0, 0, "", 0
+		return "", 0, 0, "", 0, false
 	}
 	defer f.Close()
 	return sampleInfo(f, it.Size)
@@ -104,10 +104,29 @@ func child(f io.ReaderAt, pos, end int64, typ string) (start, stop int64, ok boo
 	return start, stop, ok
 }
 
-func sampleInfo(f io.ReaderAt, size int64) (video string, width, height int, audio string, fps float64) {
-	moovS, moovE, ok := child(f, 0, size, "moov")
+func sampleInfo(f io.ReaderAt, size int64) (video string, width, height int, audio string, fps float64, moovLate bool) {
+	// Where the index sits is read off the same walk that finds it. A file
+	// whose `moov` follows its `mdat` — which is what a recorder writes,
+	// the index not being known until the recording ends — cannot be played
+	// progressively: nothing can be decoded until the last bytes of the file
+	// have been fetched, and a browser handed one over a link goes looking
+	// for them. See Item.MoovLate for what that cost.
+	var moovS, moovE int64
+	ok := false
+	eachBox(f, 0, size, func(t string, s, e int64) bool {
+		switch t {
+		case "mdat":
+			if !ok {
+				moovLate = true
+			}
+		case "moov":
+			moovS, moovE, ok = s, e, true
+			return false
+		}
+		return true
+	})
 	if !ok {
-		return "", 0, 0, "", 0
+		return "", 0, 0, "", 0, false
 	}
 	eachBox(f, moovS, moovE, func(t string, s, e int64) bool {
 		if t != "trak" {
@@ -127,7 +146,7 @@ func sampleInfo(f io.ReaderAt, size int64) (video string, width, height int, aud
 		// rather than stopping at the first that answers.
 		return true
 	})
-	return video, width, height, audio, fps
+	return video, width, height, audio, fps, moovLate
 }
 
 // trakFPS is the track's frame rate, from the table that says how long each

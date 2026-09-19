@@ -315,6 +315,8 @@ type Meta struct {
 	// has to be brought back to ordinary colour when it is converted, or
 	// what comes out claims to be something H.264 cannot be.
 	HDR bool `json:"hdr,omitempty"`
+	// And whether its index sits behind its data (library.Item.MoovLate).
+	MoovLate bool `json:"ml,omitempty"`
 	// Shape records *which reading* of the file's shape this is, which the
 	// fields above cannot say: plenty of files have no picture to measure,
 	// and a record written before there was anywhere to put one looks exactly
@@ -425,10 +427,11 @@ type Item struct {
 	// that decides whether a conversion goes to the graphics hardware
 	// (hwWorthIt) is pixels a second and had nothing to work with, so every
 	// film converted on the processor after every restart.
-	Width  int     `json:"w,omitempty"`
-	Height int     `json:"h,omitempty"`
-	FPS    float64 `json:"fps,omitempty"`
-	HDR    bool    `json:"hdr,omitempty"`
+	Width    int     `json:"w,omitempty"`
+	Height   int     `json:"h,omitempty"`
+	FPS      float64 `json:"fps,omitempty"`
+	HDR      bool    `json:"hdr,omitempty"`
+	MoovLate bool    `json:"ml,omitempty"`
 }
 
 // Items returns every persisted index record.

@@ -440,7 +440,7 @@ func probeOfMeta(m blob.Meta) Probe {
 	return Probe{
 		DurationMs: m.Duration,
 		VCodec:     m.VCodec, ACodec: m.ACodec,
-		Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR,
+		Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR, MoovLate: m.MoovLate,
 	}
 }
 
@@ -511,8 +511,8 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 			// that came from a probe, and the native reader says nothing
 			// about the containers it does not know — overwriting with
 			// that silence would throw away what was already known.
-			if w, h, codec, fps := shapeOf(it, m.VCodec); w > 0 {
-				m.Width, m.Height, m.FPS, m.VCodec = w, h, fps, codec
+			if w, h, codec, fps, late := shapeOf(it, m.VCodec); w > 0 {
+				m.Width, m.Height, m.FPS, m.VCodec, m.MoovLate = w, h, fps, codec, late
 			} else if m.VCodec == "" {
 				m.VCodec = codec
 			}
@@ -571,7 +571,7 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	if it.Kind == KindImage {
 		// A still has no probe, no tags and no playing time. Its size is the
 		// whole of what there is to learn, and it is in the header.
-		w, h, _, _ := shapeOf(it, "")
+		w, h, _, _, _ := shapeOf(it, "")
 		if !l.unchangedSince(id, it) {
 			return
 		}
@@ -590,8 +590,8 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	// ISO base media containers both are a handful of reads into the box tree
 	// (mp4box.go), so they cost nothing worth avoiding and are read here.
 	if it.Kind == KindVideo && p.Width == 0 {
-		w, h, codec, rate := shapeOf(it, p.VCodec)
-		p.Width, p.Height, p.VCodec = w, h, codec
+		w, h, codec, rate, late := shapeOf(it, p.VCodec)
+		p.Width, p.Height, p.VCodec, p.MoovLate = w, h, codec, late
 		if p.FPS == 0 {
 			p.FPS = rate
 		}
@@ -631,7 +631,7 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	l.queueMeta(it.ID, blob.Meta{
 		MTime: it.ModTime, Size: it.Size,
 		Duration: p.DurationMs, VCodec: p.VCodec, ACodec: p.ACodec,
-		Width: p.Width, Height: p.Height, FPS: p.FPS, HDR: p.HDR, Shape: shapeVersion,
+		Width: p.Width, Height: p.Height, FPS: p.FPS, HDR: p.HDR, MoovLate: p.MoovLate, Shape: shapeVersion,
 		Title: tm.title, Artist: tm.artist, Album: tm.album,
 		Genre: tm.genre, Track: tm.track, Year: tm.year,
 	})
@@ -758,7 +758,7 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		l.queueMeta(id, blob.Meta{
 			MTime: fresh.ModTime, Size: fresh.Size, Duration: fresh.Duration,
 			VCodec: fresh.VCodec, ACodec: fresh.ACodec,
-			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, HDR: fresh.HDR,
+			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, HDR: fresh.HDR, MoovLate: fresh.MoovLate,
 			// A film the eager pass never reached has no marker yet, and a
 			// record carrying a size under "shape unread" is a header to
 			// read again on every start. What was just measured is this

@@ -276,22 +276,61 @@ func TestRemuxServesRanges(t *testing.T) {
 }
 
 // A file the browser can already open is not one rewrapping helps, and the
-// 404 is what sends the player on to the converter.
+// 404 is what sends the player on to the converter — unless its index sits
+// behind its data, which is how a phone records one and the one thing left
+// that a copy can fix about such a file. ffmpeg writes the index at the end
+// by default, so the ordinary kind has to be asked for.
 func TestRemuxDeclinesWhatItCannotHelp(t *testing.T) {
 	dir := t.TempDir()
-	writeClip(t, filepath.Join(dir, "plain.mp4"), 2)
+	writeClip(t, filepath.Join(dir, "plain.mp4"), 2, "-movflags", "+faststart")
+	writeClip(t, filepath.Join(dir, "recorded.mp4"), 2)
 	ts, lib := flagServer(t, dir)
-	id := library.PathID(filepath.Join(dir, "plain.mp4"))
-	lib.EnrichNow(context.Background(), []string{id})
+	plain := library.PathID(filepath.Join(dir, "plain.mp4"))
+	recorded := library.PathID(filepath.Join(dir, "recorded.mp4"))
+	lib.EnrichNow(context.Background(), []string{plain, recorded})
 
-	res, err := http.Get(ts.URL + "/api/remux/" + id)
+	res, err := http.Get(ts.URL + "/api/remux/" + plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("an MP4 with its index in front: status %d, want 404", res.StatusCode)
+	}
+
+	if it, _ := lib.Get(recorded); !it.MoovLate {
+		t.Fatal("the shape pass did not notice the recorded clip's index is at the back")
+	}
+	res, err = http.Get(ts.URL + "/api/remux/" + recorded)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("status %d, want 404", res.StatusCode)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("an MP4 with its index at the back: status %d, want the copy", res.StatusCode)
 	}
+	// And the copy is the cure: its index comes first.
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := boxOrder(body); !strings.HasPrefix(got, "ftyp moov") && !strings.HasPrefix(got, "ftyp free moov") {
+		t.Errorf("the copy's boxes run %q; want the index before the data", got)
+	}
+}
+
+// boxOrder names the top-level boxes of an ISO base media file in order.
+func boxOrder(b []byte) string {
+	var names []string
+	for pos := 0; pos+8 <= len(b); {
+		size := int(binary.BigEndian.Uint32(b[pos:]))
+		names = append(names, string(b[pos+4:pos+8]))
+		if size < 8 {
+			break
+		}
+		pos += size
+	}
+	return strings.Join(names, " ")
 }
 
 // The rewrap is cached, and the second ask does not run ffmpeg again.

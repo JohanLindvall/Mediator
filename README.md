@@ -37,7 +37,12 @@ Go binary with the TypeScript frontend embedded.
   receiver fetches the media **itself** and sends no credentials, so media
   URLs carry a signed token and the proxy is told to let that path through —
   see [Signed media URLs](#signed-media-urls), which is the one piece of
-  configuration this needs. A film in a codec the television is unlikely to
+  configuration this needs. **A file recorded with its index at the end** —
+  which is how a phone writes one — is rewrapped before it plays, a copy at
+  disk speed that moves the index to the front and is kept for next time:
+  such a file cannot start until its last bytes have been fetched, and
+  Safari on a phone hunted through one eleven times over before it played.
+  A film in a codec the television is unlikely to
   have — AV1, most often — is converted the moment playback moves there,
   since otherwise it arrives as sound with a black screen behind it. **A
   soundtrack no television decodes** — DTS and the other cinema formats,

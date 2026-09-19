@@ -179,8 +179,10 @@ func remuxable(it library.Item) bool {
 	}
 	if nativeContainers[strings.ToLower(filepath.Ext(it.Name))] {
 		// Already the container every browser opens, so the container is not
-		// what is wrong. The one thing left that a copy can fix is the label.
-		return misTaggedHEVC(it)
+		// what is wrong. Two things are left that a copy can fix: the label,
+		// and where the index sits — `+faststart` is what moves it to the
+		// front, and the copy already asks for it.
+		return misTaggedHEVC(it) || it.MoovLate
 	}
 	return remuxVideo[it.VCodec] && remuxAudio[it.ACodec]
 }
