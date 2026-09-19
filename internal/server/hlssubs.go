@@ -79,6 +79,10 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 	// are not: a 4K release of 29 Mbit/s comes out at a 1920-wide stream of
 	// six or eight, and declaring the original tells a player on a thin
 	// connection that it cannot afford what it is about to be sent.
+	// A rung is never a copy (effectiveCopy), and that has to hold here as
+	// well as at the handler: a copy's figure is the file's own rate, which
+	// is the one figure a rung can never be.
+	copyVideo = effectiveCopy(copyVideo, q)
 	bw := int64(convertBitrateGuess)
 	if q.chosen() {
 		// A rung is a ceiling the encoder is held to, so here the figure is

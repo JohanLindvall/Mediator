@@ -72,3 +72,34 @@ func TestMasterBandwidthDescribesTheStream(t *testing.T) {
 		t.Errorf("unmeasured file declared %d", got)
 	}
 }
+
+// With a rung chosen the bandwidth is known rather than guessed: the rung's
+// ceiling and the soundtrack, whatever the file's own rate was and whether
+// or not the picture would otherwise have been copied.
+func TestARungDeclaresItsOwnBandwidth(t *testing.T) {
+	big := library.Item{Duration: 60_000, Size: 250 << 20} // ~35 Mbit/s of file
+	rung := quality{3000, 720}
+	if got := declaredRate(t, masterPlaylist("s", big, nil, "", false, rung)); got != 3_160_000 {
+		t.Errorf("a 3 Mbit/s rung declared %d, want 3160000", got)
+	}
+	// A rung is never a copy, so the copy's own figure does not apply.
+	if got := declaredRate(t, masterPlaylist("s", big, nil, "", true, rung)); got != 3_160_000 {
+		t.Errorf("a rung asked for with the picture copied declared %d, want the rung's 3160000", got)
+	}
+}
+
+// declaredRate reads the BANDWIDTH a master playlist promises.
+func declaredRate(t *testing.T, body []byte) int64 {
+	t.Helper()
+	for _, line := range strings.Split(string(body), "\n") {
+		if rest, ok := strings.CutPrefix(line, "#EXT-X-STREAM-INF:BANDWIDTH="); ok {
+			n, err := strconv.ParseInt(strings.SplitN(rest, ",", 2)[0], 10, 64)
+			if err != nil {
+				t.Fatalf("bandwidth %q: %v", rest, err)
+			}
+			return n
+		}
+	}
+	t.Fatal("no BANDWIDTH line in the master playlist")
+	return 0
+}

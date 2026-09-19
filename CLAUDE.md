@@ -4022,14 +4022,24 @@ Serving details worth knowing before "fixing" them:
   exactly what was asked to be reduced. It is a ceiling, not a target
   (`rateCap`: `-b:v` and `-maxrate` at the rung, `-bufsize` twice it) — a
   viewer who asked for three megabits has a link that carries about that,
-  and a burst above it is the stall they were ending. And the picture is
+  and a burst above it is the stall they were ending. A ceiling and not a
+  target, which the numbers show: measured live, the phone clip under the
+  3 Mbit/s rung came out at **0.7 Mbit/s** and under the 1.5 rung at 0.4,
+  the quality target spending what a 720- or 480-high picture needs and no
+  more, while the 4K film under the same 3 Mbit/s rung sat at the ceiling
+  (3.1) — a demanding picture is held there, an easy one never reaches it.
+  And the picture is
   fitted into the rung's **box** rather than merely capped in width
   (`boxScale`, `hwScale`): 1080, 720 and 480 high and 16:9 as wide, either
   way up, so a portrait clip is bounded by the height where the standing
   width cap would not have touched it at all. Proved on both scalers before
   being relied on: an 886×1920 clip into the 1280×720 box came out 332×720
   on `scale` and on `scale_vaapi` alike. The engines that are not measured
-  here take the rung's rate and keep their width-only scale. A rate off the
+  here take the rung's rate and keep their width-only scale. The hardware
+  path takes the rung too — measured live on the 4K HDR film, 1280×720 in
+  BT.709 at the ceiling — but at 0.88× real time on a loaded machine, since
+  the tone-map is the processor's whatever the box; a rung lowers what
+  crosses the link and cannot lower that. A rate off the
   ladder is refused (`parseQuality`): an arbitrary ceiling is a budget
   nobody set. The rung is part of the segmented session's key (`hlsKey`,
   tested — last, so a key written before there was one still reads back),
