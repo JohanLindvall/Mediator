@@ -57,7 +57,7 @@ func TestARungCapsTheRateAndBoxesThePicture(t *testing.T) {
 	it := library.Item{ID: "abc", Name: "a film.mkv", Path: "/nowhere/a film.mkv", Kind: library.KindVideo,
 		VCodec: "h264", ACodec: "dts", Width: 1920, Height: 1080, FPS: 24}
 
-	plain, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", quality{}, false, log)
+	plain, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", quality{}, false, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestARungCapsTheRateAndBoxesThePicture(t *testing.T) {
 		t.Errorf("no rung chosen, and the ordinary width cap is gone: %s", joined)
 	}
 
-	rung, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", quality{3000, 720}, false, log)
+	rung, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", quality{3000, 720}, false, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestARungCapsTheRateAndBoxesThePicture(t *testing.T) {
 		t.Errorf("the rung's plan still carries the ordinary width cap beside its box: %s", joined)
 	}
 	// And a rung asked for with the picture copied is a re-encode.
-	copied, err := planConversion(context.Background(), "ffmpeg", it, 0, true, "", quality{3000, 720}, false, log)
+	copied, err := planConversion(context.Background(), "ffmpeg", it, 0, true, "", quality{3000, 720}, false, false, log)
 	if err != nil {
 		t.Fatal(err)
 	}

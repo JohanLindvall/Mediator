@@ -13,7 +13,7 @@ import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, hlsClock, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -794,4 +794,15 @@ test('quality: only the rungs that cost fewer bits than the film are offered', (
   assert.equal(qualityLabel(6000), '6 Mbps');
   assert.equal(qualityLabel(1500), '1.5 Mbps');
   assert.equal(qualityLabel(800), '800 kbps');
+});
+
+test('hlsClock: the film\'s clock only when the playlist says so', () => {
+  assert.equal(hlsClock('film'), 'film');
+  assert.equal(hlsClock(' Film\n'), 'film');
+  // The older arrangement, and everything that is not the newer one: a
+  // missing header, a wrong word, a proxy that dropped it.
+  assert.equal(hlsClock('session'), 'session');
+  assert.equal(hlsClock(null), 'session');
+  assert.equal(hlsClock(undefined), 'session');
+  assert.equal(hlsClock('filmed'), 'session');
 });

@@ -20,7 +20,7 @@ func TestMasterPlaylistNamesEveryRendition(t *testing.T) {
 		{Index: 3, Label: ""},
 		{Index: 4, Label: `Say "hello"`},
 	}
-	body := string(masterPlaylist("sess", library.Item{Duration: 60_000, Size: 1 << 20}, subs, "1", true, quality{}))
+	body := string(masterPlaylist("sess", library.Item{Duration: 60_000, Size: 1 << 20}, subs, "1", true, quality{}, 0))
 	for _, want := range []string{
 		`NAME="English",`, `NAME="English 2",`, `NAME="English 3",`,
 		`NAME="Track 4",`, `NAME="Say 'hello'",`,
@@ -59,16 +59,16 @@ func TestMasterBandwidthDescribesTheStream(t *testing.T) {
 		return 0
 	}
 	// The picture re-encoded: what goes out is the conversion's own rate.
-	if got := rate(string(masterPlaylist("s", big, nil, "", false, quality{}))); got != convertBitrateGuess {
+	if got := rate(string(masterPlaylist("s", big, nil, "", false, quality{}, 0))); got != convertBitrateGuess {
 		t.Errorf("re-encoded stream declared %d, want the conversion's own %d", got, convertBitrateGuess)
 	}
 	// The picture copied through: the file's average is the honest figure.
-	if got := rate(string(masterPlaylist("s", big, nil, "", true, quality{}))); got < 25_000_000 {
+	if got := rate(string(masterPlaylist("s", big, nil, "", true, quality{}, 0))); got < 25_000_000 {
 		t.Errorf("copied stream declared %d, want the file's own average", got)
 	}
 	// And a file whose length nobody measured falls back rather than
 	// declaring nothing, which the specification does not allow.
-	if got := rate(string(masterPlaylist("s", library.Item{Size: 1 << 30}, nil, "", true, quality{}))); got != convertBitrateGuess {
+	if got := rate(string(masterPlaylist("s", library.Item{Size: 1 << 30}, nil, "", true, quality{}, 0))); got != convertBitrateGuess {
 		t.Errorf("unmeasured file declared %d", got)
 	}
 }
@@ -79,11 +79,11 @@ func TestMasterBandwidthDescribesTheStream(t *testing.T) {
 func TestARungDeclaresItsOwnBandwidth(t *testing.T) {
 	big := library.Item{Duration: 60_000, Size: 250 << 20} // ~35 Mbit/s of file
 	rung := quality{3000, 720}
-	if got := declaredRate(t, masterPlaylist("s", big, nil, "", false, rung)); got != 3_160_000 {
+	if got := declaredRate(t, masterPlaylist("s", big, nil, "", false, rung, 0)); got != 3_160_000 {
 		t.Errorf("a 3 Mbit/s rung declared %d, want 3160000", got)
 	}
 	// A rung is never a copy, so the copy's own figure does not apply.
-	if got := declaredRate(t, masterPlaylist("s", big, nil, "", true, rung)); got != 3_160_000 {
+	if got := declaredRate(t, masterPlaylist("s", big, nil, "", true, rung, 0)); got != 3_160_000 {
 		t.Errorf("a rung asked for with the picture copied declared %d, want the rung's 3160000", got)
 	}
 }

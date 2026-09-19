@@ -286,8 +286,18 @@ Go binary with the TypeScript frontend embedded.
   media URL with a byte-range request and a conversion of unknown length
   cannot answer one. Playback starts after the first segment rather than
   after the whole file: a two-hour film whose audio needs converting is
-  playing in under a second. Everything else is streamed straight from the
-  converter as before, and seeking reopens it at the new position. Where the
+  playing in under a second. **The playlist is the whole film from the
+  first request**: every segment is decided before it is made — on the
+  file's own keyframes for a copied picture, read off the container's index,
+  or on a four-second grid the encoder is held to for a re-encoded one — so
+  the player shows the film's real length and position, iOS's own fullscreen
+  player included, and seeks anywhere in it natively; the segments are made
+  as they are asked for, from wherever a seek lands. Where the container
+  keeps no keyframe index this can read (anything but Matroska and MP4) a
+  copied conversion falls back to a playlist that grows with it, and the
+  player is told which it got (`X-Media-Timeline`). Everything else is
+  streamed straight from the converter as before, and seeking reopens it at
+  the new position. Where the
   film has subtitles the playlist is a master carrying them as renditions —
   which is what puts them on an **AirPlay receiver**, that route handing
   over a URL and nothing else, and gives Safari one native subtitle menu
@@ -1120,7 +1130,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/item/{id}`                      | One item, with its metadata read first if it has not been |
 | `GET /api/remux/{id}?a=&mode=`            | The same streams in a container the browser opens, served as an ordinary seekable file, keeping soundtrack `a`; `mode=audio` copies the picture and converts the soundtrack instead; 404 when copying would not help |
 | `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
-| `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays; redirects into a session, one per rung |
+| `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays: the whole film as a VOD playlist beginning at `t`, its segments made as they are asked for, one session per film, mode, soundtrack and rung; `X-Media-Timeline: film` says so, `session` that the older growing playlist from the seek is being served |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
 | `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |

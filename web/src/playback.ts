@@ -240,6 +240,20 @@ export function rewrapWorthTheWait(size: number, hasNativeHLS: boolean): boolean
  * music bar once had it the other way around (a triangle while music
  * played), which is exactly the inversion a pure answer makes testable.
  */
+/**
+ * Whose clock a segmented conversion keeps, from the header its playlist
+ * carries. The film's own, when the server could decide every segment up
+ * front and the playlist is the whole film: the element's time is then the
+ * film's, seeking is the element's, and nothing is rebased. Or the
+ * session's, which begins at the seek, where the player keeps the offset it
+ * always has. Anything unexpected is read as the older arrangement, since
+ * being wrong that way costs an offset the old arithmetic still corrects,
+ * where the other way round puts every readout at the wrong time.
+ */
+export function hlsClock(header: string | null | undefined): 'film' | 'session' {
+  return header?.trim().toLowerCase() === 'film' ? 'film' : 'session';
+}
+
 export function playButtonIcon(playing: boolean): 'pause' | 'play' {
   return playing ? 'pause' : 'play';
 }

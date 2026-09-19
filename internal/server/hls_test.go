@@ -381,3 +381,200 @@ func TestHLSMeetsWhatIOSRequires(t *testing.T) {
 		t.Fatalf("segment content type %q", ct)
 	}
 }
+
+// A tabled session is adopted as far as its manifest goes — every segment
+// it names is whole, a line being written only once the muxer closed the
+// file — and the rest of the directory is what a conversion was in the
+// middle of, which goes. A manifest line naming a file that is not there is
+// a segment that is not there.
+func TestHLSAdoptsATabledSessionByItsManifest(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "hls", "s-tabled")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	key := hlsKey(library.Item{ID: "abc", ModTime: 1, Size: 2}, -1, true, "0", quality{})
+	if !strings.Contains(key, "|vod|") {
+		t.Fatalf("a tabled session's key does not say so: %q", key)
+	}
+	files := map[string]string{
+		hlsKeyFile:         key,
+		hlsManifest:        "0 run3-seg00000.ts\n1 run3-seg00001.ts\n7 run9-seg00007.ts\n8 run9-seg00008.ts\n",
+		"run3-seg00000.ts": "whole",
+		"run3-seg00001.ts": "whole",
+		"run3-seg00002.ts": "half written when the run was killed",
+		"run9-seg00007.ts": "whole",
+		"run9-seg00008.ts": "", // named, but empty: not a segment
+		"run9-seg00009.ts": "the stub past the run's end",
+		"list-3.csv":       "run3-seg00000.ts,0,4\n",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := NewHLS("ffmpeg", nil, NewScratch(base, 0), testLog())
+	h.Adopt()
+
+	h.mu.Lock()
+	s := h.sessions[key]
+	h.mu.Unlock()
+	if s == nil {
+		t.Fatal("the tabled session was not adopted")
+	}
+	if len(s.have) != 3 || s.have[0] != "run3-seg00000.ts" || s.have[7] != "run9-seg00007.ts" {
+		t.Errorf("adopted %v, want segments 0, 1 and 7", s.have)
+	}
+	entries, _ := os.ReadDir(dir)
+	var left []string
+	for _, e := range entries {
+		left = append(left, e.Name())
+	}
+	want := []string{hlsManifest, "run3-seg00000.ts", "run3-seg00001.ts", "run9-seg00007.ts", hlsKeyFile}
+	if strings.Join(left, " ") != strings.Join(want, " ") {
+		t.Errorf("left in the directory: %v, want %v", left, want)
+	}
+}
+
+// The muxer is told exactly where to cut, relative to where the run began,
+// where to stop, and to keep the film's clock and list what it closes —
+// into files named for the run, so a later run never writes over what an
+// earlier one made.
+func TestHLSTableArgsSayWhereToCut(t *testing.T) {
+	args := strings.Join(hlsTableArgs("/d", "list-4.csv", "run4-seg%05d.ts", 150, []float64{4.8745, 15.2495}, false, 1249.325), " ")
+	for _, want := range []string{
+		"-f segment", "mpegts_copyts=1", "-segment_start_number 150",
+		"-segment_times 4.8745,15.2495", "-to 1249.325",
+		"-segment_list /d/list-4.csv", "-segment_list_type csv", "+live",
+		"-y /d/run4-seg%05d.ts",
+	} {
+		if !strings.Contains(args, want) {
+			t.Errorf("copy-mode args lack %q: %s", want, args)
+		}
+	}
+	if strings.Contains(args, "-segment_time ") {
+		t.Errorf("a copy was cut on the grid: %s", args)
+	}
+	// A run over the film's last segment has no cut to make, and still has
+	// to say so, or the muxer cuts every two seconds on its own account.
+	last := strings.Join(hlsTableArgs("/d", "list-6.csv", "run6-seg%05d.ts", 258, nil, false, 0), " ")
+	if !strings.Contains(last, "-segment_times 999999999") || strings.Contains(last, "-to ") {
+		t.Errorf("a run with no cut to make: %s", last)
+	}
+	grid := strings.Join(hlsTableArgs("/d", "list-5.csv", "run5-seg%05d.ts", 0, nil, true, 0), " ")
+	if !strings.Contains(grid, "-segment_time 4 -segment_time_delta 0.06") || strings.Contains(grid, "-to ") || strings.Contains(grid, "-segment_times") {
+		t.Errorf("grid args: %s", grid)
+	}
+}
+
+// End to end, the thing this exists for: the playlist is the whole film
+// from the first request — every segment, the end marker, VOD — and a
+// segment asked for out of order is made on request. A seek is a request
+// for a later segment, so that is what is asked for first; the opening
+// segment is asked for afterwards, which is a second conversion into the
+// same session, stopping where the first began.
+func TestHLSMakesSegmentsOnRequest(t *testing.T) {
+	dir := t.TempDir()
+	// Twelve seconds with a keyframe every second: three segments of four.
+	writeMKVKeyed(t, filepath.Join(dir, "clip.mkv"), 12, 10)
+	ts, _ := flagServer(t, dir)
+	id := library.PathID(filepath.Join(dir, "clip.mkv"))
+
+	res, err := http.Get(ts.URL + "/api/hls/" + id + "/index.m3u8?mode=audio&t=9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get(hlsTimelineHeader); got != "film" {
+		t.Skipf("no table for the test clip (timeline %q): the keyframe index or the duration was not read", got)
+	}
+	text := string(body)
+	for _, want := range []string{"#EXT-X-PLAYLIST-TYPE:VOD", "#EXT-X-ENDLIST", "seg00002.ts", "#EXT-X-START:TIME-OFFSET=9.000"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("the first playlist lacks %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "seg00003.ts") {
+		t.Fatalf("a twelve-second clip has a fourth segment:\n%s", text)
+	}
+	var names []string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+			names = append(names, strings.TrimSpace(line))
+		}
+	}
+	fetch := func(name string) []byte {
+		t.Helper()
+		sres, err := http.Get(res.Request.URL.ResolveReference(&url.URL{Path: name}).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(sres.Body)
+		sres.Body.Close()
+		if sres.StatusCode != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", name, sres.StatusCode, b)
+		}
+		return b
+	}
+	// The segment the seek landed on, made first, and carrying the film's
+	// own clock: it begins eight seconds in.
+	last := fetch(names[2])
+	if pts, ok := tsFirstVideoPTS(last); !ok || pts < 7.9 || pts > 8.1 {
+		t.Errorf("the third segment begins at %.3f (%v), want 8", pts, ok)
+	}
+	// Then the opening, out of order: a second run, from the start.
+	first := fetch(names[0])
+	if pts, ok := tsFirstVideoPTS(first); !ok || pts > 0.2 {
+		t.Errorf("the first segment begins at %.3f (%v), want 0", pts, ok)
+	}
+	if len(fetch(names[1])) < 188 {
+		t.Error("the middle segment is not a transport stream")
+	}
+}
+
+// The same, re-encoded: the grid is kept by forced keyframes, so a segment
+// asked for in the middle begins on its own grid point.
+func TestHLSGridSegmentBeginsOnTheGrid(t *testing.T) {
+	dir := t.TempDir()
+	writeMKVKeyed(t, filepath.Join(dir, "clip.mkv"), 12, 10)
+	ts, _ := flagServer(t, dir)
+	id := library.PathID(filepath.Join(dir, "clip.mkv"))
+
+	res, err := http.Get(ts.URL + "/api/hls/" + id + "/index.m3u8?t=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get(hlsTimelineHeader); got != "film" {
+		t.Skipf("no table for the test clip (timeline %q)", got)
+	}
+	var middle string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), "seg00001.ts") {
+			middle = strings.TrimSpace(line)
+		}
+	}
+	if middle == "" {
+		t.Fatalf("no middle segment in the playlist:\n%s", body)
+	}
+	sres, err := http.Get(res.Request.URL.ResolveReference(&url.URL{Path: middle}).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seg, _ := io.ReadAll(sres.Body)
+	sres.Body.Close()
+	if sres.StatusCode != http.StatusOK {
+		t.Fatalf("the middle segment answered %d: %s", sres.StatusCode, seg)
+	}
+	if pts, ok := tsFirstVideoPTS(seg); !ok || pts < 3.9 || pts > 4.2 {
+		t.Errorf("the middle segment begins at %.3f (%v), want 4", pts, ok)
+	}
+}

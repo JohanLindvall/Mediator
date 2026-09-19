@@ -10,29 +10,51 @@ package server
 // phone at all.
 //
 // HLS answers the same question differently. The conversion is written as
-// short segments, each one a finished file with a length of its own, listed
-// in a playlist that grows as they appear. Playback begins after the first
-// segment rather than after the last, so a file the converter takes a minute
-// to work through starts in a couple of seconds — and every request involved
-// is for an ordinary file, which is what Safari wanted all along. It is also
-// Apple's own format, so on that platform it is the best-supported path there
-// is; nothing else needs it, because everything else plays the pipe.
+// short segments, each one a finished file with a length of its own, named
+// in a playlist. Playback begins after the first segment rather than after
+// the last, and every request involved is for an ordinary file, which is
+// what Safari wanted all along. It is also Apple's own format, so on that
+// platform it is the best-supported path there is; nothing else needs it,
+// because everything else plays the pipe.
 //
-// A session is one conversion: one ffmpeg, one directory of segments, keyed
-// by what was asked for. Seeking reopens at a new time exactly as the piped
-// conversion does, so the clock, the resume point and the subtitle offsets
-// are the ones that machinery already works out.
+// **The playlist is the whole film from the first request.** A playlist
+// that grows as the conversion runs is a live event to a player: it shows
+// LIVE where the clock should be, a running time of what has been converted
+// so far, and a seek bar that reaches no further — which on a phone's own
+// fullscreen player, the one place a converted film is watched there, is
+// the whole of the interface. So the segments are decided before any is
+// made (hlstable.go): where each begins and how long it lasts, listed with
+// the end marker from the first request. The player then has the film's
+// length and seeks anywhere in it natively, and the server makes the
+// segments as they are asked for — from wherever the player has got to,
+// which after a seek is the segment it landed on. A session is one film in
+// one form (mode, soundtrack, rung), one directory, one table, and any
+// number of conversions over its life, each producing a run of segments and
+// each stopped when the player asks for something a fresh start would reach
+// sooner (hlsWaitFor). What has been made is kept and served; what has not
+// is made on request, with the request waiting for it.
 //
-// The session is in the URL path, not in a query, and that is load-bearing.
-// ffmpeg writes plain segment names into the playlist, and a player resolves
-// those against the playlist's own URL — which drops the query. With the
-// session identified by ?t= and ?mode=, every segment request arrived asking
-// for a different conversion than the playlist described: the first one
-// answered, having quietly started a second ffmpeg, and the rest did not line
-// up. Playing the playlist URL therefore redirects to one under the session,
-// where a relative name can only resolve to that session's own segments.
+// Every cut is made where the table said, and checked. A re-encoded picture
+// is told where to put its keyframes; a copied one is cut on the file's own
+// keyframes, where a run begins on whichever the demuxer lands on (landing)
+// and the muxer is told the table's times from there. The muxer's own list
+// of what it wrote (`-segment_list`, csv) says when a segment is finished —
+// a line is written only once the file is closed — and every line is judged
+// against the table (verify): a cut anywhere else ends the session rather
+// than serving a playlist that has become a lie.
+//
+// A film whose keyframes cannot be read cheaply — a copy from a container
+// with no index this reads, or content reachable only through a pipe — keeps
+// the older shape: one conversion from the seek, a playlist that grows, and
+// the player told so (X-Media-Timeline) so that it keeps its own clock the
+// way it always did. The session is in the URL path either way, and that is
+// load-bearing: a player resolves segment names against the playlist's own
+// URL, which drops the query, so a session identified by the query answered
+// the playlist and then every segment request arrived asking for a different
+// conversion.
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -42,6 +64,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -75,16 +98,34 @@ const (
 	// of one nobody is watching. A player that has buffered ahead goes quiet
 	// for a while, so this is well past a segment's worth of silence.
 	hlsIdle = 90 * time.Second
-	// hlsFirstWait bounds the wait for the opening segments. Copying the
+	// hlsFirstWait bounds the wait for a segment that is being made: the
+	// opening ones of a conversion, or the one a seek landed on. Copying the
 	// video makes that a second or two; a full re-encode of something the
 	// browser cannot decode at all is what takes the rest of this.
 	hlsFirstWait = 60 * time.Second
+	// hlsListPoll is how often a running conversion's list is read for the
+	// segments it has finished.
+	hlsListPoll = 200 * time.Millisecond
+	// hlsProbeBudget bounds the landing probe: one seek and one packet.
+	hlsProbeBudget = 15 * time.Second
+	// hlsRunFailures is how many conversions may end without producing a
+	// segment a request was waiting for before the session gives up on it.
+	// One is the hardware being written off and the processor taking over;
+	// two is a file that will not convert.
+	hlsRunFailures = 2
+	// hlsRunTail is how far past a stopping boundary a run is told to read,
+	// so the segment before it is cut where the table says and the stub
+	// after it is thrown away.
+	hlsRunTail = 0.2
 )
 
 // errHLSClosed is what a conversion asked for during shutdown is told. There
 // is nothing left to run it: the context that would cancel it hangs off
 // Background, and the maps holding the only handle on it have been emptied.
 var errHLSClosed = errors.New("the server is shutting down")
+
+// errNoSuchSegment is a request for a segment the table does not have.
+var errNoSuchSegment = errors.New("no such segment")
 
 // HLS runs the segmented conversions and hands out their files.
 type HLS struct {
@@ -112,19 +153,23 @@ type hlsSession struct {
 	dir string
 	// What this is a conversion of, and from where. The subtitle renditions
 	// need both: the item to read the cues out of, and the start time to
-	// rebase them onto this session's clock — which begins at the seek, not
-	// at the start of the film.
+	// rebase them onto this session's clock — which for a session with a
+	// table is the film's own, and for one without begins at the seek.
 	item  library.Item
 	start float64
 	// q is the rung of the bitrate ladder this session was made at, for
-	// the master playlist to declare honestly.
-	q    quality
-	last time.Time // when a request last arrived for it
-	// converting is true while ffmpeg is still working. A session that has
-	// finished costs only disk, and disk is what the budget is for.
+	// the master playlist to declare honestly; copyVideo and audio are the
+	// rest of what it is a conversion of, for the runs it starts.
+	q         quality
+	copyVideo bool
+	audio     string
+	last      time.Time // when a request last arrived for it
+	// converting is true while an ffmpeg is working for this session. A
+	// session that has finished costs only disk, and disk is what the
+	// budget is for.
 	converting bool
 	cancel     context.CancelFunc
-	ready      chan struct{} // closed once the playlist lists a segment
+	ready      chan struct{} // closed once there is something to play
 	// stateMu guards done and err. The two are written by the conversion
 	// and by the watcher that opens the gate, from different goroutines,
 	// and read by every waiter the moment the gate opens: a plain field was
@@ -139,18 +184,68 @@ type hlsSession struct {
 	// from the sessions that are live at the moment it is written rather
 	// than from a snapshot taken before the lock was dropped.
 	bytes int64
+
+	// The rest belongs to a session with a table, and is guarded by sm —
+	// taken after h.mu where both are held, never before it.
+	table *hlsTable
+	sm    sync.Mutex
+	// have names the file holding each finished segment, by index. Files
+	// are the runs' own (run<n>-seg<k>.ts), so a later run never writes
+	// over what an earlier one made and is serving.
+	have map[int]string
+	run  *hlsRun       // the conversion in flight, or nil
+	wake chan struct{} // closed and replaced whenever have or run changes
+	// broken is set when a run cut somewhere the table did not say, or
+	// runs kept ending without producing what was asked: the session
+	// answers every segment with it from then on, and the player moves on.
+	broken error
+	// failures counts, per segment, the runs that ended without making it.
+	failures map[int]int
+	// startMu serialises stopping one run and starting the next, so the
+	// old run's files are cleared before the new run's are named.
+	startMu    sync.Mutex
+	manifestMu sync.Mutex
+}
+
+// hlsRun is one ffmpeg over a session's table: from a segment, up to where
+// segments already exist or the film ends.
+type hlsRun struct {
+	seq    int64
+	ctx    context.Context
+	cancel context.CancelFunc
+	exited chan struct{} // closed once the run has ended and cleaned up
+	// fileStart is the index of the first file the muxer writes, which is
+	// where the demuxer landed; partial says that file begins inside its
+	// segment and is thrown away. until is where the run stops, exclusive.
+	fileStart int
+	partial   bool
+	until     int
+	list      string // the muxer's list, by name in the session directory
+	hardware  bool
+	state     hlsRunState
+	seen      int   // lines of the list already read
+	reached   bool  // it produced everything it was asked for
+	err       error // what ended it, if not the end of its work
 }
 
 // hlsKeyFile names what a session's segments are a conversion of, so a later
 // run can pick them up rather than converting the same film again.
 const hlsKeyFile = "session.key"
 
-// Adopt takes over the finished conversions a previous run left behind.
+// hlsManifest lists, for a session with a table, the segments finished and
+// the file holding each — the record a later run adopts, and the one thing
+// that says a file on disk is whole.
+const hlsManifest = "done.txt"
+
+// Adopt takes over the conversions a previous run left behind.
 //
-// Only finished ones: a playlist without its end marker is a conversion that
-// was interrupted, and there is no way to carry on from where it stopped —
-// the ffmpeg that knew where that was is gone. Those go, along with anything
-// that is not a session at all.
+// A session with a table is taken as far as its manifest goes: every segment
+// it lists is whole, since a line is written only once the muxer has closed
+// the file, and anything else in the directory is what a conversion was in
+// the middle of. A session without one is kept only when its playlist has
+// its end marker — a conversion that was interrupted cannot be carried on
+// from where it stopped, the ffmpeg that knew where that was being gone.
+// Directories that are neither go.
 func (h *HLS) Adopt() {
 	base, err := h.scratch.Sub("hls")
 	if err != nil {
@@ -165,6 +260,10 @@ func (h *HLS) Adopt() {
 	for _, e := range entries {
 		dir := filepath.Join(base, e.Name())
 		key, ok := completedSession(dir)
+		var have map[int]string
+		if !ok {
+			key, have, ok = adoptTabled(dir)
+		}
 		if !ok {
 			_ = os.RemoveAll(dir)
 			continue
@@ -186,6 +285,7 @@ func (h *HLS) Adopt() {
 			// straight away rather than protecting it for a window it did
 			// not earn.
 			last: modTime(dir), converting: false,
+			have: have, wake: make(chan struct{}), failures: map[int]int{},
 		}
 		h.sessions[key] = s
 		h.byID[s.id] = s
@@ -201,7 +301,7 @@ func (h *HLS) Adopt() {
 }
 
 // completedSession reports what a directory holds, and whether it is a
-// conversion that ran to the end.
+// conversion without a table that ran to the end.
 func completedSession(dir string) (string, bool) {
 	key, err := os.ReadFile(filepath.Join(dir, hlsKeyFile))
 	if err != nil || len(key) == 0 {
@@ -217,6 +317,54 @@ func completedSession(dir string) (string, bool) {
 		return "", false
 	}
 	return string(key), true
+}
+
+// adoptTabled reads a tabled session's manifest and clears the directory
+// down to what it names: the key, and the whole segments.
+func adoptTabled(dir string) (string, map[int]string, bool) {
+	key, err := os.ReadFile(filepath.Join(dir, hlsKeyFile))
+	if err != nil || !strings.Contains(string(key), "|"+hlsVODField+"|") {
+		return "", nil, false
+	}
+	have := readManifest(dir)
+	keep := map[string]bool{hlsKeyFile: true, hlsManifest: true}
+	for _, name := range have {
+		keep[name] = true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", nil, false
+	}
+	for _, e := range entries {
+		if !keep[e.Name()] {
+			_ = os.RemoveAll(filepath.Join(dir, e.Name()))
+		}
+	}
+	return string(key), have, true
+}
+
+// readManifest is the segments a manifest says are whole, checked against
+// the disk: a line naming a file that is not there, or is empty, is a
+// segment that is not there.
+func readManifest(dir string) map[int]string {
+	have := map[int]string{}
+	f, err := os.Open(filepath.Join(dir, hlsManifest))
+	if err != nil {
+		return have
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		var k int
+		var name string
+		if _, err := fmt.Sscanf(sc.Text(), "%d %s", &k, &name); err != nil || k < 0 {
+			continue
+		}
+		if fi, err := os.Stat(filepath.Join(dir, name)); err == nil && fi.Size() > 0 && filepath.Base(name) == name {
+			have[k] = name
+		}
+	}
+	return have
 }
 
 // modTime is when a session was last written to.
@@ -238,7 +386,9 @@ func NewHLS(ffmpeg string, lib *library.Library, scratch *Scratch, log *slog.Log
 	}
 }
 
-// Close stops every conversion and removes what they wrote.
+// Close stops every conversion and removes what an interrupted one without a
+// table wrote. A tabled session keeps its files: the manifest says which are
+// whole, and the next run adopts exactly those.
 func (h *HLS) Close() {
 	// converting is read and written under the lock everywhere, so the
 	// decision is taken here and only the I/O happens outside it.
@@ -250,7 +400,7 @@ func (h *HLS) Close() {
 	h.closed = true
 	all := make([]closing, 0, len(h.sessions))
 	for _, s := range h.sessions {
-		all = append(all, closing{s, s.converting})
+		all = append(all, closing{s, s.converting && s.table == nil})
 		s.converting = false
 	}
 	h.sessions = map[string]*hlsSession{}
@@ -296,6 +446,13 @@ func (s *hlsSession) discard() error {
 	return os.RemoveAll(s.dir)
 }
 
+// hlsTimelineHeader tells the player whose clock the stream keeps: "film"
+// for a tabled session, whose segments carry the film's own timestamps and
+// whose playlist is the whole film, and "session" for one that begins at
+// the seek. The player cannot read a playlist's shape from the element it
+// hands the URL to, and the two want different arithmetic from it.
+const hlsTimelineHeader = "X-Media-Timeline"
+
 // handleHLSStart begins (or rejoins) a conversion and serves its playlist,
 // with the segment names rewritten to carry the session.
 //
@@ -339,6 +496,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	// The subtitle renditions below need the probed listing, and a film
 	// asked about cold would otherwise deny the captions it carries inside
 	// itself. This is the moment the probe exists for: something is opening.
+	// The table needs the film's length from the same probe.
 	it = s.probed(r.Context(), it)
 
 	sess, err := s.hls.session(r.Context(), it, t, copyVideo, r.URL.Query().Get("a"), q)
@@ -357,6 +515,11 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start the conversion: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	timeline, startAt := "session", 0.0
+	if sess.table != nil {
+		timeline, startAt = "film", t
+	}
+	w.Header().Set(hlsTimelineHeader, timeline)
 
 	// Where the film has subtitles, what is served here is a **master**
 	// playlist naming them as renditions, with the media playlist beside
@@ -369,7 +532,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	// its segments are untouched: one conversion serves every choice, and
 	// the choice picks which rendition is marked DEFAULT.
 	if subs := s.lib.Subtitles(it); len(subs) > 0 {
-		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"), copyVideo, sess.q)
+		body := masterPlaylist(sess.id, it, subs, r.URL.Query().Get("sub"), copyVideo, sess.q, startAt)
 		defer s.lib.StartStream()()
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 		w.Header().Set("Cache-Control", "no-store")
@@ -377,12 +540,17 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
+	var body []byte
+	if sess.table != nil {
+		body = sess.table.playlist(sess.id+"/", startAt)
+	} else {
+		body, err = os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		body = settledPlaylist(qualifySegments(body, sess.id))
 	}
-	body = settledPlaylist(qualifySegments(body, sess.id))
 
 	// Serving a segment is serving media: thumbnailing and enrichment yield
 	// to it exactly as they do for the file and for the pipe.
@@ -407,7 +575,7 @@ func qualifySegments(body []byte, id string) []byte {
 	return bytes.Join(lines, []byte("\n"))
 }
 
-// handleHLSFile serves one file of a running conversion.
+// handleHLSFile serves one file of a conversion.
 func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	if s.hls == nil {
 		http.NotFound(w, r)
@@ -428,9 +596,9 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 		s.handleHLSChild(w, r, sess, name)
 		return
 	}
-	// Only what a playlist can name: the segments ffmpeg writes. The session
-	// directory also holds the playlist itself (served by the start
-	// endpoint) and the key file, which is internal bookkeeping and
+	// Only what a playlist can name: the segments. The session directory
+	// also holds the playlist itself (served by the start endpoint), the
+	// muxer's lists and the key file, which are internal bookkeeping and
 	// nobody's to fetch.
 	if !hlsSegmentName(name) {
 		http.NotFound(w, r)
@@ -441,12 +609,32 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 	// to it exactly as they do for the file and for the pipe.
 	defer s.lib.StartStream()()
 
+	path := filepath.Join(sess.dir, name)
+	if sess.table != nil {
+		// Made on request where it has not been made yet — this is where a
+		// seek is answered — and the request waits for it.
+		var err error
+		path, err = s.hls.segment(r.Context(), sess, hlsSegmentIndex(name))
+		switch {
+		case err == nil:
+		case errors.Is(err, errNoSuchSegment):
+			http.NotFound(w, r)
+			return
+		case r.Context().Err() != nil:
+			return // the player left
+		default:
+			s.log.Warn("hls segment", "path", sess.item.Rel, "segment", name, "err", err)
+			http.Error(w, "the conversion could not produce this segment: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
 	w.Header().Set("Content-Type", "video/mp2t")
 	// A segment never changes, but it lives only as long as its session, so
 	// it is not for keeping either.
 	w.Header().Set("Cache-Control", "no-store")
 
-	f, err := os.Open(filepath.Join(sess.dir, name))
+	f, err := os.Open(path)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -463,13 +651,13 @@ func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
 // Progress reports how much of this item has been converted, and whether a
 // conversion is running.
 //
-// Counted in segments, which is what there is: each one is a known number of
-// seconds, so the total against the item's length is how far the conversion
-// has reached. That is not how much has been *watched* — it is how much is
-// ready to watch, which is the thing worth showing while waiting.
+// Counted in segments, which is what there is: a tabled session knows how
+// many it has of how many, and one without counts its files against the
+// item's length. That is not how much has been *watched* — it is how much
+// is ready to watch, which is the thing worth showing while waiting.
 //
-// Of the item's sessions — a film seeked twice, or asked for in two
-// languages, has several — it is the most recently asked for that answers:
+// Of the item's sessions — a film asked for in two languages, or at two
+// rungs, has several — it is the most recently asked for that answers:
 // the one the player waiting on this readout started. The first found used
 // to answer, which in a map is whichever, and could describe a conversion
 // nobody was watching.
@@ -481,8 +669,20 @@ func (h *HLS) Progress(id string, durationMs int64) (float64, bool) {
 		dir = s.dir
 	}
 	h.mu.Unlock()
-	if dir == "" || durationMs <= 0 {
-		return 0, dir != ""
+	if dir == "" {
+		return 0, false
+	}
+	if s.table != nil {
+		s.sm.Lock()
+		n, got := s.table.n(), len(s.have)
+		s.sm.Unlock()
+		if n <= 0 {
+			return 0, true
+		}
+		return min(float64(got)/float64(n), 1), true
+	}
+	if durationMs <= 0 {
+		return 0, true
 	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -515,8 +715,8 @@ func settledPlaylist(body []byte) []byte {
 		[]byte("#EXT-X-PLAYLIST-TYPE:VOD"), 1)
 }
 
-// hlsSegmentName reports whether a request names one of the segments ffmpeg
-// writes ("seg00000.ts"): a fixed prefix, digits, and the one extension.
+// hlsSegmentName reports whether a request names a segment ("seg00000.ts"):
+// a fixed prefix, digits, and the one extension.
 func hlsSegmentName(name string) bool {
 	rest, ok := strings.CutPrefix(name, "seg")
 	if !ok {
@@ -549,10 +749,44 @@ func (h *HLS) byToken(id string) *hlsSession {
 	return s
 }
 
+// tableFor decides how a film will be cut, or that it cannot be decided:
+// a re-encode keeps the grid, a copy takes the file's own keyframes where
+// the container has an index this reads (library.Keyframes). Nil is a
+// session of the older shape, one conversion from the seek.
+//
+// Two things rule a table out whatever the container. Content read through
+// a pipe cannot be seeked, so a run cannot start at a segment; and a disc
+// title is seeked by byte position because its clock is not continuous
+// (library.SeekByte), where a table is a promise about that clock.
+func (h *HLS) tableFor(it library.Item, copyVideo bool) *hlsTable {
+	end := float64(it.Duration) / 1000
+	if end <= 0 || library.SeeksByByte(it) {
+		return nil
+	}
+	if it.Archived() && library.LoopbackURL(it) == "" {
+		return nil
+	}
+	if !copyVideo {
+		return hlsGrid(end)
+	}
+	keys, ok := library.Keyframes(it)
+	if !ok {
+		return nil
+	}
+	return hlsTableFromKeys(keys, end)
+}
+
 // session returns the conversion for what was asked for, starting it if this
-// is the first ask, and waits until there is something to play.
+// is the first ask. A tabled session answers at once and begins converting
+// where the viewer asked to start; one without waits until there is
+// something to play.
 func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo bool, audio string, q quality) (*hlsSession, error) {
-	key := hlsKey(it, t, copyVideo, audio, q)
+	table := h.tableFor(it, copyVideo)
+	keyT := t
+	if table != nil {
+		keyT = -1
+	}
+	key := hlsKey(it, keyT, copyVideo, audio, q)
 
 	h.mu.Lock()
 	if h.closed {
@@ -564,6 +798,17 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 		s.used = h.seq
 		s.last = time.Now()
 		h.mu.Unlock()
+		if table != nil {
+			// Adopted from an earlier run: it knows what it holds and not
+			// what it is of, until the first ask says.
+			s.sm.Lock()
+			if s.table == nil {
+				s.table, s.item, s.copyVideo, s.audio, s.q = table, it, copyVideo, audio, q
+			}
+			s.sm.Unlock()
+			h.prewarm(s, t)
+			return s, nil
+		}
 		return h.await(ctx, s)
 	}
 	h.mu.Unlock()
@@ -610,17 +855,37 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 		h.mu.Unlock()
 		cancel()
 		_ = os.RemoveAll(dir)
+		if table != nil {
+			h.prewarm(s, t)
+			return s, nil
+		}
 		return h.await(ctx, s)
 	}
 	h.seq++
 	s := &hlsSession{
 		key: key, id: hex.EncodeToString(raw[:]), dir: dir, item: it, start: t, q: q,
+		copyVideo: copyVideo, audio: audio,
 		cancel: cancel, ready: make(chan struct{}), used: h.seq, last: time.Now(),
+		table: table, have: map[int]string{}, wake: make(chan struct{}), failures: map[int]int{},
+	}
+	if table != nil {
+		// Nothing to wait for: the playlist is the whole film, and the
+		// segments are made as they are asked for.
+		s.start = 0
+		cancel()
+		s.cancel = func() {}
+		close(s.ready)
+		h.sessions[key] = s
+		h.byID[s.id] = s
+		h.mu.Unlock()
+		go h.reap(s)
+		h.prewarm(s, t)
+		return s, nil
 	}
 	s.converting = true
 	h.sessions[key] = s
 	h.byID[s.id] = s
-	stop := h.limitConvertingLocked()
+	stop := h.limitConvertingLocked(s)
 	for _, old := range stop {
 		old.stopConverting() // holds h.mu, as stopConverting requires
 	}
@@ -635,24 +900,34 @@ func (h *HLS) session(ctx context.Context, it library.Item, t float64, copyVideo
 	// playlist beside the new one.
 	go h.watchFirst(cctx, s)
 	go h.run(cctx, s, it, t, copyVideo, audio, q)
-	go h.reap(cctx, s)
+	go h.reap(s)
 	return h.await(ctx, s)
 }
 
+// hlsVODField is what stands where the start time would in the key of a
+// session with a table: it begins nowhere in particular, being the whole
+// film.
+const hlsVODField = "vod"
+
 // hlsKey is what a session is: the film, the file it was when the session
-// was made, where it starts, what is converted, which soundtrack — and which
-// rung of the bitrate ladder. The soundtrack is part of it because two
-// viewers watching one film in different languages are watching two
-// conversions, and the rung for the same reason: a viewer who moved down
-// the ladder must not be handed the session made before they did. The rung
-// is last, so a key written before there was one still reads back
-// (hlsSessionItem takes the start from the fourth field).
+// was made, where it starts (or that it is the whole film), what is
+// converted, which soundtrack — and which rung of the bitrate ladder. The
+// soundtrack is part of it because two viewers watching one film in
+// different languages are watching two conversions, and the rung for the
+// same reason: a viewer who moved down the ladder must not be handed the
+// session made before they did. The rung is last, so a key written before
+// there was one still reads back (hlsSessionItem takes the start from the
+// fourth field).
 func hlsKey(it library.Item, t float64, copyVideo bool, audio string, q quality) string {
 	mode := "full"
 	if copyVideo {
 		mode = "audio"
 	}
-	return fmt.Sprintf("%s|%d|%d|%.3f|%s|%s|q%d", it.ID, it.ModTime, it.Size, t, mode, audio, q.kbps)
+	start := hlsVODField
+	if t >= 0 {
+		start = fmt.Sprintf("%.3f", t)
+	}
+	return fmt.Sprintf("%s|%d|%d|%s|%s|%s|q%d", it.ID, it.ModTime, it.Size, start, mode, audio, q.kbps)
 }
 
 // await blocks until the session has something to play, or the caller leaves.
@@ -676,58 +951,60 @@ func (h *HLS) await(ctx context.Context, s *hlsSession) (*hlsSession, error) {
 
 // limitConvertingLocked keeps the number of running conversions down without
 // touching what any of them produced. The least recently wanted one stops;
-// its segments stay, and a player still watching that part still can.
+// its segments stay, and a player still watching that part still can. The
+// session that is starting is never among them, whatever its age.
 // Called with the lock held.
-func (h *HLS) limitConvertingLocked() []*hlsSession {
+func (h *HLS) limitConvertingLocked(starting *hlsSession) []*hlsSession {
 	var running []*hlsSession
 	for _, s := range h.sessions {
-		if s.converting {
+		if s.converting && s != starting {
 			running = append(running, s)
 		}
 	}
-	if len(running) <= hlsConverting {
+	if len(running) < hlsConverting {
 		return nil
 	}
 	slices.SortFunc(running, func(a, b *hlsSession) int { return cmp.Compare(a.used, b.used) })
-	return running[:len(running)-hlsConverting]
+	return running[:len(running)-hlsConverting+1]
 }
 
 // reap stops converting a film nobody is watching. What was converted stays:
 // going back to it should not do the work again, and the only thing that
-// removes files is the budget needing the space.
-func (h *HLS) reap(ctx context.Context, s *hlsSession) {
+// removes files is the budget needing the space. A session without a table
+// is done with once its one conversion ends; one with a table may start
+// another on the next seek, so its reaper lives as long as it does.
+func (h *HLS) reap(s *hlsSession) {
 	t := time.NewTicker(hlsIdle / 3)
 	defer t.Stop()
 	last := int64(-1)
 	quiet := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+	for range t.C {
+		h.mu.Lock()
+		cur := s.used
+		live := h.sessions[s.key] == s
+		converting := s.converting
+		h.mu.Unlock()
+		if !live || (!converting && s.table == nil) {
+			return // discarded by the budget, or finished on its own
+		}
+		if !converting {
+			last, quiet = cur, 0
+			continue
+		}
+		h.account()
+		if cur == last {
+			quiet++
+		} else {
+			quiet = 0
+			last = cur
+		}
+		if quiet >= 3 {
+			h.log.Info("nobody is watching; stopping the conversion and keeping what it produced",
+				"dir", s.dir)
 			h.mu.Lock()
-			cur := s.used
-			live := h.sessions[s.key] == s
-			converting := s.converting
+			s.stopConverting()
 			h.mu.Unlock()
-			if !live || !converting {
-				return // discarded by the budget, or finished on its own
-			}
-			h.account()
-			if cur == last {
-				quiet++
-			} else {
-				quiet = 0
-				last = cur
-			}
-			if quiet >= 3 {
-				h.log.Info("nobody is watching; stopping the conversion and keeping what it produced",
-					"dir", s.dir)
-				h.mu.Lock()
-				s.stopConverting()
-				h.mu.Unlock()
-				return
-			}
+			quiet = 0
 		}
 	}
 }
@@ -893,6 +1170,509 @@ func (h *HLS) forget(s *hlsSession) {
 	h.account()
 }
 
+// ---- tabled sessions ----------------------------------------------------
+
+// broadcastLocked wakes everything waiting on the session. Called with sm
+// held.
+func (s *hlsSession) broadcastLocked() {
+	close(s.wake)
+	s.wake = make(chan struct{})
+}
+
+// runStateLocked is the conversion in flight as a request may judge it.
+// Called with sm held.
+func (s *hlsSession) runStateLocked() *hlsRunState {
+	if s.run == nil {
+		return nil
+	}
+	st := s.run.state
+	return &st
+}
+
+// prewarm starts converting at the moment the viewer asked for, so the
+// first segment request finds it under way rather than starting it.
+func (h *HLS) prewarm(s *hlsSession, t float64) {
+	k := s.table.at(t)
+	s.sm.Lock()
+	_, have := s.have[k]
+	wait := hlsWaitFor(s.runStateLocked(), k, time.Now())
+	s.sm.Unlock()
+	if have || wait {
+		return
+	}
+	if err := h.restartAt(s, k); err != nil {
+		h.log.Warn("hls: could not begin converting", "path", s.item.Rel, "segment", k, "err", err)
+	}
+}
+
+// segment answers with the file holding segment k, making it first where it
+// has not been made: waiting on the conversion that will reach it, or
+// stopping that one and starting at k where a fresh start would be sooner.
+func (h *HLS) segment(ctx context.Context, s *hlsSession, k int) (string, error) {
+	limit := time.NewTimer(hlsFirstWait)
+	defer limit.Stop()
+	for {
+		s.sm.Lock()
+		if s.broken != nil {
+			err := s.broken
+			s.sm.Unlock()
+			return "", err
+		}
+		if name, ok := s.have[k]; ok {
+			s.sm.Unlock()
+			return filepath.Join(s.dir, name), nil
+		}
+		if k < 0 || k >= s.table.n() {
+			s.sm.Unlock()
+			return "", errNoSuchSegment
+		}
+		wake := s.wake
+		wait := hlsWaitFor(s.runStateLocked(), k, time.Now())
+		s.sm.Unlock()
+		if !wait {
+			if err := h.restartAt(s, k); err != nil {
+				return "", err
+			}
+			continue
+		}
+		select {
+		case <-wake:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-limit.C:
+			return "", errors.New("the conversion did not reach the segment in time")
+		}
+	}
+}
+
+// restartAt stops the conversion in flight, if any, and starts one at k.
+// Serialised per session: the old run's files are cleared before the new
+// one is named, and two requests deciding to restart at once start one.
+func (h *HLS) restartAt(s *hlsSession, k int) error {
+	s.startMu.Lock()
+	defer s.startMu.Unlock()
+	s.sm.Lock()
+	old := s.run
+	_, have := s.have[k]
+	wait := hlsWaitFor(s.runStateLocked(), k, time.Now())
+	s.sm.Unlock()
+	if have || wait {
+		return nil // somebody got here first
+	}
+	if old != nil {
+		if !old.state.ended {
+			old.cancel()
+		}
+		<-old.exited
+		// A run that ended without making a segment it was asked for is
+		// counted against that segment, whatever ended it — an error, or
+		// an end with nothing to show — and the second such is a file that
+		// will not convert: the session says so rather than trying for
+		// ever. A run that was stopped is not one of these; a run that
+		// began behind this segment and never reached it is.
+		if old.state.ended && old.ctx.Err() == nil && k >= old.fileStart && k < old.until {
+			err := old.err
+			if err == nil {
+				err = fmt.Errorf("the conversion ended without producing segment %d", k)
+			}
+			s.sm.Lock()
+			s.failures[k]++
+			tooMany := s.failures[k] >= hlsRunFailures
+			if tooMany && s.broken == nil {
+				s.broken = err
+				s.broadcastLocked()
+			}
+			s.sm.Unlock()
+			if tooMany {
+				return err
+			}
+		}
+	}
+	return h.startRun(s, k)
+}
+
+// startRun begins a conversion at segment k.
+func (h *HLS) startRun(s *hlsSession, k int) error {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return errHLSClosed
+	}
+	h.seq++
+	seq := h.seq
+	cctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	s.converting = true
+	stop := h.limitConvertingLocked(s)
+	for _, old := range stop {
+		old.stopConverting()
+	}
+	h.mu.Unlock()
+	for _, old := range stop {
+		h.log.Info("stopped converting, keeping what it produced", "dir", old.dir)
+	}
+
+	r := &hlsRun{
+		seq: seq, ctx: cctx, cancel: cancel, exited: make(chan struct{}),
+		fileStart: k, list: fmt.Sprintf("list-%d.csv", seq),
+		state: hlsRunState{next: k, started: time.Now()},
+	}
+	s.sm.Lock()
+	r.until = s.table.n()
+	for j := k + 1; j < s.table.n(); j++ {
+		if _, ok := s.have[j]; ok {
+			r.until = j
+			break
+		}
+	}
+	r.state.until = r.until
+	s.run = r
+	s.broadcastLocked()
+	s.sm.Unlock()
+	go h.runTable(s, r, k)
+	return nil
+}
+
+// runTable is one conversion over the table, from segment k: the probe
+// that says where the demuxer will land, the ffmpeg, the reading of its
+// list as it writes, and the clearing up.
+func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
+	ctx := r.ctx
+	tb := s.table
+	defer h.endRun(s, r)
+
+	// Where the run begins. A re-encode seeks accurately and starts on the
+	// grid point itself. A copy starts where the demuxer lands, which is a
+	// keyframe at or before the boundary; the muxer is told the table's
+	// cuts from there, and whatever it writes before the first whole
+	// segment is thrown away.
+	seek, landed := tb.starts[k], tb.starts[k]
+	if !tb.grid && k > 0 {
+		var err error
+		seek, landed, err = h.landing(ctx, s.item, tb.starts[k])
+		if err != nil {
+			if ctx.Err() == nil {
+				r.err = fmt.Errorf("finding where the seek lands: %w", err)
+				h.log.Warn("hls: landing probe failed", "path", s.item.Rel, "at", tb.starts[k], "err", err)
+			}
+			return
+		}
+		r.fileStart = tb.at(landed)
+		r.partial = landed > tb.starts[r.fileStart]+hlsLandTol
+	}
+	var times []float64
+	if !tb.grid {
+		for j := r.fileStart + 1; j < r.until; j++ {
+			times = append(times, tb.starts[j]-landed-0.0005)
+		}
+	}
+	to := 0.0
+	if r.until < tb.n() {
+		to = tb.starts[r.until] + hlsRunTail
+	}
+
+	for attempt := 1; ; attempt++ {
+		outcome := h.attemptTable(ctx, s, r, seek, times, to)
+		if outcome == attemptAgain && attempt < hlsMaxAttempts && r.state.produced == 0 {
+			h.clearRun(s, r)
+			r.seen = 0
+			continue
+		}
+		break
+	}
+}
+
+// attemptTable is one ffmpeg over a run.
+func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek float64, times []float64, to float64) attemptOutcome {
+	it := s.item
+	repaired := aspects.has(it)
+	plan, err := planConversion(ctx, h.ffmpeg, it, seek, s.copyVideo, s.audio, s.q, repaired, true, h.log)
+	if err != nil {
+		r.err = err
+		return attemptDone
+	}
+	defer plan.close()
+	r.hardware = plan.hardware
+	pattern := fmt.Sprintf("run%d-seg%%05d.ts", r.seq)
+	args := append(plan.args, hlsTableArgs(s.dir, r.list, pattern, r.fileStart, times, s.table.grid, to)...)
+
+	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
+	if plan.stdin != nil {
+		cmd.Stdin = plan.stdin
+	}
+	var errBuf strings.Builder
+	cmd.Stderr = &errBuf
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Start(); err != nil {
+		r.err = err
+		return attemptDone
+	}
+	stop := make(chan struct{})
+	followed := make(chan struct{})
+	go func() {
+		defer close(followed)
+		h.follow(ctx, s, r, stop)
+	}()
+	werr := cmd.Wait()
+	close(stop)
+	<-followed
+	h.readList(s, r) // whatever it closed on the way out
+	if werr == nil || ctx.Err() != nil || r.reached {
+		// Finished, stopped, or done with what it was asked for: an error on
+		// the way out of a run that produced everything is not one — the
+		// graphics engine complains at the flush of a run cut short by -to,
+		// measured, and writing the hardware off for that would send every
+		// later run of the film to the processor.
+		return attemptDone
+	}
+	h.log.Warn("hls conversion ended", "path", it.Rel, "err", werr,
+		"ffmpeg", strings.TrimSpace(errBuf.String()))
+	if startOverWithAspect(errBuf.String(), repaired, repairable(h.ffmpeg, it)) {
+		aspects.note(it)
+		h.log.Info("converting again with the declared aspect put right", "path", it.Rel)
+		return attemptAgain
+	}
+	if plan.hardware {
+		// A run the graphics engine was carrying is written off for this
+		// file: half a conversion is a viewer watching a spinner, and the
+		// processor always works. Where nothing was written the run goes
+		// again on it at once; otherwise the next request starts one.
+		hwRefused.note(it)
+		h.log.Info("converting on the processor from now on", "path", it.Rel)
+		if r.state.produced == 0 {
+			return attemptAgain
+		}
+	}
+	r.err = werr
+	return attemptDone
+}
+
+// hlsTableArgs is the delivery for a tabled run: transport-stream segments
+// keeping the file's own clock, cut where the table says, named per run,
+// and listed as each is closed.
+func hlsTableArgs(dir, list, pattern string, startNumber int, times []float64, grid bool, to float64) []string {
+	args := []string{
+		"-f", "segment",
+		"-segment_format", "mpegts",
+		// The muxer's own clock would otherwise start every segment file
+		// near zero; the timestamps have to be the film's, so a run begun
+		// anywhere joins the segments around it.
+		"-segment_format_options", "mpegts_copyts=1",
+		"-segment_start_number", strconv.Itoa(startNumber),
+		// The list is written whole to a temporary file and renamed, so a
+		// reader never sees half a line.
+		"-segment_list", filepath.Join(dir, list),
+		"-segment_list_type", "csv",
+		"-segment_list_flags", "+live",
+		"-segment_list_size", "0",
+	}
+	if grid {
+		// Cumulative from the first packet, which the accurate seek puts on
+		// the grid point itself; the delta takes the forced keyframe on the
+		// next grid point even when it lands a frame early of the count.
+		args = append(args, "-segment_time", strconv.Itoa(hlsSegmentSec), "-segment_time_delta", "0.06")
+	} else {
+		// Every cut named; past the last named one the muxer cuts nowhere.
+		// Named even where there is none to make — a run over the film's
+		// last segment — because with no times at all the muxer falls back
+		// to its own two-second default and cuts where the table did not.
+		parts := make([]string, 0, len(times)+1)
+		for _, t := range times {
+			parts = append(parts, strconv.FormatFloat(t, 'f', 4, 64))
+		}
+		if len(parts) == 0 {
+			parts = append(parts, "999999999")
+		}
+		args = append(args, "-segment_times", strings.Join(parts, ","))
+	}
+	if to > 0 {
+		args = append(args, "-to", strconv.FormatFloat(to, 'f', 3, 64))
+	}
+	return append(args, "-y", filepath.Join(dir, pattern))
+}
+
+// follow reads the run's list as it grows.
+func (h *HLS) follow(ctx context.Context, s *hlsSession, r *hlsRun, stop chan struct{}) {
+	t := time.NewTicker(hlsListPoll)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-stop:
+			return
+		case <-t.C:
+			h.readList(s, r)
+		}
+	}
+}
+
+// readList takes in the lines the muxer has added since last time: each is
+// a segment it has closed, judged against the table and, where it is one
+// the run was asked for, recorded as whole. A stub past the run's end is
+// ignored; the file the demuxer's landing put before the first whole
+// segment is left for the clearing up.
+func (h *HLS) readList(s *hlsSession, r *hlsRun) {
+	body, err := os.ReadFile(filepath.Join(s.dir, r.list))
+	if err != nil {
+		return
+	}
+	cuts := parseSegmentList(body)
+	if len(cuts) <= r.seen {
+		return
+	}
+	tb := s.table
+	for _, c := range cuts[r.seen:] {
+		first := r.seen == 0
+		r.seen++
+		if c.index >= r.until {
+			continue
+		}
+		if first && r.partial {
+			continue
+		}
+		if err := tb.verify(c, first); err != nil {
+			h.log.Warn("hls: a segment was cut where the table did not say; giving the session up",
+				"path", s.item.Rel, "err", err)
+			s.sm.Lock()
+			if s.broken == nil {
+				s.broken = err
+			}
+			s.broadcastLocked()
+			s.sm.Unlock()
+			r.err = err
+			r.cancel()
+			return
+		}
+		name := fmt.Sprintf("run%d-%s", r.seq, hlsSegmentFile(c.index))
+		s.sm.Lock()
+		if _, ok := s.have[c.index]; !ok {
+			s.have[c.index] = name
+			s.appendManifest(c.index, name)
+		}
+		r.state.produced++
+		r.state.next = c.index + 1
+		if c.index+1 >= r.until {
+			r.reached = true
+		}
+		s.broadcastLocked()
+		s.sm.Unlock()
+	}
+}
+
+// appendManifest records a whole segment for a later run to adopt. Called
+// with sm held; the file's own lock keeps two runs' lines apart.
+func (s *hlsSession) appendManifest(k int, name string) {
+	s.manifestMu.Lock()
+	defer s.manifestMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(s.dir, hlsManifest), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	fmt.Fprintf(f, "%d %s\n", k, name)
+}
+
+// clearRun removes what a run wrote that is not a whole segment: the stub
+// past its end, the file it was in the middle of, the landing's lead-in,
+// and its list.
+func (h *HLS) clearRun(s *hlsSession, r *hlsRun) {
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return
+	}
+	prefix := fmt.Sprintf("run%d-", r.seq)
+	s.sm.Lock()
+	kept := map[string]bool{}
+	for _, name := range s.have {
+		kept[name] = true
+	}
+	s.sm.Unlock()
+	for _, e := range entries {
+		name := e.Name()
+		if (strings.HasPrefix(name, prefix) && !kept[name]) || name == r.list {
+			_ = os.Remove(filepath.Join(s.dir, name))
+		}
+	}
+}
+
+// endRun is the clearing up after a run, however it ended, and the word to
+// everyone waiting on it.
+func (h *HLS) endRun(s *hlsSession, r *hlsRun) {
+	h.clearRun(s, r)
+	h.mu.Lock()
+	s.converting = false
+	h.mu.Unlock()
+	s.sm.Lock()
+	r.state.ended = true
+	// Left in place, ended: the next request reads what stopped it, and
+	// the next run replaces it.
+	s.broadcastLocked()
+	s.sm.Unlock()
+	close(r.exited)
+	h.account()
+}
+
+// landing finds where a copy started at a boundary will actually begin: the
+// seek to ask for, and the keyframe the demuxer lands on for it.
+//
+// Asked for a keyframe's own time, ffmpeg lands on the keyframe before it —
+// it takes hlsSeekLead off the time first, for the stream's reordering —
+// so the boundary plus that lead is tried first, and lands on the boundary
+// itself on the ffmpeg measured. Where it does not, a hair past the
+// boundary is asked for instead, which lands at or before it on any
+// demuxer; the run then begins a keyframe early and the lead-in is thrown
+// away. Either way the answer is read back from the one packet ffmpeg is
+// asked to copy out, never assumed.
+func (h *HLS) landing(ctx context.Context, it library.Item, boundary float64) (seek, landed float64, err error) {
+	round := func(v float64) float64 { return math.Round(v*1000) / 1000 }
+	seek = round(boundary + hlsSeekLead + 0.001)
+	landed, err = h.probe(ctx, it, seek)
+	if err == nil && math.Abs(landed-boundary) <= hlsLandTol {
+		return seek, boundary, nil
+	}
+	seek = round(boundary + 0.0005)
+	landed, err = h.probe(ctx, it, seek)
+	if err != nil {
+		return 0, 0, err
+	}
+	if landed > boundary+hlsLandTol {
+		return 0, 0, fmt.Errorf("a seek to %.3f landed past it, at %.3f", seek, landed)
+	}
+	return seek, landed, nil
+}
+
+// probe copies one packet out from a seek and reads its time.
+func (h *HLS) probe(ctx context.Context, it library.Item, seek float64) (float64, error) {
+	input, _, err := convertInput(it, 0)
+	if err != nil {
+		return 0, err
+	}
+	if input.pipe != nil {
+		_ = input.pipe.Close()
+		return 0, errors.New("content read through a pipe cannot be seeked")
+	}
+	ctx, cancel := context.WithTimeout(ctx, hlsProbeBudget)
+	defer cancel()
+	args := append(ffmpegBase(), "-ss", strconv.FormatFloat(seek, 'f', 3, 64), "-copyts")
+	args = append(args, input.args...)
+	args = append(args, "-map", "0:v:0", "-c:v", "copy", "-frames:v", "1",
+		"-f", "mpegts", "-mpegts_copyts", "1", "pipe:1")
+	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return 0, err
+	}
+	pts, ok := tsFirstVideoPTS(out)
+	if !ok {
+		return 0, errors.New("the probe produced no video packet")
+	}
+	return pts, nil
+}
+
+// ---- sessions without a table ---------------------------------------------
+
 // run is the conversion itself: the plan both converters share (convert.go)
 // delivered as segments — made again where an attempt taught something
 // (the aspect repair, the hardware written off), and judged only once the
@@ -981,7 +1761,7 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 	// have worked was refused on the strength of a repair this run never
 	// made.
 	repaired := aspects.has(it)
-	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, q, repaired, h.log)
+	plan, err := planConversion(ctx, h.ffmpeg, it, t, copyVideo, audio, q, repaired, false, h.log)
 	if err != nil {
 		s.fail(err)
 		h.forget(s)
@@ -1038,8 +1818,9 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 	return attemptDone
 }
 
-// hlsOutputArgs is the delivery: segments of hlsSegmentSec, every one of
-// them kept and listed, into the session's directory.
+// hlsOutputArgs is the delivery for a session without a table: segments of
+// hlsSegmentSec, every one of them kept and listed, into the session's
+// directory.
 func hlsOutputArgs(dir string) []string {
 	return []string{
 		"-f", "hls",

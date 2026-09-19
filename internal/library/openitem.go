@@ -22,6 +22,10 @@ func OpenItem(it Item) (File, error) {
 	return os.Open(it.Path)
 }
 
+// SeeksByByte says the item is one SeekByte answers for: a disc title,
+// whose clock is not continuous and whose seeks go by position instead.
+func SeeksByByte(it Item) bool { return it.stored != nil && len(it.stored.seek) > 0 }
+
 // SeekByte maps a time to a byte offset in an item's content, for content
 // that carries an index of its own and cannot be seeked by timestamp.
 //

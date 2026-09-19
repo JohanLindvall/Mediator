@@ -35,7 +35,7 @@ import (
 // masterPlaylist names the media playlist and the subtitle renditions, all
 // relative to the master's own URL so they resolve under the session path —
 // signed prefix and all — exactly as segments always have.
-func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string, copyVideo bool, q quality) []byte {
+func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen string, copyVideo bool, q quality, startAt float64) []byte {
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n#EXT-X-VERSION:4\n")
 	def := -1
@@ -94,7 +94,14 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 			bw = v
 		}
 	}
-	fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,SUBTITLES=\"text\"\n%s/media.m3u8\n", bw, sid)
+	// Where to begin travels to the media playlist in its query — which the
+	// player drops when it resolves the segment names against it, so those
+	// still land under the session.
+	media := "media.m3u8"
+	if startAt > 0 {
+		media = fmt.Sprintf("media.m3u8?t=%.3f", startAt)
+	}
+	fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,SUBTITLES=\"text\"\n%s/%s\n", bw, sid, media)
 	return []byte(b.String())
 }
 
@@ -112,13 +119,20 @@ func (s *Server) handleHLSChild(w http.ResponseWriter, r *http.Request, sess *hl
 		// The same body the start endpoint serves when there is no master —
 		// settled, but not qualified: served from inside the session path,
 		// its bare segment names already resolve to the right place.
-		body, err := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
-		if err != nil {
-			http.NotFound(w, r)
-			return
+		var body []byte
+		if sess.table != nil {
+			t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+			body = sess.table.playlist("", max(t, 0))
+		} else {
+			raw, err := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			body = settledPlaylist(raw)
 		}
 		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		http.ServeContent(w, r, name, time.Now(), strings.NewReader(string(settledPlaylist(body))))
+		http.ServeContent(w, r, name, time.Now(), strings.NewReader(string(body)))
 		return
 	}
 
@@ -171,7 +185,9 @@ func (s *Server) handleHLSChild(w http.ResponseWriter, r *http.Request, sess *hl
 //
 // A session made this run carries a snapshot. One adopted from a previous
 // run's disk has only its key — id, identity and start are all in it, which
-// is what lets an old conversion still serve its captions.
+// is what lets an old conversion still serve its captions. A session with a
+// table starts nowhere in particular: its clock is the film's own, and the
+// cues need no rebasing at all.
 func (s *Server) hlsSessionItem(r *http.Request, sess *hlsSession) (library.Item, float64, bool) {
 	it, start := sess.item, sess.start
 	if it.ID == "" {
@@ -187,7 +203,9 @@ func (s *Server) hlsSessionItem(r *http.Request, sess *hlsSession) (library.Item
 			return it, 0, false
 		}
 		it = got
-		start, _ = strconv.ParseFloat(parts[3], 64)
+		if parts[3] != hlsVODField {
+			start, _ = strconv.ParseFloat(parts[3], 64)
+		}
 	}
 	// The embedded tracks come from the probe; a session resumed after a
 	// restart reaches here before anything else has opened the film.

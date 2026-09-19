@@ -115,6 +115,13 @@ func (c *conversion) close() {
 // from t seconds. copyVideo is the caller's decision, mustReencode already
 // consulted; audio names the soundtrack as the URL did.
 //
+// absolute keeps the film's own clock throughout — the input's timestamps
+// carried through even from the start, no shifting to zero, and a
+// re-encoded picture made to put a keyframe on every fourth second of that
+// clock — for a segmented run that has to join the segments other runs
+// made (hls.go). The pipe and a session without a table keep the older
+// arrangement, where the stream's clock begins at the seek.
+//
 // -copyts keeps every stream's own timestamps through the seek, and
 // make_zero then shifts them all by the same amount. Without the pair, a
 // copied picture starting at the keyframe and a re-encoded soundtrack
@@ -125,7 +132,7 @@ func (c *conversion) close() {
 // it could not measure one. A seek already done by byte position (a DVD
 // title, see convertInput) gets no -ss: the stream simply starts where it
 // was put.
-func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, q quality, repair bool, log *slog.Logger) (*conversion, error) {
+func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float64, copyVideo bool, audio string, q quality, repair, absolute bool, log *slog.Logger) (*conversion, error) {
 	copyVideo = effectiveCopy(copyVideo, q)
 	input, byPosition, err := convertInput(it, t)
 	if err != nil {
@@ -159,7 +166,10 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		args = append(args, hw.input()...)
 	}
 	if t > 0 && !byPosition {
-		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 3, 64), "-copyts")
+		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 3, 64))
+	}
+	if (t > 0 && !byPosition) || absolute {
+		args = append(args, "-copyts")
 	}
 	args = append(args, input.args...)
 	// Which soundtrack, when the file carries more than one. Out of range is
@@ -174,6 +184,9 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		// except the tone-map, which the engine cannot do and the processor
 		// takes over for, after the engine has scaled the picture down.
 		args = append(args, hw.encode(convertMaxWidth, q, hw.toneMap(toneCurve(ffmpeg, it.HDR)))...)
+		if absolute {
+			args = append(args, hwGridKeyframes()...)
+		}
 		args = append(args, convertColourArgs(it.HDR)...)
 	default:
 		// A wide-colour picture is brought back to ordinary colour on the
@@ -192,14 +205,51 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
 			"-vf", videoFilter(filters), "-pix_fmt", "yuv420p")
+		if absolute {
+			// On the grid and nowhere else: a scene cut may not add a
+			// keyframe of its own, or the muxer could take it for the
+			// boundary a hair early.
+			args = append(args, "-force_key_frames", gridKeyframeExpr, "-sc_threshold", "0", "-g", "1000")
+		}
 		if q.chosen() {
 			args = append(args, q.rateCap()...)
 		}
 		args = append(args, convertColourArgs(it.HDR)...)
 	}
 	c.args = append(args, audioEncodeArgs(false)...)
-	c.args = append(c.args, "-avoid_negative_ts", "make_zero")
+	// The muxer shifts every stream by the same amount rather than rebasing
+	// each to zero on its own — the belt for a seek whose keyframe could not
+	// be measured. make_zero puts the first timestamp at zero, which is
+	// exactly what an absolute clock must not have done to it (measured: a
+	// run begun twenty minutes in came out starting at 0.083); with the
+	// film's own clock kept there are no negative timestamps to shift, and
+	// make_non_negative touches nothing.
+	if absolute {
+		c.args = append(c.args, "-avoid_negative_ts", "make_non_negative")
+	} else {
+		c.args = append(c.args, "-avoid_negative_ts", "make_zero")
+	}
 	return c, nil
+}
+
+// gridKeyframeExpr makes the encoder put a keyframe on the first frame at
+// or after every multiple of hlsSegmentSec on the output clock, and on the
+// first frame of the run — which, the run seeking accurately to a grid
+// point, is on the grid too. Verified on libx264 and h264_vaapi: one
+// keyframe per segment, every segment the grid's length.
+var gridKeyframeExpr = "expr:if(isnan(prev_forced_t),1,gte(t,(floor(prev_forced_t/" +
+	strconv.Itoa(hlsSegmentSec) + ")+1)*" + strconv.Itoa(hlsSegmentSec) + "))"
+
+// hwGridKeyframes is the same rule for the graphics engines, which take the
+// forced frames through the same option; the long GOP keeps the engine
+// from adding keyframes of its own between them, and NVENC has to be told
+// that a forced frame is an IDR, or it writes one nothing can start on.
+func hwGridKeyframes() []string {
+	args := []string{"-force_key_frames", gridKeyframeExpr, "-g", "1000"}
+	if engine, _ := hw.chosen(); engine != nil && engine.name == "cuda" {
+		args = append(args, "-forced-idr", "1")
+	}
+	return args
 }
 
 // audioEncodeArgs is the soundtrack every conversion here makes: stereo AAC

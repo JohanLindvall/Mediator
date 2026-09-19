@@ -2,7 +2,7 @@
  * Client for the backend JSON API.
  * The data model is generated from the Go types — see types.gen.ts.
  */
-import { nativeHLS } from './playback';
+import { nativeHLS, hlsClock } from './playback';
 import type {
   AlbumDetailResponse,
   TracksResponse,
@@ -542,6 +542,24 @@ export function hlsUrl(
     signed(`/api/hls/${encodeURIComponent(id)}/index.m3u8`) +
     `?t=${t.toFixed(2)}${m}${audioParam(audio)}${c}${qualityParam(quality)}`
   );
+}
+
+/**
+ * Whose clock the segmented conversion behind a playlist URL keeps —
+ * hlsClock, read off the header the playlist answers with. The ask is also
+ * what starts the conversion at the moment the URL names, so the element's
+ * own fetch of the same playlist a moment later finds it under way. A
+ * fetch that fails answers the older arrangement, which the player still
+ * knows how to keep time for.
+ */
+export async function hlsTimeline(url: string): Promise<'film' | 'session'> {
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    void res.body?.cancel();
+    return hlsClock(res.ok ? res.headers.get('X-Media-Timeline') : null);
+  } catch {
+    return 'session';
+  }
 }
 
 /** Whether this browser plays HLS by itself — see playback.ts. */

@@ -1147,7 +1147,7 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	for attempt := 0; attempt < 3; attempt++ {
 		// The same plan the segmented converter runs (convert.go); only the
 		// delivery is this endpoint's own: fragmented MP4 down the response.
-		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), q, repaired, s.log)
+		plan, err := planConversion(r.Context(), ffmpeg, it, start, copyVideo, r.URL.Query().Get("a"), q, repaired, false, s.log)
 		if err != nil {
 			// Known and unopenable, not unknown: the same answer the stream
 			// gives, with the same reason, so the player says what happened

@@ -4419,9 +4419,74 @@ Serving details worth knowing before "fixing" them:
   identified by `?t=`/`?mode=`, every segment request arrived asking for a
   different conversion than the playlist described. The first one answered
   (quietly starting a second ffmpeg) and the rest did not line up, which the
-  player reported as an unplayable format. Asking for the playlist now
-  redirects to one under an opaque session token, where a relative name can
-  only resolve to that session's own segments.
+  player reported as an unplayable format. The playlist is served where it
+  was asked for — not redirected, since Safari and Chrome disagree about
+  which URL a redirected playlist's names resolve against — and every name
+  in it carries the session token, so a relative name can only resolve to
+  that session's own segments.
+  **The playlist is the whole film from the first request** (`hlstable.go`,
+  `hlsTable`). A playlist that grows as the conversion runs is a live event
+  to a player: LIVE where the clock should be, a running time of what has
+  been converted so far, a seek bar that reaches no further — and on iOS's
+  own fullscreen player, the one place a converted film is watched on a
+  phone, that is the whole of the interface. So every segment is decided
+  before any is made, listed with its real length and the end marker from
+  the first request, and made **as it is asked for**: a seek is a request
+  for the segment it landed on, and the server starts converting there.
+  Where the cuts fall depends on what is done to the picture. A re-encode
+  is cut on the four-second grid, the encoder told to put a keyframe on
+  every multiple of four seconds of the film's own clock
+  (`gridKeyframeExpr`; one keyframe per segment, every segment the grid's
+  length, verified on libx264 and h264_vaapi). A copied picture can only be
+  cut on the file's keyframes, so those are read off the container's own
+  index (`library.Keyframes`: Matroska cues, which on a measured release
+  were exactly the stream's 697 keyframes, and an MP4's `stss` with its
+  edit list applied the way ffmpeg applies it — thirteen real files agreed
+  with ffprobe to the millisecond), a handful of reads against the 19 s a
+  packet scan of a 14 GB file takes from a warm cache; the boundaries among
+  them are chosen by the rule ffmpeg's own HLS muxer uses — the k-th is the
+  first keyframe at or after k segment-lengths counted from the first
+  keyframe, cumulative, one keyframe never two boundaries — which was
+  checked against a real conversion, 259 segments of 259. A container with
+  no index this reads, content reachable only through a pipe, and a disc
+  title (whose clock is not continuous, which is why it is seeked by byte)
+  keep the older shape: one conversion from the seek and a playlist that
+  grows, and the player is told which it got (`X-Media-Timeline`, read by
+  `hlsClock` in `playback.ts`) so it keeps the offset arithmetic for that
+  case and drops it for the other, where the element's time is the film's
+  and a seek is the element's own.
+  **Every cut is verified, and nothing about where a seek lands is
+  assumed.** A run's segments are written by the segment muxer with the
+  film's clock kept (`mpegts_copyts=1`, `-copyts` even from zero, and
+  *never* `-avoid_negative_ts make_zero`, which measured put a run begun
+  twenty minutes in at 0.083), cut at the table's times given relative to
+  the run's first packet — which for a copy is wherever the demuxer landed:
+  ffmpeg takes 3/23 s off an input seek for a reordered stream
+  (`hlsSeekLead`) and so lands on the keyframe *before* the one asked for
+  by its own time, so the boundary plus that lead is tried first and read
+  back from one copied packet (`landing`, `tsFirstVideoPTS`), and a hair
+  past the boundary otherwise, the lead-in before the first whole segment
+  thrown away. The muxer's list (`-segment_list … csv`, `+live` so it is
+  renamed into place whole) is what says a segment is finished — a line is
+  written only once the file is closed, and a killed run lists nothing for
+  the file it was writing — and every line is judged against the table
+  (`verify`; the first line's start always reads zero, so only its end
+  counts): a cut anywhere else ends the session rather than serving a
+  playlist that has become a lie. Files are named per run
+  (`run<n>-seg<k>.ts`) so a later run never writes over what an earlier one
+  made and is serving; the manifest (`done.txt`) is the record a later
+  process adopts. A request for a segment not yet made waits on the run
+  that will reach it when that is about as soon as a fresh start would
+  (`hlsWaitFor`: the segments in between at the pace the run has shown, a
+  second a segment until it has shown any) and otherwise stops it and
+  starts at the segment, bounded by `hlsFirstWait`; a run that ends without
+  producing what a request waited for counts against that segment, and the
+  second such gives the session up (`hlsRunFailures`). A run is judged by
+  what it produced rather than by its exit status: the graphics engine
+  complains at the flush of a run cut short by `-to` (measured, "Cannot
+  allocate memory" at the end of a run whose every segment was whole), and
+  writing the hardware off for that would send every later run of the film
+  to the processor.
   Which conversion is needed is decided from the file's codecs, not from what
   was decoded: a container the browser will not open decodes nothing, so
   there is no black picture or silent soundtrack to go on. H.264 is decoded

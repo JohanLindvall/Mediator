@@ -7,6 +7,7 @@ import {
   getCrop,
   getItem,
   convertProgress,
+  hlsTimeline,
   hlsUrl,
   keyframeStart,
   listSubs,
@@ -338,6 +339,11 @@ class VideoOverlay {
   // not should still end up watching something.
   private usingHLS = false;
   private hlsFailed = false;
+  // Whether the segmented stream keeps the film's own clock: its playlist
+  // is then the whole film, the element's time is the film's, and a seek is
+  // the element's own (hlsClock). Otherwise the stream begins at the seek
+  // and tcOffset says where.
+  private hlsFilm = false;
   private tcMode: 'full' | 'audio' = 'full';
   private tcOffset = 0;
   private tcGen = 0; // drops the answer of a seek that a newer one replaced
@@ -776,7 +782,10 @@ class VideoOverlay {
       this.paint();
       return;
     }
-    if (!this.transcoding) {
+    // A stream on the film's own clock seeks like the file does: the
+    // playlist is the whole film, and the server makes whatever segment the
+    // element lands on as it is asked for.
+    if (!this.transcoding || (this.usingHLS && this.hlsFilm)) {
       this.video.currentTime = t;
       return;
     }
@@ -812,14 +821,15 @@ class VideoOverlay {
       }
       if (this.closed || gen !== this.tcGen) return; // a newer seek won
     }
-    this.tcOffset = origin;
-    this.seekBuf.style.width = '0%';
     // Safari will not play the piped conversion at all — it opens with a
     // range request the pipe cannot answer — so it is given the same
-    // conversion as segments. Everything downstream is unchanged: the clock
-    // still starts at the keyframe, and the subtitles are still rebased onto
-    // it, because it is the same seek either way.
+    // conversion as segments. Where the server could decide every segment
+    // up front the playlist is the whole film on the film's own clock, and
+    // the element is simply put at the moment asked for; otherwise the
+    // clock starts at the keyframe and the subtitles are rebased onto it,
+    // because it is the same seek either way.
     this.usingHLS = playsHLS() && !this.hlsFailed;
+    this.hlsFilm = false;
     // Ask for the conversion at the keyframe, not at the time that was
     // asked for. With the picture copied, ffmpeg can only start it on a
     // keyframe and takes the one at or before the seek — but it starts the
@@ -829,29 +839,38 @@ class VideoOverlay {
     // both. Asking for the keyframe puts every stream at the same place,
     // which is also where the clock has been told the stream begins.
     if (this.usingHLS) {
-      this.startSource(hlsUrl(this.item.id, origin, this.tcMode, this.audioTrack, this.subIndex, chosenKbps), {
-        track: this.audioTrack,
+      const url = hlsUrl(this.item.id, origin, this.tcMode, this.audioTrack, this.subIndex, chosenKbps);
+      // The playlist says whose clock it keeps, and asking starts the
+      // conversion there, so the element's own fetch finds it under way.
+      const clock = await hlsTimeline(url);
+      if (this.closed || gen !== this.tcGen) return; // a newer seek won
+      this.hlsFilm = clock === 'film';
+      this.tcOffset = this.hlsFilm ? 0 : origin;
+      this.seekBuf.style.width = '0%';
+      this.startSource(url, { track: this.audioTrack, at: this.hlsFilm ? target : undefined });
+      this.retimeSubtitles();
+      return;
+    }
+    this.tcOffset = origin;
+    this.seekBuf.style.width = '0%';
+    const url = transcodeUrl(this.item.id, origin, this.tcMode, this.audioTrack, chosenKbps);
+    // A full conversion is H.264 and AAC, which is what the page can name
+    // to a Media Source buffer, and feeding it that way is what ends the
+    // pipe's re-reads (mse.ts). A soundtrack-only conversion copies the
+    // picture through in whatever it was, and stays on the element's own
+    // fetch — it upgrades itself to a file soon after in any case.
+    if (this.tcMode === 'full' && canFeed()) {
+      const id = this.item.id;
+      const feed = new FedSource(url, {
+        duration: Math.max(0, this.totT() - origin),
+        onError: (why, status) => {
+          if (this.closed || this.item.id !== id || this.feed !== feed) return;
+          this.onFeedError(why, status);
+        },
       });
+      this.startSource(feed.attach(this.video), { track: this.audioTrack, feed });
     } else {
-      const url = transcodeUrl(this.item.id, origin, this.tcMode, this.audioTrack, chosenKbps);
-      // A full conversion is H.264 and AAC, which is what the page can name
-      // to a Media Source buffer, and feeding it that way is what ends the
-      // pipe's re-reads (mse.ts). A soundtrack-only conversion copies the
-      // picture through in whatever it was, and stays on the element's own
-      // fetch — it upgrades itself to a file soon after in any case.
-      if (this.tcMode === 'full' && canFeed()) {
-        const id = this.item.id;
-        const feed = new FedSource(url, {
-          duration: Math.max(0, this.totT() - origin),
-          onError: (why, status) => {
-            if (this.closed || this.item.id !== id || this.feed !== feed) return;
-            this.onFeedError(why, status);
-          },
-        });
-        this.startSource(feed.attach(this.video), { track: this.audioTrack, feed });
-      } else {
-        this.startSource(url, { track: this.audioTrack });
-      }
+      this.startSource(url, { track: this.audioTrack });
     }
     this.retimeSubtitles(); // cues are absolute; this stream's clock is not
   }
@@ -1130,6 +1149,7 @@ class VideoOverlay {
     this.tcGen++; // a keyframe answer still in flight is about the pipe
     this.transcoding = false;
     this.usingHLS = false;
+    this.hlsFilm = false;
     this.tcOffset = 0;
     this.seekBuf.style.width = '0%';
     // A copy has now been tried, and this is it. Without saying so, a
@@ -1895,6 +1915,7 @@ class VideoOverlay {
     this.stopSoundFix();
     this.transcoding = false;
     this.usingHLS = false;
+    this.hlsFilm = false;
     this.hlsFailed = false;
     this.tcMode = 'full';
     this.tcOffset = 0;
@@ -2089,7 +2110,11 @@ class VideoOverlay {
       // other browser uses and it needs nothing of the sort.
       this.hlsFailed = true;
       this.usingHLS = false;
-      void this.startTranscodeAt(this.tcOffset);
+      // On the film's clock the element's time is the film's; on the
+      // session's it is what the stream began at, wherever it had got to.
+      const at = this.hlsFilm ? this.video.currentTime : this.tcOffset;
+      this.hlsFilm = false;
+      void this.startTranscodeAt(at);
       return;
     }
     this.giveUp('This format cannot be played by your browser');
