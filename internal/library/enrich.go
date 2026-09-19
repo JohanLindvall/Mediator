@@ -441,6 +441,7 @@ func probeOfMeta(m blob.Meta) Probe {
 		DurationMs: m.Duration,
 		VCodec:     m.VCodec, ACodec: m.ACodec,
 		Width: m.Width, Height: m.Height, FPS: m.FPS, HDR: m.HDR, MoovLate: m.MoovLate,
+		Unreadable: m.Unreadable,
 	}
 }
 
@@ -632,7 +633,8 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 		MTime: it.ModTime, Size: it.Size,
 		Duration: p.DurationMs, VCodec: p.VCodec, ACodec: p.ACodec,
 		Width: p.Width, Height: p.Height, FPS: p.FPS, HDR: p.HDR, MoovLate: p.MoovLate, Shape: shapeVersion,
-		Title: tm.title, Artist: tm.artist, Album: tm.album,
+		Unreadable: p.Unreadable,
+		Title:      tm.title, Artist: tm.artist, Album: tm.album,
 		Genre: tm.genre, Track: tm.track, Year: tm.year,
 	})
 }
@@ -738,11 +740,14 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 		// to bring it back to ordinary colour (see Item.HDR).
 		HDR:    out.hdr,
 		Probed: out.answered,
+		// And that it is not media at all, which is the one answer that
+		// makes every route the player has pointless.
+		Unreadable: out.unreadable,
 	})
 	if !l.keptReading(id, it) {
 		return
 	}
-	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 && !out.hdr {
+	if out.vcodec == "" && out.acodec == "" && out.durationMs == 0 && !out.hdr && !out.unreadable {
 		return // nothing to write down, and nothing changed on the item
 	}
 	// The record is keyed by the file's identity, and it has to be this
@@ -759,6 +764,7 @@ func (l *Library) EnsureCodecs(ctx context.Context, id string) {
 			MTime: fresh.ModTime, Size: fresh.Size, Duration: fresh.Duration,
 			VCodec: fresh.VCodec, ACodec: fresh.ACodec,
 			Width: fresh.Width, Height: fresh.Height, FPS: fresh.FPS, HDR: fresh.HDR, MoovLate: fresh.MoovLate,
+			Unreadable: fresh.Unreadable,
 			// A film the eager pass never reached has no marker yet, and a
 			// record carrying a size under "shape unread" is a header to
 			// read again on every start. What was just measured is this

@@ -1219,6 +1219,11 @@ class VideoOverlay {
    */
   private useKnownCodecs(): void {
     if (this.closed || this.remuxed || this.faulted) return;
+    // The verdict may have arrived with the item rather than with the
+    // listing: a file nobody had opened yet is probed by that very request,
+    // so the first open of a damaged file learns it here, before the routes
+    // below spend an ffmpeg each on it.
+    if (this.sayIfDamaged()) return;
     // The index's position arrives with the item where the listing did not
     // carry it yet, and a copy is the whole answer: asked before the codec
     // questions, since tryRemux is once per file and a conversion started
@@ -1838,6 +1843,16 @@ class VideoOverlay {
   private load(item: Item, at?: number): void {
     this.beginFile(item, at);
 
+    // A file a probe has read and found is not media at all — truncated, or
+    // a container nothing can parse — is said so at once. The alternative
+    // is what it used to do: open it, fail, ask for a lossless copy, fail,
+    // start a segmented conversion, fail, fall back to the pipe, fail, and
+    // then tell the viewer their browser cannot play the format — three
+    // ffmpeg runs over a file that has no index, ending in a sentence that
+    // blames the wrong thing. Measured on an 894 MB download whose data
+    // stops half way and whose index never arrived.
+    if (this.sayIfDamaged()) return;
+
     // The browser has already said it cannot open this container, so handing
     // it the file anyway is not a cheap thing that fails fast: measured,
     // Safari pulled 664 MiB of one film over 68 s — and 7.6 GiB across the
@@ -2160,10 +2175,36 @@ class VideoOverlay {
     this.showControls();
   }
 
+  /**
+   * Say so, and stop, where a probe has read this file and found it is not
+   * media at all — truncated, or a container nothing can parse. The
+   * alternative is what it used to do: open it, fail, ask for a lossless
+   * copy, fail, start a segmented conversion, fail, fall back to the pipe,
+   * fail, and then tell the viewer their browser cannot play the format —
+   * three ffmpeg runs over a file that has no index, ending in a sentence
+   * that blames the wrong thing. Measured on an 894 MB download whose data
+   * stops two thirds of the way through and whose index never arrived.
+   */
+  private sayIfDamaged(): boolean {
+    if (!this.item.unreadable) return false;
+    this.giveUp('This file is damaged or incomplete');
+    return true;
+  }
+
   /** Try the file again from the start of its route, as if freshly opened. */
   private retry(): void {
     if (this.closed) return;
-    this.load(this.item);
+    // Asked afresh, not decided again on the copy in hand. A disk that
+    // stopped answering comes back without anything about the item
+    // changing, so the old copy is fine for that — but a file that was
+    // damaged or incomplete is marked as such on the item, and the mark
+    // goes only when the file itself changes. Pressing this after a
+    // download finished would otherwise give the same answer for ever.
+    const id = this.item.id;
+    this.refreshing = null;
+    void this.refreshItem().then(() => {
+      if (!this.closed && this.item.id === id) this.load(this.item);
+    });
   }
 
   private hidePrep(): void {

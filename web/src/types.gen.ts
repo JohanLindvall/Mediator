@@ -27,6 +27,7 @@ export interface Item {
   fps?: number;
   hdr?: boolean;
   moovLate?: boolean;
+  unreadable?: boolean;
   series?: string;
   season?: number;
   episode?: number;

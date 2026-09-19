@@ -144,6 +144,14 @@ type Item struct {
 	// copy can fix about a file the browser already opens.
 	MoovLate bool `json:"moovLate,omitempty"`
 
+	// Unreadable says a probe read this file and found it is not media:
+	// truncated, or a container that cannot be parsed. Nothing can play it,
+	// so the player says so rather than trying a rewrap, a conversion and a
+	// pipe in turn and then blaming the browser. Cleared only by the file
+	// changing (forgetContent), which is the only thing that could make it
+	// readable. See Probe.Unreadable.
+	Unreadable bool `json:"unreadable,omitempty"`
+
 	// The owner's judgement, stamped on by List and Get. Held beside the
 	// index (see annotate.go), not on the indexed item, because a flag
 	// outlives the file it is about.
@@ -728,6 +736,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 func (it *Item) forgetContent() {
 	it.Duration, it.VCodec, it.ACodec = 0, "", ""
 	it.Width, it.Height, it.FPS, it.HDR, it.MoovLate = 0, 0, 0, false, false
+	it.Unreadable = false
 	it.Tracks, it.EmbSubs = nil, nil
 	it.enriched, it.probed, it.shape = false, false, 0
 }
@@ -1002,6 +1011,16 @@ func (l *Library) setProbe(id string, p Probe) {
 	// Only the box reading says so, and nothing but a change of file unsays
 	// it: an ffprobe of the same file carries false for a fact it never read.
 	it.MoovLate = it.MoovLate || p.MoovLate
+	// A probe that ran is authoritative either way — a file replaced on disk
+	// may be the whole version of what was there before. A record read back
+	// out of the database can only add the mark: it is keyed by this file's
+	// mtime and size, so what it says still applies, but it is not a probe
+	// and must not clear what one established.
+	if p.Probed {
+		it.Unreadable = p.Unreadable
+	} else if p.Unreadable {
+		it.Unreadable = true
+	}
 	if p.Probed || p.HDR {
 		// A probe that ran is the whole truth about the colour, false
 		// included: a file replaced on disk may be the ordinary-colour

@@ -1733,6 +1733,34 @@ Change propagation is the core loop:
   reason, and neither `setMeta` nor `setProbe` may restore it
   (`declaresDuration`), so a disc title or an archived member caught here
   showed no playing time at all until the next full rescan.
+  **And a file that is not media at all is said so once** (`Probe.Unreadable`,
+  `Item.Unreadable`, `unreadableInput`, tested). ffprobe fails in two quite
+  different ways and only one of them is about the bytes: it opened the
+  file, read it, and could not make a container of it — "Invalid data found
+  when processing input", or an MP4 whose index never arrived ("moov atom
+  not found"), which is what an interrupted download leaves. That is an
+  answer, as much as a parsed document is, and it was being thrown away
+  with the failures that are not: the run printed an empty document and
+  exited non-zero, `answered` stayed false, and so every open probed the
+  same broken file again and the player then tried **every route it has**
+  against it — the file itself, a lossless copy, a segmented conversion, a
+  pipe, each an ffmpeg over the whole thing — ending in "this format cannot
+  be played by your browser", which blames the wrong thing entirely.
+  Measured on an 894 MB download whose data stops two thirds of the way
+  through and which has no `moov` at all, while its neighbours in the same
+  directory play. The verdict is read only from those two wordings: a path
+  that is not there, a permission, a loopback address that was not up yet,
+  an HTTP status and a killed run all say nothing about the file, and
+  writing any of them down would condemn a good one permanently — the cache
+  key never changes again for a file that does not change. It is judged
+  **after** the parse, since a file cut short that still yielded its streams
+  is the case the tolerated non-zero exit exists for and must keep them. It
+  rides the metadata record and the mirrored index like the shape does, so a
+  restart does not read it again; `forgetContent` clears it, a change of
+  file being the only thing that could make the file readable; and the
+  player gives up at once with *"This file is damaged or incomplete"*, its
+  Try again asking the server afresh rather than deciding twice on the copy
+  in hand.
   **A probe stopped by a deadline is not a file with nothing to say.**
   ffprobe installs a ceiling of its own (`ffprobeTimeout` 30 s,
   `ffprobePipeTimeout` 60 s — variables now, only so a test need not wait one

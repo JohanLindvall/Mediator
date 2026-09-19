@@ -579,6 +579,11 @@ Go binary with the TypeScript frontend embedded.
   appear. Symlinks are measured by their target, and a real file always
   wins over a link to it. On a library that hardlinks torrents into place,
   this removed 355 duplicate entries.
+- **A file that is not media is said so** — a download that stopped half way,
+  or any container nothing can parse, is recognised when it is first read and
+  the player says "this file is damaged or incomplete" instead of trying a
+  copy, a conversion and a pipe in turn and then blaming the browser. The
+  mark goes when the file changes, so finishing the download is all it takes.
 - **Live library** — directories are scanned recursively and watched with
   inotify; new/changed/deleted files stream to the UI over server-sent events.
   A periodic rescan (default 10 min) acts as a safety net. **A file is taken

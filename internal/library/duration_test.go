@@ -259,3 +259,132 @@ func TestIsHDR(t *testing.T) {
 		}
 	}
 }
+
+// ffprobe fails in two quite different ways, and only one of them is a fact
+// about the file: it read the bytes and could not make a container of them.
+// Everything else — a path that is not there, a permission, a loopback
+// address that was not up — is about reaching the file, and writing any of
+// those down would condemn a good file permanently, the cache key never
+// changing again for a file that does not change.
+func TestUnreadableInputIsOnlyAVerdictOnTheBytes(t *testing.T) {
+	for _, said := range []string{
+		"[mov,mp4,m4a,3gp,3g2,mj2 @ 0x564255cde7c0] moov atom not found\n" +
+			"/srv/media/clip.mp4: Invalid data found when processing input\n",
+		"/srv/media/clip.mkv: Invalid data found when processing input",
+		"[mov,mp4,m4a,3gp,3g2,mj2 @ 0x1] moov atom not found",
+	} {
+		if !unreadableInput(said) {
+			t.Errorf("not read as a verdict: %q", said)
+		}
+	}
+	for _, said := range []string{
+		"clip.mp4: No such file or directory",
+		"clip.mp4: Permission denied",
+		"[http @ 0x1] Server returned 404 Not Found\nhttp://127.0.0.1:8087/api/stream/abc: Server returned 404 Not Found",
+		"[tcp @ 0x1] Connection to tcp://127.0.0.1:8087 failed: Connection refused",
+		"clip.mkv: Input/output error",
+		"", // killed before it said anything
+	} {
+		if unreadableInput(said) {
+			t.Errorf("read as a verdict on the file: %q", said)
+		}
+	}
+}
+
+// End to end on a real file: an MP4 whose data stops half way and whose
+// index never arrived — what a download that was interrupted leaves — is
+// read once, marked, and not read again; and the mark goes when the file
+// does, since only a change of file could make it readable.
+func TestATruncatedFileIsMarkedUnreadable(t *testing.T) {
+	if FFprobePath() == "" {
+		t.Skip("no ffprobe")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cut-short.mp4")
+	// ftyp, then an mdat that claims more than the file holds: no moov at
+	// all, which is the shape the real one had.
+	body := []byte{
+		0, 0, 0, 0x14, 'f', 't', 'y', 'p', 'i', 's', 'o', 'm', 0, 0, 2, 0, 'i', 's', 'o', 'm',
+		0x0f, 0xff, 0xff, 0xff, 'm', 'd', 'a', 't',
+	}
+	body = append(body, make([]byte, 4096)...)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	it := Item{ID: "abcdef0123456789", Path: path, Name: "cut-short.mp4", Kind: KindVideo,
+		Size: fi.Size(), ModTime: fi.ModTime().UnixMilli()}
+	p := ProbeMedia(context.Background(), it)
+	if !p.Unreadable {
+		t.Fatalf("a file with no index was not marked unreadable: %+v", p)
+	}
+	if !p.Probed {
+		t.Error("a verdict on the bytes did not count as having looked, so every open would probe it again")
+	}
+	if p.Interrupted {
+		t.Error("an answer was recorded as an interruption")
+	}
+	// It reaches the item, and a file that changes forgets it.
+	l := quietLib(dir)
+	l.mu.Lock()
+	cp := it
+	l.items[it.ID] = &cp
+	l.mu.Unlock()
+	l.setProbe(it.ID, p)
+	if got, _ := l.Get(it.ID); !got.Unreadable {
+		t.Error("the item was not marked")
+	}
+	l.mu.Lock()
+	l.items[it.ID].forgetContent()
+	l.mu.Unlock()
+	if got, _ := l.Get(it.ID); got.Unreadable {
+		t.Error("a file that changed kept the mark, and nothing would ever look at it again")
+	}
+	// And a whole file is not marked, which is what makes the mark worth
+	// anything.
+	whole := filepath.Join(dir, "whole.mp4")
+	if err := writeTinyMP4(whole); err != nil {
+		t.Skipf("no ffmpeg to make a whole file with: %v", err)
+	}
+	wfi, _ := os.Stat(whole)
+	good := ProbeMedia(context.Background(), Item{ID: "f0f0f0f0f0f0f0f0", Path: whole,
+		Name: "whole.mp4", Kind: KindVideo, Size: wfi.Size(), ModTime: wfi.ModTime().UnixMilli()})
+	if good.Unreadable {
+		t.Error("a file that plays was marked unreadable")
+	}
+}
+
+// writeTinyMP4 makes a one-second H.264 clip, or says why it could not.
+func writeTinyMP4(path string) error {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		return err
+	}
+	out, err := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=64x64:rate=5:duration=1",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-y", path).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, out)
+	}
+	return nil
+}
+
+// The piped fallback reads a bounded prefix of an archived member, and a
+// prefix that stops inside the container header is "invalid data" in exactly
+// the words a genuinely broken file produces. Only a read of the whole file
+// is a verdict, so that route never carries one.
+func TestAPipedPrefixNeverCondemnsAMember(t *testing.T) {
+	if FFprobePath() == "" {
+		t.Skip("no ffprobe")
+	}
+	_, _, archived, _ := archivedAndLoose(t)
+	// No loopback address in a test, so this is the piped branch: ffprobe
+	// is handed a prefix and says the same thing it says about a file that
+	// is really broken.
+	if out := probeItem(context.Background(), archived); out.unreadable {
+		t.Error("a member read as a bounded prefix was written off as unreadable")
+	}
+}

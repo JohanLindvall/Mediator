@@ -72,6 +72,21 @@ type Probe struct {
 	// of its own (ffprobeTimeout), which fires on a busy or network-mounted
 	// disk while the caller's context is still perfectly alive.
 	Interrupted bool
+
+	// Unreadable records that ffprobe ran to the end and said the file is
+	// not media at all: an MP4 with no index, a download that stopped in
+	// the middle of its data, anything whose container cannot be parsed.
+	//
+	// That is an answer about the bytes, as much as a parsed document is,
+	// and it was being thrown away with the failures that are not — so
+	// every open of such a file probed it again, and every route the player
+	// has was tried against it in turn: a rewrap, a segmented conversion
+	// and a pipe, each an ffmpeg over the whole file, ending in the browser
+	// being blamed for a format nothing could have played. Read only from
+	// the wordings ffprobe uses for a container it could not parse
+	// (unreadableInput); a file it could not reach, or was not allowed to
+	// finish reading, says nothing and is left exactly as it was.
+	Unreadable bool
 }
 
 // probePrefix and probePrefixVideo bound the FALLBACK probe: the piped
@@ -124,7 +139,15 @@ func probeItem(ctx context.Context, it Item) ffprobeResult {
 	if it.Kind == KindVideo {
 		n = probePrefixVideo
 	}
-	return ffprobe(ctx, "pipe:0", io.LimitReader(f, n))
+	out := ffprobe(ctx, "pipe:0", io.LimitReader(f, n))
+	// What this route hands ffprobe is a *prefix*, and a prefix that stops
+	// inside the container header is invalid data in exactly the words a
+	// genuinely broken file produces. The verdict is only a verdict where
+	// the whole file was read — by path, or through the seekable loopback
+	// view above — so it is dropped here rather than written down against a
+	// member that is perfectly good and merely longer than the ceiling.
+	out.unreadable = false
+	return out
 }
 
 // ProbeMedia returns duration and, for videos, the codecs. Codec names let
@@ -147,13 +170,13 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 			switch {
 			case !it.Archived():
 				out := ffprobe(ctx, it.Path, nil)
-				p.DurationMs, p.Interrupted = sane(out.durationMs), out.cutShort
+				p.DurationMs, p.Interrupted, p.Unreadable = sane(out.durationMs), out.cutShort, out.unreadable
 			case LoopbackURL(it) != "":
 				// A member in a container nothing here parses natively: the
 				// loopback URL is a seekable view of it, and the probe reads
 				// its tail the way it does a film's.
 				out := probeItem(ctx, it)
-				p.DurationMs, p.Interrupted = sane(out.durationMs), out.cutShort
+				p.DurationMs, p.Interrupted, p.Unreadable = sane(out.durationMs), out.cutShort, out.unreadable
 			}
 		}
 		return p
@@ -177,6 +200,7 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 	// empty fields as a verdict.
 	p.Probed = out.answered
 	p.Interrupted = out.cutShort
+	p.Unreadable = out.unreadable
 	return p
 }
 
@@ -531,6 +555,9 @@ type ffprobeResult struct {
 	// the same empty result to look at, and the caller has to tell them
 	// apart: only one of them is a fact about the file (see Probe.Interrupted).
 	cutShort bool
+	// unreadable records the third outcome: the run finished and said the
+	// input is not media. See Probe.Unreadable.
+	unreadable bool
 }
 
 // ffprobe timeouts, which are a ceiling on top of ctx and never an extension
@@ -589,6 +616,13 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	// ffprobe is ever started.
 	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
+	// What it complained about, kept: for the one failure that is a verdict
+	// on the bytes rather than on reaching them, ffprobe still prints an
+	// empty document and says why only here (unreadableInput).
+	stderr := ""
+	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+		stderr = string(exit.Stderr)
+	}
 	if err != nil {
 		// A non-zero exit with a document printed is ffprobe having read
 		// the streams and then failed on something after them — a file cut
@@ -596,6 +630,12 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 		// else that went wrong (no process, a pipe that broke) is no answer.
 		var exit *exec.ExitError
 		if !errors.As(err, &exit) || len(out) == 0 {
+			if ctx.Err() == nil && unreadableInput(stderr) {
+				// It ran to the end and said this is not media. That is an
+				// answer, and writing it down is what stops every later
+				// open probing the same broken file again.
+				return ffprobeResult{answered: true, unreadable: true}
+			}
 			return ffprobeResult{cutShort: ctx.Err() != nil}
 		}
 	}
@@ -675,6 +715,17 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	if sec, err := strconv.ParseFloat(parsed.Format.Duration, 64); err == nil && sec > 0 {
 		res.durationMs = int64(sec * 1000)
 	}
+	// An empty document beside that complaint is the whole verdict: ffprobe
+	// prints "{}" and exits non-zero for a file it could not parse, which
+	// from the document alone is indistinguishable from a container that
+	// simply had nothing to say. Judged after the parse rather than before
+	// it, so a file cut short that still yielded its streams — the case the
+	// non-zero exit above is tolerated for — keeps them and is not written
+	// off.
+	if res.vcodec == "" && res.acodec == "" && res.durationMs == 0 &&
+		len(res.subs) == 0 && unreadableInput(stderr) {
+		res.unreadable = true
+	}
 	return res
 }
 
@@ -722,4 +773,33 @@ func isHDR(transfer, primaries string) bool {
 		return true
 	}
 	return strings.HasPrefix(primaries, "bt2020")
+}
+
+// unreadableInput reads ffprobe's complaint for the one thing that is a
+// verdict on the bytes: it opened the file, read it, and could not make a
+// container of it.
+//
+// Deliberately narrow. Everything else ffprobe can fail with is about
+// reaching the file rather than about what is in it — a path that is not
+// there, a permission, a loopback address that was not up yet, an HTTP
+// status — and writing any of those down would condemn a file that is
+// perfectly good, permanently, the cache key never changing again for a
+// file that does not change. A run something killed is not here either: the
+// caller checks its own context first.
+func unreadableInput(stderr string) bool {
+	s := strings.ToLower(stderr)
+	for _, verdict := range []string{
+		// The general one: ffmpeg's AVERROR_INVALIDDATA, printed by every
+		// demuxer that got bytes and could not parse them.
+		"invalid data found when processing input",
+		// An MP4 whose index never arrived — a download that stopped, or a
+		// recorder that was killed before it wrote one. Printed on its own
+		// where the file ends before any index at all.
+		"moov atom not found",
+	} {
+		if strings.Contains(s, verdict) {
+			return true
+		}
+	}
+	return false
 }
