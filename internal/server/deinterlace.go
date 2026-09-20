@@ -23,15 +23,22 @@ const (
 	// copy and nothing else. MPEG-2 from a disc flags every frame, which is
 	// exactly the case this is for.
 	//
-	// The mode is left at `send_frame`: one picture out per picture in, which
-	// keeps a PAL disc at 25 fps. `send_field` would emit a frame per field
-	// and move more smoothly on footage that really was shot at fifty — it
-	// costs only about a tenth more processor (measured: 13.24 s against
-	// 11.86 s for twenty seconds of a disc) — but it doubles the frames in
-	// the stream, and the viewer on the other end of this is often a phone on
-	// a mobile connection. Combing is what is being complained about, and
-	// both modes end it.
-	deinterlacer = "bwdif=deint=interlaced"
+	// The mode is **said out loud**, because ffmpeg's default is the other
+	// one. `send_field` emits a frame per field and doubles the frame rate
+	// of everything that goes through this filter — including a progressive
+	// file, which is passed through untouched and then emitted twice. This
+	// was left unsaid on the belief that the default was `send_frame`, and
+	// the cost was not theoretical: measured on a 25 fps progressive
+	// broadcast being converted here, the stream came out at **50 fps** —
+	// twice the frames to encode on a machine the conversion is already
+	// racing playback on, and twice the frames to decode at the other end,
+	// which is often a phone on a mobile connection. `send_field` does move
+	// more smoothly on footage really shot at fifty, and costs only about a
+	// tenth more processor in the filter itself (measured: 13.24 s against
+	// 11.86 s for twenty seconds of a disc) — but that measurement is of the
+	// filter and not of the encoder behind it. Combing is what is being
+	// complained about, and both modes end it.
+	deinterlacer = "bwdif=mode=send_frame:deint=interlaced"
 )
 
 // videoFilter puts the deinterlacer in front of whatever else the picture

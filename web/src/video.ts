@@ -1484,7 +1484,13 @@ class VideoOverlay {
    * hand it over — and is said as such; anything else is a stream that
    * failed, which the ordinary error path already knows what to do with.
    */
-  private onFeedError(_why: string, status?: number): void {
+  private onFeedError(why: string, status?: number): void {
+    // Said out loud, because only the browser knows: a fed conversion that
+    // comes apart is picked up again below, which the viewer sees as a
+    // second of spinner, and without this there is nothing anywhere saying
+    // what broke — the server's log shows a response the page stopped
+    // reading and nothing more.
+    console.warn('media: the conversion feed stopped', { why, status, at: this.curT() });
     if (status === 503) {
       this.giveUp('The server cannot read this file right now');
       return;

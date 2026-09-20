@@ -1885,10 +1885,18 @@ Change propagation is the core loop:
   blends the fields into rows belonging to neither, and no filter afterwards
   can take them apart, so the combing becomes a permanent smear instead. That
   order is what the test pins.
-  `send_frame` is the mode: one picture out per picture in, keeping a PAL
-  disc at 25 fps. `send_field` moves more smoothly on footage really shot at
-  fifty and costs only a tenth more processor (measured: 13.24 s against
-  11.86 s for twenty seconds of a disc), but it doubles the frames in a
+  `send_frame` is the mode, **and it is said out loud**: ffmpeg's default is
+  `send_field`, and leaving it unsaid on the belief that it was not meant
+  every re-encode this server makes came out at twice the frame rate of its
+  source — measured on a 25 fps progressive broadcast, 50 fps out, twice the
+  frames to encode on a machine the conversion is already racing playback
+  on and twice to decode at the other end. One picture out per picture in,
+  keeping a PAL disc at 25 fps. `send_field` moves more smoothly on footage
+  really shot at
+  fifty and costs only a tenth more processor in the filter itself (measured:
+  13.24 s against
+  11.86 s for twenty seconds of a disc, which is not the encoder behind it),
+  but it doubles the frames in a
   stream a phone is often pulling over a mobile connection — and both modes
   end the combing, which is the complaint. Measured cost of the filter
   itself: 6.57 s to 11.86 s for the same twenty seconds, still comfortably

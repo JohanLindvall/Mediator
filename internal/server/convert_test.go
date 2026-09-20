@@ -61,3 +61,24 @@ func TestPlanConversion(t *testing.T) {
 		t.Errorf("the seek follows the input, which decodes everything before it: %s", joined)
 	}
 }
+
+// The deinterlacer's mode has to be said: ffmpeg's default is send_field,
+// which emits a frame per field and so doubles the frame rate of everything
+// that passes through — a progressive file included, since it is passed
+// through untouched and then emitted twice. Measured on a 25 fps broadcast
+// before this was pinned, the conversion came out at 50 fps.
+func TestDeinterlacerKeepsOneFramePerFrame(t *testing.T) {
+	if !strings.Contains(deinterlacer, "mode=send_frame") {
+		t.Errorf("the deinterlacer does not name its mode (%q), so ffmpeg's default doubles the frame rate", deinterlacer)
+	}
+	// And it still only touches what the container flags, which is what
+	// makes it safe to apply to every conversion.
+	if !strings.Contains(deinterlacer, "deint=interlaced") {
+		t.Errorf("the deinterlacer would process progressive frames too: %q", deinterlacer)
+	}
+	// Before any scale, whatever else the picture needs.
+	got := videoFilter("scale=w=1280:h=-2")
+	if !strings.HasPrefix(got, deinterlacer+",") {
+		t.Errorf("the deinterlacer is not first: %q", got)
+	}
+}
