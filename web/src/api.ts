@@ -33,15 +33,44 @@ import type {
   SubtitlesResponse,
 } from './types.gen';
 import { SPRITE, Quality } from './types.gen';
+import { reportFault } from './report';
 
 import type { QueueSource } from './content';
 
 export * from './types.gen';
 
 async function getJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  // Both ways this can fail are worth the server knowing about, and neither
+  // reaches it otherwise: a refusal it answered but the page could not use,
+  // and a request that never arrived at all — which is the interesting one,
+  // since the server's log has no line for a request it never saw.
+  let res: Response;
+  try {
+    res = await fetch(url);
+  } catch (e) {
+    reportFault({ what: 'network', detail: String(e), route: apiRoute(url) });
+    throw e;
+  }
+  if (!res.ok) {
+    reportFault({ what: 'network', detail: res.statusText, status: res.status, route: apiRoute(url) });
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
   return res.json() as Promise<T>;
+}
+
+/**
+ * Which endpoint a URL names, without the item id or the signing token —
+ * what is worth grouping failures by, and nothing that changes per request.
+ */
+function apiRoute(url: string): string {
+  const path = url.split('?')[0] ?? url;
+  const parts = path.split('/').filter(Boolean);
+  const api = parts.indexOf('api');
+  if (api < 0) return path;
+  const rest = parts.slice(api + 1);
+  // A signed path carries its token next; the endpoint is what follows.
+  if (rest[0] === 'signed') rest.splice(0, 2);
+  return '/api/' + (rest[0] ?? '');
 }
 
 /**

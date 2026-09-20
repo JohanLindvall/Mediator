@@ -77,6 +77,9 @@ type Server struct {
 	access       bool
 	mux          *http.ServeMux
 	transSem     chan struct{} // caps concurrent live transcodes
+	// clientLog bounds how often a page may write into this log
+	// (clientlog.go), which is the one route where it can.
+	clientLog clientLogLimit
 	// Casting to a television that is not a browser (cast.go): what has
 	// been found on the network, and the port a set can fetch from us on.
 	cast casting
@@ -182,6 +185,7 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	s.mux.HandleFunc("POST /api/renderers/{rid}/next/{id}", s.handleCastNext)
 	s.mux.HandleFunc("POST /api/renderers/{rid}/control", s.handleCastControl)
 	s.mux.HandleFunc("POST /api/links", s.handleLinkCreate)
+	s.mux.HandleFunc("POST /api/log", s.handleClientLog)
 	s.mux.HandleFunc("GET /s/{code}", s.handleLink)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.Handle("/", spaHandler(dist))

@@ -319,6 +319,29 @@ type CastControl struct {
 }
 
 // LinkRequest asks for a shortlink to a piece of app state.
+// ClientFault is one thing that went wrong in a browser, reported by the
+// page so that it lands in the same log as everything else about the same
+// viewing (clientlog.go). Every field is optional but What, and every one
+// of them is trimmed and stripped before it reaches the log.
+type ClientFault struct {
+	// What kind of fault, as a short tag the log can be grepped by:
+	// "feed", "feed-recovered", "network", "playback", "script".
+	What string `json:"what"`
+	// Detail is what the browser said about it.
+	Detail string `json:"detail,omitempty"`
+	// Item is the film it happened to, where it was about one.
+	Item string `json:"item,omitempty"`
+	// At is how far into that film, in seconds.
+	At float64 `json:"at,omitempty"`
+	// Route is which delivery was in use: the file itself, a rewrap, a fed
+	// conversion, segments.
+	Route string `json:"route,omitempty"`
+	// Status is the HTTP status behind it, where there was one.
+	Status int `json:"status,omitempty"`
+	// Where is the script and line, for an error the page itself raised.
+	Where string `json:"where,omitempty"`
+}
+
 type LinkRequest struct {
 	// Target is the URL fragment that describes where the link should land —
 	// the view, and the one item on top of it where there is one. It is

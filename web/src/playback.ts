@@ -847,3 +847,20 @@ export function menuShift(
   if (right > max) return Math.max(min - left, max - right);
   return 0;
 }
+
+/**
+ * What the element said went wrong, in words.
+ *
+ * The four codes are the only thing the browser offers about a failure, and
+ * they are the distinction the player's own routes turn on: a network that
+ * went away wants retrying, a decode failure wants converting, a source it
+ * refused wants a different container. The message beside them is the
+ * browser's own and often empty, so the code is what carries.
+ */
+export function mediaErrorText(err: MediaError | null | undefined): string {
+  if (!err) return 'no error reported';
+  const name =
+    { 1: 'aborted', 2: 'network', 3: 'decode', 4: 'source not supported' }[err.code] ??
+    `code ${err.code}`;
+  return err.message ? `${name}: ${err.message}` : name;
+}

@@ -4095,6 +4095,38 @@ Serving details worth knowing before "fixing" them:
   and the film fell back to the pipe, which those browsers cannot play at
   all. The picture being copied through is what makes the difference — an
   error there is about the picture, and the answer is to re-encode it.
+- **What goes wrong in the browser is said in the server's log**
+  (`clientlog.go`, `report.ts`, `POST /api/log`). Half of what this app does
+  happens where the server cannot see it: which route a film took, whether a
+  fed conversion's connection came apart and what the browser said about it,
+  a fetch that never arrived, an error the page itself raised. The server's
+  log has the other half — every request, every conversion, every probe,
+  with timestamps — and putting the two together meant asking somebody to
+  open a console and read it out, which is no way to chase a fault that
+  happens once every few minutes on somebody else's phone. So the page posts
+  them: the element's own error by its code (`mediaErrorText` — network,
+  decode, refused source, which is the distinction every route turns on),
+  every give-up with the sentence the viewer was shown, a feed that stopped
+  and a feed that was picked up again, every failed API request by endpoint
+  and status, and uncaught errors and rejections. Each carries the film, the
+  position and the route in use (`routeName`), so a line explains the
+  requests around it.
+  **Everything about it is bounded, because this is the one route where a
+  client writes into the server's log.** The body is small and refused
+  before it is read if it is not; every field is trimmed to a length a log
+  line can hold and stripped of control characters, since a newline in a
+  value is a forged record (tested); the endpoint is rate limited
+  process-wide and says how many it dropped when it resumes rather than
+  going quiet; and the page keeps its own count and will not repeat one
+  fault inside a quiet window (`shouldReport`, tested), because a report
+  that floods fills the log the reports exist to make readable. A report is
+  sent and forgotten — `keepalive`, so it survives the page closing — and a
+  failure to report is never itself reported, which is what stops one broken
+  thing becoming a loop about it. A fault naming a film the caller may not
+  see is logged **without the film**: this route must not become a way to
+  ask whether an id exists. It answers 204 whatever it decides, recorded or
+  dropped: the page is telling the server something, not asking it
+  anything.
 - **A viewer can ask for fewer bits** (`q=` on `/api/transcode` and
   `/api/hls`; `quality` and `qualityTiers` in `convert.go`; the ladder on
   `/api/info` as `qualities`). The converter's rate was never the viewer's

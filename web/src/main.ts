@@ -23,6 +23,7 @@ import {
 } from './api';
 import { AudioPlayer } from './audio';
 import { VirtualGrid, type GridAdapter } from './grid';
+import { reportPageFaults } from './report';
 import { icons, kindIcon } from './icons';
 import { openLightbox } from './lightbox';
 import { openPrefs } from './prefs';
@@ -127,6 +128,10 @@ const state: AppState = {
 // ---- element handles ---------------------------------------------------
 
 const $ = <T extends HTMLElement>(sel: string): T => document.querySelector(sel) as T;
+// A fault in what follows should reach the server's log rather than a
+// console nobody has open (report.ts). Installed before anything else runs.
+reportPageFaults();
+
 const scroller = $('#scroller');
 /**
  * Phones get the compact chip counts and the bar that leaves while they

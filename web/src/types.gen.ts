@@ -255,6 +255,16 @@ export interface PlayResponse {
   plays: number;
 }
 
+export interface ClientFault {
+  what: string;
+  detail?: string;
+  item?: string;
+  at?: number;
+  route?: string;
+  status?: number;
+  where?: string;
+}
+
 export interface LikeUpdate {
   like: number;
 }

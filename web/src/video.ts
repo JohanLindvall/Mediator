@@ -46,6 +46,7 @@ import { clamp, esc, formatDuration } from './format';
 import { icons } from './icons';
 import { findKind, type ItemSource } from './sources';
 import {
+  mediaErrorText,
   framesReported,
   audioSilent,
   menuShift,
@@ -73,6 +74,7 @@ import {
 import { forget, recall, remember } from './remember';
 import { SlideDeck, watchSwipes } from './swipe';
 import { holdThumbs, releaseThumbs } from './thumbs';
+import { reportFault } from './report';
 import { showToast } from './toast';
 import { shareItem } from './links';
 
@@ -878,6 +880,19 @@ class VideoOverlay {
       const id = this.item.id;
       const feed = new FedSource(url, {
         duration: Math.max(0, this.totT() - origin),
+        // Where this stream begins in the film, and how to ask for it again
+        // from further on: a connection that comes apart is then picked up
+        // where the buffer ends, into the same buffer, and the viewer sees
+        // nothing (mse.ts). Only once that is exhausted does the failure
+        // reach onFeedError.
+        origin,
+        urlAt: (at) => transcodeUrl(id, at, this.tcMode, this.audioTrack, chosenKbps),
+        onResume: (at) => {
+          // Not a fault the viewer saw — the element played on out of what
+          // it held — but the reason the log shows one conversion request
+          // ending and another beginning in the middle of a film.
+          reportFault({ what: 'feed-recovered', item: id, at: Math.round(at), route: `pipe/${this.tcMode}` });
+        },
         onError: (why, status) => {
           if (this.closed || this.item.id !== id || this.feed !== feed) return;
           this.onFeedError(why, status);
@@ -1490,7 +1505,14 @@ class VideoOverlay {
     // second of spinner, and without this there is nothing anywhere saying
     // what broke — the server's log shows a response the page stopped
     // reading and nothing more.
-    console.warn('media: the conversion feed stopped', { why, status, at: this.curT() });
+    reportFault({
+      what: 'feed',
+      detail: why,
+      status,
+      item: this.item.id,
+      at: Math.round(this.curT()),
+      route: this.routeName(),
+    });
     if (status === 503) {
       this.giveUp('The server cannot read this file right now');
       return;
@@ -2122,6 +2144,17 @@ class VideoOverlay {
     // error from the source it was left with must not start a rewrap over
     // the set, nor give up on a format the set is playing perfectly well.
     if (this.faulted || this.tv) return;
+    // What the element said, before anything is done about it: the codes
+    // tell a network failure from a decode failure from a source the
+    // browser refused, which is the distinction every route below turns on
+    // and which nothing outside the browser can see.
+    reportFault({
+      what: 'element',
+      detail: mediaErrorText(this.video.error),
+      item: this.item.id,
+      at: Math.round(this.curT()),
+      route: this.routeName(),
+    });
     if (!this.readChecked) {
       this.readChecked = true;
       // By id, not by object: refreshItem replaces the item for the same
@@ -2198,6 +2231,16 @@ class VideoOverlay {
    * vanishes leaves a spinner that says nothing.
    */
   private giveUp(reason: string): void {
+    // What the viewer is being told, told to the log as well: this is the
+    // end of every route the player has, and the server's own log shows
+    // only the requests that led here.
+    reportFault({
+      what: 'playback',
+      detail: reason,
+      item: this.item.id,
+      at: Math.round(this.curT()),
+      route: this.routeName(),
+    });
     this.faulted = true;
     this.stopSoundFix();
     window.clearTimeout(this.audioWatch);
@@ -2208,6 +2251,15 @@ class VideoOverlay {
     this.faultEl.innerHTML = `${esc(reason)} <button type="button" class="vo-retry" data-retry>Try again</button>`;
     this.faultEl.hidden = false;
     this.showControls();
+  }
+
+  /** Which delivery is playing, for a fault report to name. */
+  private routeName(): string {
+    if (this.tv) return 'television';
+    if (this.usingHLS) return 'segments';
+    if (this.transcoding) return `pipe/${this.tcMode}`;
+    if (this.remuxed) return 'rewrap';
+    return 'file';
   }
 
   /** Take the fault down: whatever it said, it is not what is happening. */

@@ -12,8 +12,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
+import { REPORT_CAP, REPORT_QUIET_MS, shouldReport } from './report.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -823,4 +824,26 @@ test('framesReported: the counter is evidence only where the browser keeps one',
   const opts = { width: 1080, rewrapAvailable: true, hevcDecodes: true };
   assert.equal(pictureRoute({ ...opts, frames: framesReported({ totalVideoFrames: 0 }, true) }), 'ok');
   assert.equal(pictureRoute({ ...opts, frames: framesReported({ totalVideoFrames: 0 }, false) }), 'rewrap');
+});
+
+test('mediaErrorText: the element says which of the four things went wrong', () => {
+  assert.equal(mediaErrorText({ code: 2, message: '' } as MediaError), 'network');
+  assert.equal(mediaErrorText({ code: 3, message: 'decode failed' } as MediaError), 'decode: decode failed');
+  assert.equal(mediaErrorText({ code: 4, message: '' } as MediaError), 'source not supported');
+  assert.equal(mediaErrorText({ code: 9, message: '' } as MediaError), 'code 9');
+  assert.equal(mediaErrorText(null), 'no error reported');
+});
+
+test('report: a fault is sent once, and a page in a loop is not', () => {
+  const t0 = 1_000_000;
+  // Nothing said yet: say it.
+  assert.equal(shouldReport(t0, 0, undefined), true);
+  // The same thing a moment later is the same thing.
+  assert.equal(shouldReport(t0 + 1000, 1, t0), false);
+  assert.equal(shouldReport(t0 + REPORT_QUIET_MS - 1, 1, t0), false);
+  // Long enough after, it is worth saying again.
+  assert.equal(shouldReport(t0 + REPORT_QUIET_MS, 1, t0), true);
+  // And a page that never stops is stopped.
+  assert.equal(shouldReport(t0, REPORT_CAP, undefined), false);
+  assert.equal(shouldReport(t0, REPORT_CAP - 1, undefined), true);
 });
