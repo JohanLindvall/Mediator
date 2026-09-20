@@ -140,8 +140,46 @@ export function canFeed(): boolean {
 export interface FeedOptions {
   /** The film's running time from this stream's origin, for the element's duration. */
   duration?: number;
+  /**
+   * Where in the film this stream begins, and how to ask for it again from
+   * somewhere else. With both, a connection that comes apart is picked up
+   * where the buffer ends and nothing is thrown away; without them the
+   * failure goes to onError as it always did.
+   */
+  origin?: number;
+  urlAt?: (filmTime: number) => string;
+  /** Called when a broken connection was picked up again, at that moment. */
+  onResume?: (filmTime: number) => void;
   onError: (why: string, status?: number) => void;
   onEnd?: () => void;
+}
+
+/**
+ * How many times one feed reconnects before the failure is reported.
+ *
+ * Generous, because each reconnect is invisible — the element plays on out
+ * of what it already holds — and the thing being worked around is a
+ * connection that does not last, which may not last the next time either.
+ * It is bounded all the same: a conversion that fails the instant it is
+ * asked for must not be asked for ever.
+ */
+export const FEED_RESUMES = 8;
+
+/**
+ * Where a feed that came apart should ask for the conversion again: the
+ * film time its buffer reaches, and the offset the new stream's own clock
+ * has to be shifted by to land there.
+ *
+ * Null where there is nothing to resume from — nothing buffered yet, or
+ * the cap reached — which sends the failure to onError instead.
+ */
+export function resumeAt(
+  origin: number,
+  bufferedEnd: number | null,
+  resumes: number,
+): { film: number; offset: number } | null {
+  if (bufferedEnd === null || !(bufferedEnd > 0) || resumes >= FEED_RESUMES) return null;
+  return { film: origin + bufferedEnd, offset: bufferedEnd };
 }
 
 export class FedSource {
@@ -153,6 +191,8 @@ export class FedSource {
   private sb: SourceBuffer | null = null;
   private video: HTMLMediaElement | null = null;
   private stopped = false;
+  private resumes = 0;
+  private status: number | undefined;
 
   // No parameter properties: the test runner strips types and refuses
   // them, which is what keeps preview.ts out of its reach.
@@ -184,17 +224,67 @@ export class FedSource {
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
   }
 
+  /**
+   * The loop over *connections*, not over chunks.
+   *
+   * A conversion delivered down one response can come apart without
+   * anything being wrong with the film — the fetch drops, or something
+   * between here and the server gives up on a response nobody is reading
+   * while the buffer is full. Handing the element a fresh source to
+   * recover is what the player used to do, and it **throws the buffer
+   * away**: forty-five seconds already in hand are discarded and playback
+   * has to refill from nothing, which the viewer sees as a second or two of
+   * spinner. Asked for again from where the buffer ends and appended to the
+   * same buffer, none of that is visible — the element plays on out of what
+   * it holds while the new bytes arrive behind it.
+   */
   private async run(): Promise<void> {
-    let res: Response;
-    try {
-      res = await fetch(this.url, { signal: this.abort.signal });
-    } catch (e) {
-      if (!this.stopped) this.o.onError(String(e));
-      return;
+    let url = this.url;
+    for (;;) {
+      let broke: string;
+      try {
+        if (await this.pump(url)) {
+          // The body ended: the conversion has reached the end of the film.
+          await this.settled();
+          if (!this.stopped && this.ms.readyState === 'open') this.ms.endOfStream();
+          this.o.onEnd?.();
+        }
+        return;
+      } catch (e) {
+        broke = String(e);
+      }
+      if (this.stopped) return;
+      const at = resumeAt(this.o.origin ?? 0, this.bufferedEnd(), this.resumes);
+      if (!at || !this.o.urlAt || this.status !== undefined) {
+        // Nothing to resume from, nowhere to ask, or the server refused
+        // outright — which asking again would only repeat.
+        this.o.onError(broke, this.status);
+        return;
+      }
+      this.resumes++;
+      url = this.o.urlAt(at.film);
+      try {
+        await this.settled();
+        this.sb!.timestampOffset = at.offset;
+      } catch (e) {
+        this.o.onError(String(e));
+        return;
+      }
+      this.o.onResume?.(at.film);
     }
+  }
+
+  /**
+   * One connection: fetch it and feed what comes back to the buffer until
+   * it ends. True where the body ran out, false where this was stopped;
+   * anything else throws, and the caller decides whether to ask again.
+   */
+  private async pump(url: string): Promise<boolean> {
+    this.status = undefined;
+    const res = await fetch(url, { signal: this.abort.signal });
     if (!res.ok || !res.body) {
-      this.o.onError(res.statusText, res.status);
-      return;
+      this.status = res.status;
+      throw new Error(res.statusText || `status ${res.status}`);
     }
     if (this.o.duration !== undefined && this.o.duration > 0) {
       try {
@@ -205,38 +295,42 @@ export class FedSource {
     }
     const reader = res.body.getReader();
     let pending: Uint8Array<ArrayBuffer> = new Uint8Array(0);
-    try {
-      for (;;) {
-        if (this.stopped) return;
-        await this.throttle();
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-        if (!this.sb) {
-          // The buffer cannot be made until the codec string is known, and
-          // the codec string is inside the initialisation segment, which
-          // may take more than one chunk to arrive whole.
-          pending = concat(pending, value);
-          const end = initSegmentEnd(pending);
-          if (end < 0) continue;
-          const mime = codecStringOf(pending.subarray(0, end));
-          if (!mime || !MediaSource.isTypeSupported(mime)) {
-            this.o.onError(`unsupported stream ${mime ?? ''}`);
-            return;
-          }
-          this.sb = this.ms.addSourceBuffer(mime);
-          this.sb.mode = 'segments';
-          await this.append(pending);
-          pending = new Uint8Array(0);
-          continue;
+    for (;;) {
+      if (this.stopped) return false;
+      await this.throttle();
+      const { value, done } = await reader.read();
+      if (done) return true;
+      if (!value) continue;
+      if (!this.sb) {
+        // The buffer cannot be made until the codec string is known, and
+        // the codec string is inside the initialisation segment, which
+        // may take more than one chunk to arrive whole.
+        pending = concat(pending, value);
+        const end = initSegmentEnd(pending);
+        if (end < 0) continue;
+        const mime = codecStringOf(pending.subarray(0, end));
+        if (!mime || !MediaSource.isTypeSupported(mime)) {
+          throw new Error(`unsupported stream ${mime ?? ''}`);
         }
-        await this.append(value);
+        this.sb = this.ms.addSourceBuffer(mime);
+        this.sb.mode = 'segments';
+        await this.append(pending);
+        pending = new Uint8Array(0);
+        continue;
       }
-      await this.settled();
-      if (!this.stopped && this.ms.readyState === 'open') this.ms.endOfStream();
-      this.o.onEnd?.();
-    } catch (e) {
-      if (!this.stopped) this.o.onError(String(e));
+      await this.append(value);
+    }
+  }
+
+  /** How far the buffer reaches, in the element's own time. */
+  private bufferedEnd(): number | null {
+    const sb = this.sb;
+    try {
+      if (!sb || sb.buffered.length === 0) return null;
+      return sb.buffered.end(sb.buffered.length - 1);
+    } catch {
+      // A buffer the source has already let go of answers nothing.
+      return null;
     }
   }
 

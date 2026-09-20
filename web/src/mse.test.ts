@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { codecStringOf, initSegmentEnd } from './mse.ts';
+import { FEED_RESUMES, codecStringOf, initSegmentEnd, resumeAt } from './mse.ts';
 
 function box(type: string, ...payload: Uint8Array[]): Uint8Array {
   const len = payload.reduce((n, p) => n + p.length, 0);
@@ -94,4 +94,23 @@ test('mse: the initialisation segment ends where the first fragment begins', () 
   new DataView(big.buffer).setBigUint64(8, BigInt(big.length));
   const withBig = new Uint8Array([...ftyp, ...moov, ...big, ...moof]);
   assert.equal(initSegmentEnd(withBig), ftyp.length + moov.length + big.length);
+});
+
+test('mse: a broken feed is picked up where its buffer ends', () => {
+  // The stream began nine minutes into the film and the buffer reaches a
+  // further 75 s, so that is where to ask for the conversion again — and
+  // the new stream's own clock, which starts at zero, has to be shifted by
+  // the same 75 s to land there.
+  assert.deepEqual(resumeAt(540, 75, 0), { film: 615, offset: 75 });
+  // From the start of the film the two are the same number.
+  assert.deepEqual(resumeAt(0, 12.5, 3), { film: 12.5, offset: 12.5 });
+  // Nothing buffered is nothing to resume from: the connection came apart
+  // before it delivered anything, and asking again from the same place is
+  // what the player's own retry is for.
+  assert.equal(resumeAt(540, null, 0), null);
+  assert.equal(resumeAt(540, 0, 0), null);
+  // Bounded, or a conversion that fails the instant it is asked for would
+  // be asked for ever.
+  assert.equal(resumeAt(540, 75, FEED_RESUMES), null);
+  assert.equal(resumeAt(540, 75, FEED_RESUMES - 1)?.film, 615);
 });

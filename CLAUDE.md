@@ -4168,8 +4168,28 @@ Serving details worth knowing before "fixing" them:
   conversion, `avc1.64002A` and `mp4a.40.2`). A seek is what it always was:
   the conversion reopened at the keyframe, which here is a new feed and a
   new source, so `tcOffset` and everything built on it are unchanged.
-  **A feed that comes apart is picked up again, and a message never
-  contradicts the picture.** The fetch can drop and the buffer can refuse an
+  **A feed that comes apart is picked up where its buffer ends, not by
+  handing the element a new source** (`resumeAt`, `FEED_RESUMES`, tested).
+  The player's first answer to a broken feed was to start the conversion
+  again and hand the element the result, which **throws the buffer away**:
+  forty-five seconds already in hand are discarded and playback refills from
+  nothing, which the viewer sees as a second or two of spinner in the middle
+  of a film. Measured on a 42-minute broadcast that is always re-encoded
+  (its stream understates its reordering), with no hole in either the source
+  or the conversion at the moment it stalled, and the conversion running at
+  nearly seven times real time: the stall was the restart itself. So the
+  feed reconnects on its own instead — a fresh request for the same
+  conversion from the film time its buffer reaches, `timestampOffset` set to
+  that offset so the new stream's own clock, which starts at zero, lands
+  where the old one stopped, appended to **the same SourceBuffer**. The
+  element plays on out of what it holds while the new bytes arrive behind
+  it, and nothing is visible. It is bounded (`FEED_RESUMES`, eight —
+  generous because each one is invisible and what is being worked around is
+  a connection that does not last), it is refused where there is nothing
+  buffered to resume from, and it is refused outright where the **server**
+  answered a status: asking again would only repeat it, and that failure
+  belongs to the player's own routes.
+  **And a message never contradicts the picture.** The fetch can drop and the buffer can refuse an
   append, and neither says anything about the film: the conversion is still
   being made on the server and the element usually goes on playing what it
   already holds. Reported through the ordinary error route it fell all the
