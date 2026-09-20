@@ -156,6 +156,16 @@ const HIDE_CONTROLS_MS = 2600;
 const DECODE_SETTLE_S = 1.5;
 
 /**
+ * How many times a conversion is picked up again after its feed came apart.
+ *
+ * Bounded because a feed that fails the moment it is made would otherwise
+ * loop: twice is enough for the transient things — a dropped fetch, a
+ * buffer that refused an append — and a third failure is a real one, which
+ * goes through the ordinary error route and is reported.
+ */
+const FEED_RETRIES = 2;
+
+/**
  * How often a television is actually asked where it has got to, in seconds
  * of the clock this player carries forward between answers. Every second
  * would be a SOAP round trip per second for a film that runs for hours; the
@@ -349,6 +359,10 @@ class VideoOverlay {
   private tcOffset = 0;
   private tcGen = 0; // drops the answer of a seek that a newer one replaced
   private decodeChecked = false;
+  // The element's clock at the last tick, and how many times a broken feed
+  // has been picked up again for this file. Both are per file (beginFile).
+  private lastTick = -1;
+  private feedRetries = 0;
   /** Timer behind an audio-only conversion; see watchAudioMode. */
   private audioWatch = 0;
   // The upgrade from the piped soundtrack conversion to the file of it: the
@@ -1479,6 +1493,19 @@ class VideoOverlay {
       this.giveUp(`The server could not convert this film (${status})`);
       return;
     }
+    // No status: the feed itself came apart rather than the server refusing
+    // — the fetch dropped, or the buffer would not take what it was given —
+    // and that says nothing about the film. The conversion is still being
+    // made and the element usually goes on playing what it already holds,
+    // so it is picked up again from where the picture has got to. Reported
+    // as "this format cannot be played by your browser" instead, which is
+    // what happened, it was a message over a film that was still playing,
+    // offering a Try again that reloaded and stopped it.
+    if (this.transcoding && this.feedRetries < FEED_RETRIES) {
+      this.feedRetries++;
+      void this.startTranscodeAt(this.curT());
+      return;
+    }
     void this.onMediaError();
   }
 
@@ -1939,6 +1966,8 @@ class VideoOverlay {
     this.tcOffset = 0;
     this.decodeChecked = false;
     this.checkAt = 0.5;
+    this.lastTick = -1;
+    this.feedRetries = 0;
     window.clearTimeout(this.audioWatch);
     this.sourced = false;
     this.readChecked = false;
@@ -2175,6 +2204,13 @@ class VideoOverlay {
     this.showControls();
   }
 
+  /** Take the fault down: whatever it said, it is not what is happening. */
+  private clearFault(): void {
+    this.faulted = false;
+    this.faultEl.hidden = true;
+    this.faultEl.textContent = '';
+  }
+
   /**
    * Say so, and stop, where a probe has read this file and found it is not
    * media at all — truncated, or a container nothing can parse. The
@@ -2200,6 +2236,12 @@ class VideoOverlay {
     // damaged or incomplete is marked as such on the item, and the mark
     // goes only when the file itself changes. Pressing this after a
     // download finished would otherwise give the same answer for ever.
+    // A film that is playing needs nothing reloaded: the fault is the thing
+    // that is wrong, and reloading would stop what is working.
+    if (!this.video.paused && this.video.currentTime > 0) {
+      this.clearFault();
+      return;
+    }
     const id = this.item.id;
     this.refreshing = null;
     void this.refreshItem().then(() => {
@@ -2540,6 +2582,14 @@ class VideoOverlay {
   };
 
   private onTime = (): void => {
+    // A film that is playing is not a film that cannot be played. Whatever
+    // put the fault up — a feed that came apart, an error about a source
+    // that has since been replaced — the picture is the answer, and a
+    // message contradicting it is worse than none: it offers a Try again
+    // that reloads and interrupts what was working.
+    const t = this.video.currentTime;
+    if (this.faulted && !this.video.paused && t > this.lastTick) this.clearFault();
+    this.lastTick = t;
     if (!this.decodeChecked && this.video.currentTime > this.checkAt) {
       this.checkDecodes();
     }

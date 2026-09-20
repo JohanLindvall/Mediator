@@ -4160,6 +4160,20 @@ Serving details worth knowing before "fixing" them:
   conversion, `avc1.64002A` and `mp4a.40.2`). A seek is what it always was:
   the conversion reopened at the keyframe, which here is a new feed and a
   new source, so `tcOffset` and everything built on it are unchanged.
+  **A feed that comes apart is picked up again, and a message never
+  contradicts the picture.** The fetch can drop and the buffer can refuse an
+  append, and neither says anything about the film: the conversion is still
+  being made on the server and the element usually goes on playing what it
+  already holds. Reported through the ordinary error route it fell all the
+  way through to "this format cannot be played by your browser" — a message
+  over a film that was visibly playing, offering a Try again that reloaded
+  and stopped it. So a feed error with no HTTP status behind it restarts the
+  conversion from where the picture has got to (`FEED_RETRIES`, twice, since
+  a feed that fails the instant it is made must not loop), a server's own
+  refusal still says what it was, and `onTime` takes the fault down whenever
+  the clock is advancing — whatever put it up, the picture is the answer.
+  Try again on a film that is playing clears the message rather than
+  reloading.
   What it costs is the browser's own receiver: AirPlay and remote playback
   hand a set a *URL*, and an object URL is nothing a set can fetch, so the
   receiver button goes while a feed is up — a television over DLNA is still
