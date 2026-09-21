@@ -71,6 +71,9 @@ func TestReorderVerdict(t *testing.T) {
 		want                           bool
 	}{
 		{"the film that found the fault: declared 1, three B-frames between references", 1, 3, 0, true},
+		{"but IBBP — a run of two under a declaration of one — is textbook and correct:\n" +
+			"a run of B-frames that are not themselves references needs a depth of one,\n" +
+			"however long it is, and reading a lie into it re-encoded films that played", 1, 2, 0, false},
 		{"a declaration of none with any B-frame at all is the same lie", 0, 1, 0, true},
 		{"an ordinary B-pyramid: three under a declaration of two is honest", 2, 3, 0, false},
 		{"deeper pyramids on higher settings, still honest", 4, 7, 0, false},
@@ -176,5 +179,57 @@ func TestItemSaysWhenACopyWouldStutter(t *testing.T) {
 	srv.reorder.put(fmt.Sprintf("%s|%d|%d", id, it.ModTime, it.Size), true)
 	if got := fetch(); !got.Reencode {
 		t.Fatal("the item did not say the picture must be re-encoded")
+	}
+}
+
+// A film a look has already judged is marked in the **listing**, so the
+// player knows before it hands the element anything. Reached only through
+// /api/item — which is fetched after playback has started — the film began
+// playing natively and was taken away a second later, which the viewer sees
+// as a stall a moment after pressing play.
+func TestListingCarriesTheReencodeVerdict(t *testing.T) {
+	dir := t.TempDir()
+	writeMKV(t, filepath.Join(dir, "clip.mkv"), 2)
+	ts, srv, lib := serverUnderTest(t, dir)
+	var it library.Item
+	for _, got := range lib.List(library.Query{Limit: 5}).Items {
+		it = got
+	}
+	if it.ID == "" {
+		t.Skip("nothing indexed")
+	}
+	listed := func() library.Item {
+		t.Helper()
+		res, err := http.Get(ts.URL + "/api/library?limit=5")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var out library.Result
+		if err := json.NewDecoder(res.Body).Decode(&out); err != nil {
+			t.Fatal(err)
+		}
+		for _, got := range out.Items {
+			if got.ID == it.ID {
+				return got
+			}
+		}
+		t.Fatal("the film left the listing")
+		return library.Item{}
+	}
+	// Nothing has looked at it: the listing says nothing, since a look here
+	// would be an ffprobe per tile.
+	if listed().Reencode {
+		t.Error("a film nobody has judged was marked in the listing")
+	}
+	// Once judged, every listing carries it.
+	srv.reorder.put(itemKey(it), true)
+	if !listed().Reencode {
+		t.Error("a film the server has judged was not marked in the listing")
+	}
+	// And a verdict of "no" is not a mark either.
+	srv.reorder.put(itemKey(it), false)
+	if listed().Reencode {
+		t.Error("a film judged playable was marked")
 	}
 }

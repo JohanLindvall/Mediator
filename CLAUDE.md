@@ -4315,18 +4315,42 @@ Serving details worth knowing before "fixing" them:
   **It is found by reading the opening**, not by guessing from the container:
   one ffprobe over `reorderProbeFrames` frames, and the decision is
   `reorderVerdict`, pure and tested against the numbers real files produce.
-  Two signals, either sufficient. Frames **emitted with timestamps running
-  backwards** are the fault observed directly — ffmpeg's decoder honours the
-  declaration exactly as a browser does — needing two, since an edit-list
-  oddity at the start of a file is one inversion and not a lie. A **B-run
-  longer than the declaration** is the structural signal, trusted only where
-  the declaration is under two: three consecutive B-frames under a
-  declaration of two is an ordinary B-pyramid, the middle frame itself a
-  reference, and the first version of this rule — which compared run length
-  against the declaration unguarded — accused every modern encode in the
-  library of lying and sent an honest HEVC rewrap to the converter. Caught
-  by an existing test the Docker image had been skipping for want of an
-  encoder.
+  Two signals, **and they are not equals**. Frames **emitted with timestamps
+  running backwards** are the fault observed directly — ffmpeg's decoder
+  honours the declaration exactly as a browser does — needing two, since an
+  edit-list oddity at the start of a file is one inversion and not a lie.
+  That one is the evidence.
+  A **long B-run under a small declaration** is the structural signal, and it
+  is a heuristic standing in for evidence, because what a run of B-frames
+  actually requires cannot be read from the run: a run of B-frames that are
+  not themselves references needs a reorder depth of **one** however long it
+  is — the decoder holds the future reference and emits the Bs in the order
+  they arrive — where a pyramid, whose middle Bs *are* references, needs
+  more, and nothing in `pict_type` tells the two apart. So it reads a lie
+  into the commonest arrangement there is if it is let, and it was let twice.
+  The first version compared the run against the declaration unguarded and
+  accused every modern encode in the library, sending an honest HEVC rewrap
+  to the converter; the guard added for that (`declared < 2`) still condemned
+  **`IBBPBBP…`, a run of two under a declaration of one** — textbook,
+  correct, and half the files in a library. Measured on one such film: it
+  played natively for 1.6 s, was taken away and re-encoded from end to end,
+  and the viewer saw five seconds of spinner a moment after pressing play. The
+  run must now exceed the declaration by **more than one** before it counts on
+  its own — `declared+1` being the ordinary arrangement, and past that the
+  shape the one file this was written for had, a run of three under a
+  declaration of one that Chrome was measured dropping a frame in four on. A
+  declaration of *none* with any B-frame at all needs no margin: nothing
+  reorders under a declaration that nothing is reordered.
+  **The verdict rides the listing, not only `/api/item`** (`stampReencode`).
+  It is the one thing native playback cannot see for itself, and reached
+  through the item endpoint alone it arrives *after* the element has been
+  handed the file — so a film that really does need converting played for a
+  second and was then taken away, which is a stall a moment after pressing
+  play. Carried in the listing it is known before anything is opened, and the
+  player asks what it knows **before** handing the element the file (`load`,
+  which used to ask afterwards). Only what a look has already judged is
+  stamped, and never a look itself: this runs on every listing page, and
+  reading a file here would be an ffprobe per tile.
   Remembered for the run, keyed by the file's identity — the same shape of
   cost `EnsureCodecs` already pays at the moment a film is opened, and for the
   same reason. **No answer is not an accusation**: no ffprobe, a pipe that

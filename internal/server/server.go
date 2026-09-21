@@ -312,6 +312,7 @@ func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
 	// This page is what the grid is about to show, so its metadata is worth
 	// reading before the rest of the library's. Not worth waiting for.
 	s.lib.EnrichSoon(itemIDs(res.Items))
+	s.stampReencode(res.Items)
 	writeJSON(w, res)
 }
 
@@ -503,6 +504,32 @@ func (s *Server) handleItem(w http.ResponseWriter, r *http.Request) {
 	// of time is not a verdict and is not cached.
 	it.Reencode = s.mustReencode(ctx, it)
 	writeJSON(w, it)
+}
+
+// stampReencode marks the films a look has already judged (reorder.go).
+//
+// The verdict is the one thing native playback cannot see for itself, and it
+// used to reach the player only with /api/item — which is fetched *after*
+// the element has already been handed the file. So a film that has to be
+// converted started playing natively, played for a second or two, and was
+// then taken away and converted, which the viewer sees as a stall a moment
+// after pressing play: measured on one, 1.6 s of playback and then five
+// seconds of spinner. Carried in the listing, the player knows before it
+// opens anything, and there is one wait rather than two.
+//
+// Only what is already known, and never a look: this runs on every listing
+// page, and reading a file here would be an ffprobe per tile. A film nobody
+// has opened yet is unmarked and learns its verdict the old way, which is
+// the first open of it and no more.
+func (s *Server) stampReencode(items []library.Item) {
+	for i := range items {
+		if items[i].Kind != library.KindVideo {
+			continue
+		}
+		if v, ok := s.reorder.get(itemKey(items[i])); ok && v {
+			items[i].Reencode = true
+		}
+	}
 }
 
 // probed is a video with its open-time probe done: the codecs, the

@@ -252,20 +252,42 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 // reorderVerdict is the decision, pure so it can be tested against the
 // numbers real files produce without those files.
 //
-// Two signals, either sufficient. **Emitted frames whose timestamps go
+// Two signals, and they are not equals. **Emitted frames whose timestamps go
 // backwards** are the fault observed directly: ffmpeg's decoder honours the
 // declaration exactly as a browser does, so a stream that lies emits frames
 // out of order right here in the probe. Two are required rather than one,
 // since an edit-list oddity at the start of a file is one inversion and not
-// a lie. **A B-run longer than the declaration** is the structural signal,
-// and it is only trusted where the declaration is under two: three
-// consecutive B-frames under a declaration of two is an ordinary B-pyramid —
-// the middle frame is itself a reference and a delay of two is genuinely
-// enough — and the first version of this rule, which had no such guard,
-// accused every modern encode in the library of lying.
+// a lie. That signal is the evidence.
+//
+// **A long B-run under a small declaration** is the structural signal, and
+// it is a heuristic standing in for evidence — because what a run of B-frames
+// actually requires cannot be read from the run. A run of B-frames that are
+// not themselves references needs a reorder depth of **one**, however long
+// it is: the decoder holds the future reference and emits the Bs in the
+// order they arrive. A pyramid, whose middle Bs *are* references, needs
+// more. Nothing in `pict_type` tells the two apart, so this signal reads a
+// lie into the commonest arrangement there is if it is let.
+//
+// It was let, and the cost was measured: `IBBPBBP…`, a run of two under a
+// declaration of one — textbook, correct, and what half the files in a
+// library look like — was condemned, and every one of those films was
+// re-encoded from end to end rather than played. The viewer saw it as a
+// second of playback and then five seconds of spinner while the conversion
+// started. So the run has to exceed the declaration by **more than one**
+// before it counts on its own: `declared+1` is the ordinary arrangement, and
+// what is past that is the shape the one file this was written for had (a
+// run of three under a declaration of one, which Chrome was measured
+// dropping a frame in four on). A declaration of none with any B-frame at
+// all is its own case and needs no margin: nothing reorders under a
+// declaration that nothing is reordered.
 func reorderVerdict(declared, longestRun, inversions int) bool {
 	if inversions >= 2 {
 		return true
 	}
-	return declared < 2 && longestRun > declared
+	if declared == 0 {
+		return longestRun > 0
+	}
+	// Above one, a pyramid explains any run this probe can see, and the
+	// evidence above is the only thing that counts.
+	return declared < 2 && longestRun > declared+1
 }

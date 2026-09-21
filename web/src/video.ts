@@ -1915,11 +1915,16 @@ class VideoOverlay {
     // letting the fallback run. Start where it was going to end up.
     const direct = this.opensDirectly(item);
     if (direct) {
-      // A file the browser opens still starts as the rewrap where its index
-      // sits behind its data: the listing says so once the shape pass has
-      // read it, and a file it has not reached yet is caught by the same
-      // question after refreshItem (useKnownCodecs).
-      if (!(wantsFaststart(item, playsHLS()) && this.tryRemux())) {
+      // What is already known about the file is asked **before** the element
+      // is handed it: a picture this browser has no decoder for, a
+      // soundtrack it cannot decode, a stream the server has judged
+      // unplayable as it stands, or an index sitting behind the data. Asked
+      // afterwards — which is where this used to be — the film began
+      // playing natively and was taken away a second or two later, and the
+      // viewer saw a stall a moment after pressing play. It is asked again
+      // when /api/item answers, for a film nothing had judged yet.
+      this.useKnownCodecs();
+      if (!this.faulted && !this.transcoding && !this.remuxed) {
         // Half a second of playback from where it actually starts, not
         // from zero, which a resume is already past.
         this.startSource(streamUrl(item.id), { at: this.startAt, settle: 0.5 });
@@ -1934,12 +1939,6 @@ class VideoOverlay {
     // converted — offered neither its six soundtracks nor its twelve
     // subtitle tracks, because the branch above returned before this.
     void this.loadSubs();
-    // What the file holds decides the soundtrack, and it decides it now: the
-    // codecs may already be known from the listing, and if they are not, the
-    // moment they arrive is still before anything has had to fail. The menu
-    // — and with it the picked track — was built above, so a conversion
-    // started here carries the remembered choice rather than track one.
-    if (direct) this.useKnownCodecs();
     void this.refreshItem().then(() => {
       // The soundtracks come out of the probe the metadata request runs, so
       // this is the first moment a first open has a menu to build — and the
