@@ -176,6 +176,26 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 	// nobody's choice, so the map is optional and ffmpeg simply produces a
 	// picture — better than refusing to play the film.
 	args = append(args, "-map", "0:v:0", "-map", audioMap(audio), "-sn", "-dn")
+	if !copyVideo {
+		// What comes out keeps the timing of what went in.
+		//
+		// ffmpeg's default for a file output is a *constant* rate, and where
+		// the source does not declare one it takes the container's time base
+		// for it — which for an ASF written in milliseconds is **1000 fps**.
+		// Measured on such a file, a 276x246 webcam recording whose frames
+		// are really about 32 a second: every frame duplicated thirty times,
+		// 59,996 frames for a minute of film, the conversion crawling at
+		// twice real time where it should manage hundreds, four times the
+		// bytes it needed, and a browser asked to decode a thousand frames a
+		// second. The viewer saw a spinner that never went away. The same
+		// minute with the timing left alone: 1,811 frames, 25 times real
+		// time, a third of the bytes.
+		//
+		// Nothing is lost where the source really is constant — there are no
+		// duplicates to drop, and the output is what it always was. This
+		// only ever removes frames ffmpeg invented.
+		args = append(args, "-fps_mode", "vfr")
+	}
 	switch {
 	case copyVideo:
 		args = append(args, "-c:v", "copy")

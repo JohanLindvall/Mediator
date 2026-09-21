@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,5 +81,30 @@ func TestDeinterlacerKeepsOneFramePerFrame(t *testing.T) {
 	got := videoFilter("scale=w=1280:h=-2")
 	if !strings.HasPrefix(got, deinterlacer+",") {
 		t.Errorf("the deinterlacer is not first: %q", got)
+	}
+}
+
+// A re-encode keeps the timing of what it was given. ffmpeg's default for a
+// file output is a constant rate, and where the source declares none it
+// takes the container's time base for one — which for an ASF written in
+// milliseconds is a thousand frames a second, every real frame duplicated
+// thirty times.
+func TestAReencodeKeepsTheSourcesTiming(t *testing.T) {
+	log := testLogger()
+	it := library.Item{ID: "abc", Kind: library.KindVideo, Path: "/x/clip.wmv", VCodec: "wmv3"}
+	full, err := planConversion(context.Background(), "ffmpeg", it, 0, false, "", quality{}, false, false, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(full.args, "-fps_mode") {
+		t.Errorf("a re-encode does not say what to do about the frame rate: %v", full.args)
+	}
+	// A copy has no frame rate to decide: the frames are the file's own.
+	copied, err := planConversion(context.Background(), "ffmpeg", it, 0, true, "", quality{}, false, false, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(copied.args, "-fps_mode") {
+		t.Errorf("a copy was told how to pace frames it is not encoding: %v", copied.args)
 	}
 }

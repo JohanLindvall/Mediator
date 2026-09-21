@@ -4127,6 +4127,21 @@ Serving details worth knowing before "fixing" them:
   ask whether an id exists. It answers 204 whatever it decides, recorded or
   dropped: the page is telling the server something, not asking it
   anything.
+- **A re-encode keeps the timing of what it was given** (`-fps_mode vfr` in
+  `planConversion`). ffmpeg's default for a file output is a *constant* rate,
+  and where the source declares none it takes the container's time base for
+  one — which for an ASF written in milliseconds is **1000 fps**. Measured on
+  such a file, a 276x246 webcam recording whose frames are really about 32 a
+  second: every frame duplicated thirty times, 59,996 frames for a minute of
+  film, the conversion crawling at **twice real time** where a picture that
+  size should manage hundreds, four times the bytes it needed, and a browser
+  asked to decode a thousand frames a second. What the viewer saw was a
+  spinner that never went away, on a film the server was converting as fast
+  as it could. The same minute with the timing left alone: 1,811 frames, 25
+  times real time, a third of the bytes. Nothing is lost where the source
+  really is constant — there are no duplicates to drop and the output is what
+  it always was — so this only ever removes frames ffmpeg invented. Copies
+  are untouched: their frames are the file's own.
 - **A viewer can ask for fewer bits** (`q=` on `/api/transcode` and
   `/api/hls`; `quality` and `qualityTiers` in `convert.go`; the ladder on
   `/api/info` as `qualities`). The converter's rate was never the viewer's
