@@ -2463,3 +2463,59 @@ body.has-audio #toasts {
   position: absolute;
   background-repeat: no-repeat;
 }
+
+/* Skipping the credits (skips.ts, the player). The button stands where the
+   pointer already is on the way to the controls, above them so it survives
+   their fade: a viewer reaching for it after the controls have gone must not
+   find it gone too. */
+.vo-skip {
+  position: absolute;
+  right: 20px;
+  bottom: 118px;
+  z-index: 3;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgb(0 0 0 / 70%);
+  border: 1px solid rgb(255 255 255 / 45%);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+.vo-skip:hover,
+.vo-skip:focus-visible {
+  background: rgb(255 255 255 / 22%);
+}
+.vo-skips {
+  max-width: min(94vw, 480px);
+}
+.skips-head {
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.skips-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.skips-row input[type='text'],
+.skips-row select {
+  width: 5.5em;
+  padding: 5px 7px;
+  border-radius: 6px;
+  border: 1px solid rgb(255 255 255 / 30%);
+  background: rgb(255 255 255 / 10%);
+  color: #fff;
+  font: inherit;
+}
+.skips-row select {
+  width: auto;
+}
+.skips-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}

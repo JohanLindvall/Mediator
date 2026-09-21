@@ -86,6 +86,9 @@ type Server struct {
 	port int
 	// links mints and resolves the short names for somewhere in the app.
 	links *links
+	// skips is where the owner has marked each show's opening and closing
+	// credits (skips.go).
+	skips *skipStore
 	// reorder remembers which pictures cannot be handed to a browser by
 	// copying, however playable their codec is (reorder.go).
 	reorder reorderCache
@@ -145,6 +148,11 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	} else {
 		s.links = newLinks(nil, log)
 	}
+	if ss, ok := keys.(SkipStore); ok {
+		s.skips = newSkipStore(ss, log)
+	} else {
+		s.skips = newSkipStore(nil, log)
+	}
 	s.mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.mux.HandleFunc("GET /api/library", s.handleList)
 	s.mux.HandleFunc("GET /api/playlist.m3u", s.handlePlaylist)
@@ -186,6 +194,8 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	s.mux.HandleFunc("POST /api/renderers/{rid}/control", s.handleCastControl)
 	s.mux.HandleFunc("POST /api/links", s.handleLinkCreate)
 	s.mux.HandleFunc("POST /api/log", s.handleClientLog)
+	s.mux.HandleFunc("GET /api/skip/{id}", s.handleSkipGet)
+	s.mux.HandleFunc("PUT /api/skip/{id}", s.handleSkipPut)
 	s.mux.HandleFunc("GET /s/{code}", s.handleLink)
 	s.mux.HandleFunc("GET /api/events", s.handleEvents)
 	s.mux.Handle("/", spaHandler(dist))

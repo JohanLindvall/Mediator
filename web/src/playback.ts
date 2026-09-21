@@ -819,6 +819,7 @@ export const PLAYER_KEYS: readonly KeyHelp[] = [
   { keys: ['C'], does: 'Next subtitle' },
   { keys: ['A'], does: 'Next soundtrack' },
   { keys: ['R', 'Shift R'], does: 'Rotate the picture' },
+  { keys: ['S'], does: 'Skip the intro or the credits, where they are marked' },
   { keys: ['?'], does: 'This list' },
   { keys: ['Esc'], does: 'Close a menu, or the player' },
 ];

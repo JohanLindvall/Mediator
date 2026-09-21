@@ -265,6 +265,25 @@ export interface ClientFault {
   where?: string;
 }
 
+export interface SkipMarks {
+  introStart?: number;
+  introEnd?: number;
+  outro?: number;
+}
+
+export interface SkipResponse {
+  episode?: SkipMarks;
+  season?: SkipMarks;
+  series?: SkipMarks;
+}
+
+export interface SkipUpdate {
+  scope: string;
+  introStart?: number;
+  introEnd?: number;
+  outro?: number;
+}
+
 export interface LikeUpdate {
   like: number;
 }

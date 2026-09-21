@@ -43,6 +43,7 @@ var (
 	cropBucket  = []byte("crops")
 	linkBucket  = []byte("links")
 	featBucket  = []byte("features")
+	skipBucket  = []byte("skips")
 )
 
 // epochKey names the value that identifies this store to clients. See Epoch.
@@ -94,7 +95,7 @@ func Open(path string) (*DB, error) {
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, b := range [][]byte{
 			thumbBucket, metaBucket, itemBucket, flagBucket, posBucket, infoBucket, cropBucket,
-			linkBucket, featBucket,
+			linkBucket, featBucket, skipBucket,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
@@ -769,5 +770,43 @@ func (s *DB) EachFeatures(fn func(id string, mtime, size int64, version int, vec
 			fn(string(k), mtime, size, version, vec)
 			return nil
 		})
+	})
+}
+
+// Skip says where an episode's opening and closing credits are, in seconds:
+// the intro from IntroStart to IntroEnd, and the credits beginning Outro
+// seconds before the end. Keyed by the scope it applies to — one episode, one
+// season of a show, or the whole show (server/skips.go) — and, like the
+// flags, the owner's own data: no mtime or size, and pruned by nothing.
+type Skip struct {
+	IntroStart float64 `json:"is,omitempty"`
+	IntroEnd   float64 `json:"ie,omitempty"`
+	Outro      float64 `json:"o,omitempty"`
+}
+
+// AllSkips reads every skip record, for the server to hold in memory.
+func (s *DB) AllSkips() (map[string]Skip, error) {
+	out := map[string]Skip{}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(skipBucket).ForEach(func(k, v []byte) error {
+			var m Skip
+			if json.Unmarshal(v, &m) == nil {
+				out[string(k)] = m
+			}
+			return nil
+		})
+	})
+	return out, err
+}
+
+// PutSkip writes one scope's marks, or removes them where there is nothing
+// left to say.
+func (s *DB) PutSkip(key string, m Skip) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(skipBucket)
+		if m == (Skip{}) {
+			return b.Delete([]byte(key))
+		}
+		return putJSON(b, key, m)
 	})
 }

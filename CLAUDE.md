@@ -1355,6 +1355,45 @@ Change propagation is the core loop:
   listing sorted by episode. A listing rather than a sheet, deliberately: it
   is what the player steps through, so going on to the next episode is
   something it already does.
+- **A show's credits are marked once and skipped every episode** (`skips.go`,
+  `skips.ts`, `GET`/`PUT /api/skip/{id}`). Nothing in a file says where its
+  opening and closing are, so the owner does, in the player's own form: the
+  intro from one moment to another and the credits as **seconds before the
+  end** — before the end rather than at a time, since the episodes of a
+  season differ in length by seconds and the credits sit at the end of
+  each. Marks are kept by **what they apply to**, not by file: `e|<id>` for
+  one episode, `s|<series key>|<season>` for a season, `t|<series key>` for
+  the show (the key being `SeriesKey`, as the grouping's), so a season's
+  marks survive an episode being replaced and reach one that arrives later.
+  The narrowest scope that says anything wins (`effectiveMarks`, tested):
+  one odd episode can be marked on its own under a season marked for all of
+  them, and an empty record at a narrower scope is passed over rather than
+  read as "nothing to skip". They are the owner's data like the flags —
+  held in memory for the run, written through to the blob database in the
+  order they were settled in, lasting the run with `-db off` — and go
+  through the face like every by-id route, so a caller that cannot see the
+  film can neither read nor mark it.
+  **The skip is a button, and a second one is what skipping a season's
+  credits means.** While the intro plays a *Skip intro* button stands above
+  the controls, outside their fade; while the credits roll, *Next episode*
+  — which opens the next episode **past its own intro** (`startAfterIntro`),
+  its marks fetched before it is opened so it begins there rather than
+  starting and jumping, and the episode being left is recorded as
+  **finished** (`persistDone`): a position saved at the credits would count
+  it as unwatched and resume it there. An episode with a cold open before
+  its intro starts at the cold open and is offered the intro skip when it
+  gets there; arriving from the previous episode's credits, that skip is
+  taken by itself (`skipIntroOnArrival`), the viewer having asked. Either
+  skip can be set to happen by itself (`media.autoSkip`, remembered per
+  browser, off by default: a jump nobody asked for is a scene lost where a
+  mark is wrong, and marks are set by hand) — and each is taken by itself
+  **once per file**, so a viewer who seeks back into the intro on purpose
+  is offered the button and not thrown out again. The intro's last second
+  is not offered (`SKIP_MARGIN_S`): a button that appears and vanishes
+  before it can be read is noise. The form's fields are typed as a clock
+  (`parseClock`, tested — "1:32", "92", "1:02:03", and nothing else) or
+  taken from the playhead, and the player's own key handler stands down
+  while a field has focus, or "1:32" would be four shortcuts.
 - **Genres** (`genres.go`) are grouped from albums exactly as artists are,
   and for the same reason — a view grouped from tracks could disagree with
   the album view about what a release is filed under. A genre carries the one

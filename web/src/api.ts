@@ -30,8 +30,7 @@ import type {
   CropResponse,
   InfoResponse,
   KeyframeResponse,
-  SubtitlesResponse,
-} from './types.gen';
+  SubtitlesResponse, SkipResponse, SkipUpdate } from './types.gen';
 import { SPRITE, Quality } from './types.gen';
 import { reportFault } from './report';
 
@@ -589,6 +588,18 @@ export async function hlsTimeline(url: string): Promise<'film' | 'session'> {
   } catch {
     return 'session';
   }
+}
+
+/**
+ * Where a video's opening and closing credits are marked, at every scope it
+ * belongs to (skips.ts decides which applies), and a change to one scope.
+ */
+export function getSkip(id: string): Promise<SkipResponse> {
+  return getJSON<SkipResponse>(`/api/skip/${encodeURIComponent(id)}`);
+}
+
+export function putSkip(id: string, update: SkipUpdate): Promise<SkipResponse> {
+  return sendJSON<SkipResponse>('PUT', `/api/skip/${encodeURIComponent(id)}`, update);
 }
 
 /** Whether this browser plays HLS by itself — see playback.ts. */
