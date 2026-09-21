@@ -44,6 +44,7 @@ type config struct {
 	dataDir  string
 	dbPath   string
 	rescan   time.Duration
+	credits  bool
 	analyze  bool
 	open     bool
 	lock     bool
@@ -78,6 +79,7 @@ func main() {
 	dataDir := flag.String("data", "data", "directory for playback state and the default blob database")
 	dbPath := flag.String("db", "", `blob database path (thumbnails + probed metadata; default <data>/media.db, "off" disables persistent caching)`)
 	rescan := flag.Duration("rescan", 10*time.Minute, "full rescan interval as a safety net (0 disables)")
+	credits := flag.Bool("credits", true, "find each show's intro and credits from the sound, so the player can skip them (needs ffmpeg)")
 	analyze := flag.Bool("analyze", true, "read how the music sounds in the background, for similar tracks, radio and audiobooks")
 	version := flag.Bool("version", false, "print the build and exit")
 	open := flag.Bool("open", false, "open the UI in the default browser once listening (without -listen: a free port on 127.0.0.1)")
@@ -157,7 +159,7 @@ func main() {
 
 	cfg := config{
 		roots: roots, excludes: excludes, listen: *listen, dataDir: *dataDir,
-		dbPath: *dbPath, rescan: *rescan, analyze: *analyze, open: *open, lock: *lock, debug: *debug,
+		dbPath: *dbPath, rescan: *rescan, analyze: *analyze, credits: *credits, open: *open, lock: *lock, debug: *debug,
 		tmpDir: *tmpDir, tmpMax: maxScratch,
 	}
 	if err := run(cfg, log); err != nil {
@@ -254,6 +256,9 @@ func run(cfg config, log *slog.Logger) error {
 		// id and checked against the item's stamp only when the analysis
 		// asks.
 		lib.LoadFeatures(db)
+		if n := lib.LoadSkips(db); n > 0 {
+			log.Info("credits restored", "episodes", n)
+		}
 		if n := lib.LoadFromDB(db); n > 0 {
 			log.Info("restored index", "files", n)
 		}
@@ -382,10 +387,24 @@ func run(cfg config, log *slog.Logger) error {
 		pruneAll()
 		scanGate.Unlock()
 		lib.EnrichMeta(ctx, busy)
-		// And reading how the music sounds comes after all of them.
+		// And reading how the music sounds comes after all of them — as
+		// does finding each show's credits in it, in the same tier and on
+		// the same gate, beside it rather than after it: the two are days
+		// of work each on a large library, and neither waits for the other.
+		// Both write to the database, so this goroutine waits for both
+		// before it says there are no more writers.
+		var loops sync.WaitGroup
+		if cfg.credits {
+			loops.Add(1)
+			go func() {
+				defer loops.Done()
+				lib.SkipDetectLoop(ctx, db, analysisBusy)
+			}()
+		}
 		if cfg.analyze {
 			lib.AnalyzeLoop(ctx, db, analysisBusy)
 		}
+		loops.Wait()
 	}()
 
 	// The safety-net walk: on a timer, and after the watcher has said it

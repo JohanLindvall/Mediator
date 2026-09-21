@@ -30,7 +30,7 @@ import type {
   CropResponse,
   InfoResponse,
   KeyframeResponse,
-  SubtitlesResponse, SkipResponse, SkipUpdate } from './types.gen';
+  SubtitlesResponse, SkipMarks } from './types.gen';
 import { SPRITE, Quality } from './types.gen';
 import { reportFault } from './report';
 
@@ -591,15 +591,13 @@ export async function hlsTimeline(url: string): Promise<'film' | 'session'> {
 }
 
 /**
- * Where a video's opening and closing credits are marked, at every scope it
- * belongs to (skips.ts decides which applies), and a change to one scope.
+ * Where a video's opening and closing credits are, as the library found
+ * them from the sound (skips.ts). Asking is also what puts the episode's
+ * season at the front of the library's work, so a show being watched is
+ * looked at before one that is not.
  */
-export function getSkip(id: string): Promise<SkipResponse> {
-  return getJSON<SkipResponse>(`/api/skip/${encodeURIComponent(id)}`);
-}
-
-export function putSkip(id: string, update: SkipUpdate): Promise<SkipResponse> {
-  return sendJSON<SkipResponse>('PUT', `/api/skip/${encodeURIComponent(id)}`, update);
+export function getSkip(id: string): Promise<SkipMarks> {
+  return getJSON<SkipMarks>(`/api/skip/${encodeURIComponent(id)}`);
 }
 
 /** Whether this browser plays HLS by itself — see playback.ts. */

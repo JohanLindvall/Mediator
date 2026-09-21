@@ -4,21 +4,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { SKIP_MARGIN_S, effectiveMarks, parseClock, skipOffer, startAfterIntro } from './skips.ts';
+import { SKIP_MARGIN_S, marksEmpty, skipOffer, startAfterIntro } from './skips.ts';
 
-test('skips: the narrowest scope that says anything wins', () => {
-  const season = { introStart: 0, introEnd: 90, outro: 60 };
-  const series = { introStart: 0, introEnd: 80 };
-  assert.deepEqual(effectiveMarks({ season, series }), season);
-  assert.deepEqual(effectiveMarks({ series }), series);
-  // An episode marked on its own outranks its season.
-  const episode = { introStart: 30, introEnd: 100 };
-  assert.deepEqual(effectiveMarks({ episode, season, series }), episode);
-  // An empty record at a narrower scope says nothing and is passed over.
-  assert.deepEqual(effectiveMarks({ episode: {}, season }), season);
-  assert.deepEqual(effectiveMarks({ episode: { introStart: 5, introEnd: 5 }, season }), season);
-  assert.equal(effectiveMarks({}), null);
-  assert.equal(effectiveMarks(null), null);
+test('skips: nothing is nothing, whatever shape it comes in', () => {
+  assert.equal(marksEmpty(null), true);
+  assert.equal(marksEmpty({}), true);
+  assert.equal(marksEmpty({ introStart: 5, introEnd: 5 }), true);
+  assert.equal(marksEmpty({ outro: 30 }), false);
+  assert.equal(marksEmpty({ introStart: 0, introEnd: 60 }), false);
 });
 
 test('skips: what is offered where', () => {
@@ -56,16 +49,4 @@ test('skips: the next episode begins past its intro, and only then', () => {
   // No intro marked, nothing to skip to.
   assert.equal(startAfterIntro({ outro: 60 }, 0), 0);
   assert.equal(startAfterIntro(null, 12), 12);
-});
-
-test('skips: a clock as a person writes one', () => {
-  assert.equal(parseClock('1:32'), 92);
-  assert.equal(parseClock('0:07'), 7);
-  assert.equal(parseClock('1:02:03'), 3723);
-  assert.equal(parseClock('92'), 92);
-  assert.equal(parseClock(' 92.5 '), 92.5);
-  assert.equal(parseClock(''), 0);
-  assert.ok(Number.isNaN(parseClock('a minute')));
-  assert.ok(Number.isNaN(parseClock('1:2:3:4')));
-  assert.ok(Number.isNaN(parseClock('-5')));
 });

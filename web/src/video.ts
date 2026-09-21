@@ -10,7 +10,6 @@ import {
   getSkip,
   hlsTimeline,
   hlsUrl,
-  putSkip,
   keyframeStart,
   listSubs,
   playsHLS,
@@ -37,7 +36,7 @@ import {
 } from './airplay';
 import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
 import { CastTransport, type CastHooks } from './casting';
-import type { CastStatus, RendererInfo, SkipResponse } from './types.gen';
+import type { CastStatus, RendererInfo } from './types.gen';
 import { preferredLang, rememberTrack, rememberedTrack } from './audiopref';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
 import { canFeed, FedSource } from './mse';
@@ -77,7 +76,7 @@ import { forget, recall, remember } from './remember';
 import { SlideDeck, watchSwipes } from './swipe';
 import { holdThumbs, releaseThumbs } from './thumbs';
 import { reportFault } from './report';
-import { effectiveMarks, parseClock, skipOffer, startAfterIntro, type Marks, type SkipOffer } from './skips';
+import { marksEmpty, skipOffer, startAfterIntro, type Marks, type SkipOffer } from './skips';
 import { showToast } from './toast';
 import { shareItem } from './links';
 
@@ -160,20 +159,6 @@ const HIDE_CONTROLS_MS = 2600;
  */
 const DECODE_SETTLE_S = 1.5;
 
-/**
- * Whether marked credits are skipped by themselves, or only offered as a
- * button. The button is the default: a skip the viewer did not ask for at
- * that moment is a jump in the middle of a scene where a mark is wrong, and
- * marks are set by hand.
- */
-const AUTO_SKIP_KEY = 'media.autoSkip';
-function autoSkip(): boolean {
-  return recall(AUTO_SKIP_KEY) === '1';
-}
-function setAutoSkip(on: boolean): void {
-  if (on) remember(AUTO_SKIP_KEY, '1');
-  else forget(AUTO_SKIP_KEY);
-}
 
 /**
  * How many times a conversion is picked up again after its feed came apart.
@@ -383,23 +368,16 @@ class VideoOverlay {
   // has been picked up again for this file. Both are per file (beginFile).
   private lastTick = -1;
   private feedRetries = 0;
-  // Where this episode's opening and closing credits are (skips.ts), the
-  // whole answer for the form, and which of the two skips has been taken by
-  // itself for this file — once each, so a viewer who seeks back into the
-  // intro on purpose is offered the button and not thrown out again.
+  // Where this episode's opening and closing credits are, as the server
+  // found them (skips.ts), and which skip is on offer at the moment.
   private marks: Marks | null = null;
-  private marksAll: SkipResponse | null = null;
-  private autoSkipped = { intro: false, credits: false };
   private offer: SkipOffer = null;
   // Set for the step that skips the credits, and read by the file it lands
   // on: the viewer asked to skip, and the next episode's intro goes with
-  // it whatever the auto preference says.
+  // it — once, so a viewer who then seeks back into it meant to.
   private arrivedFromCredits = false;
   private skipIntroOnArrival = false;
-  private skipScope: string | null = null;
   private skipBtn!: HTMLElement;
-  private skipsEl!: HTMLElement;
-  private skipsBtn!: HTMLElement;
   /** Timer behind an audio-only conversion; see watchAudioMode. */
   private audioWatch = 0;
   // The upgrade from the piped soundtrack conversion to the file of it: the
@@ -1784,7 +1762,6 @@ class VideoOverlay {
       <button class="vo-skip" data-skip hidden>Skip intro</button>
       <div class="vo-prep" data-prep hidden aria-live="polite"><span data-prepmsg></span></div>
       <div class="vo-help" data-help hidden role="dialog" aria-label="Keys"></div>
-      <div class="vo-help vo-skips" data-skips hidden role="dialog" aria-label="Where the credits are"></div>
       <div class="vo-slides" data-slides aria-hidden="true">
         <canvas class="vo-slide" data-cur></canvas>
         <img class="vo-slide vo-slide-prev" data-prev alt="">
@@ -1830,7 +1807,6 @@ class VideoOverlay {
             <button class="icon-btn" data-cc aria-label="Subtitles (C)" aria-haspopup="menu" aria-expanded="false" hidden>${icons.cc}</button>
             <div class="vo-menu" data-ccmenu role="menu" hidden></div>
           </div>
-          <button class="icon-btn" data-skipmarks aria-label="Mark the intro and the credits" title="Mark the intro and the credits, to skip them" hidden>${icons.skip}</button>
           <button class="icon-btn" data-share aria-label="Copy a link to this film">${icons.link}</button>
           <button class="icon-btn" data-viz aria-label="Spectrum">${icons.grid}</button>
           <button class="icon-btn" data-crop aria-label="Trim the file's black borders" hidden>${icons.crop}</button>
@@ -1882,9 +1858,6 @@ class VideoOverlay {
     ];
     this.skipBtn = this.q('[data-skip]');
     this.skipBtn.addEventListener('click', () => void this.applySkip(this.offer, 'button'));
-    this.skipsBtn = this.q('[data-skipmarks]');
-    this.skipsEl = this.q('[data-skips]');
-    this.skipsBtn.addEventListener('click', () => this.toggleSkips());
     this.helpEl = this.q('[data-help]');
     this.helpEl.innerHTML = `<table>${PLAYER_KEYS.map(
       (k) => `<tr><td>${k.keys.map((key) => `<kbd>${esc(key)}</kbd>`).join(' ')}</td><td>${esc(k.does)}</td></tr>`,
@@ -2050,15 +2023,8 @@ class VideoOverlay {
     // it; otherwise this file's own resume point.
     this.startAt = at ?? resumeStart(this.resume, item.duration);
     this.marks = null;
-    this.marksAll = null;
-    this.autoSkipped = { intro: false, credits: false };
     this.offer = null;
     this.skipBtn.hidden = true;
-    this.skipsEl.hidden = true;
-    this.skipScope = null;
-    // Marks are a show's; a film that is nobody's episode has nothing to
-    // mark, and the button would be an invitation to nothing.
-    this.skipsBtn.hidden = !item.series;
     this.skipIntroOnArrival = this.arrivedFromCredits;
     this.arrivedFromCredits = false;
 
@@ -2424,7 +2390,7 @@ class VideoOverlay {
       // Skipping this episode's credits means the next one begins past
       // its own intro (startAfterIntro): its marks are fetched before it
       // is opened, so it starts there rather than starting and jumping.
-      const marks = effectiveMarks(await this.marksFor(found.item.id));
+      const marks = await this.marksFor(found.item.id);
       if (this.closed || gen !== this.stepGen) return false;
       at = startAfterIntro(marks, resumeStart(this.opts.resumeFor?.(found.item.id), found.item.duration));
       this.arrivedFromCredits = true;
@@ -2777,18 +2743,10 @@ class VideoOverlay {
 
   private onKey = (ev: KeyboardEvent): void => {
     if (this.closed) return;
-    // Typing into the marks form must not be read as shortcuts: "1:32" is
-    // four key presses, and this handler sees them first.
-    const inField = (ev.target as HTMLElement | null)?.closest?.('input, select, textarea');
-    if (inField && ev.key !== 'Escape') return;
     switch (ev.key) {
       case 'Escape':
-        // Whatever is on top is the thing Escape closes: the marks form,
-        // the key help, then any of the three menus, then the player.
-        if (!this.skipsEl.hidden) {
-          this.toggleSkips(false);
-          break;
-        }
+        // Whatever is on top is the thing Escape closes: the key help, then
+        // any of the three menus, then the player.
         if (!this.helpEl.hidden) {
           this.toggleHelp(false);
           break;
@@ -2983,29 +2941,34 @@ class VideoOverlay {
 
   // ---- skipping the credits ----------------------------------------------
 
-  /** This episode's marks, from the server. Nothing is offered until they arrive. */
+  /**
+   * This episode's marks, from the server, which found them in the sound
+   * that recurs across the season. Nothing is offered until they arrive,
+   * and a film that is nobody's episode has none to fetch.
+   */
   private async loadMarks(): Promise<void> {
-    if (!this.item.series) return; // a film is nobody's episode: nothing is marked
+    if (!this.item.series) return;
     const id = this.item.id;
-    const resp = await this.marksFor(id);
+    const marks = await this.marksFor(id);
     if (this.closed || this.item.id !== id) return;
-    this.marksAll = resp;
-    this.marks = effectiveMarks(resp);
+    this.marks = marks;
     this.checkSkips();
   }
 
-  private async marksFor(id: string): Promise<SkipResponse | null> {
+  private async marksFor(id: string): Promise<Marks | null> {
     try {
-      return await getSkip(id);
+      const m = await getSkip(id);
+      return marksEmpty(m) ? null : m;
     } catch {
       return null; // no marks is the ordinary case, and a failure reads the same
     }
   }
 
   /**
-   * Offer the skip the position calls for, and take it where the viewer
-   * asked for that to happen by itself. Each is taken by itself once per
-   * file: a viewer who then seeks back into the intro meant to.
+   * Offer the skip the position calls for. The one skip taken by itself
+   * is the intro of an episode arrived at by skipping the previous one's
+   * credits, since that is what the viewer asked for — once, so seeking
+   * back into it afterwards is offered the button and not thrown out.
    */
   private checkSkips(): void {
     if (this.faulted) return;
@@ -3015,9 +2978,7 @@ class VideoOverlay {
       this.skipBtn.hidden = offer === null;
       if (offer) this.skipBtn.textContent = offer === 'intro' ? 'Skip intro' : this.creditsLabel();
     }
-    if (!offer || this.autoSkipped[offer]) return;
-    const byItself = autoSkip() || (offer === 'intro' && this.skipIntroOnArrival);
-    if (byItself) void this.applySkip(offer, 'auto');
+    if (offer === 'intro' && this.skipIntroOnArrival) void this.applySkip('intro', 'arrival');
   }
 
   /** What the credits button does: on to the next episode, where there is a listing to find one in. */
@@ -3030,19 +2991,17 @@ class VideoOverlay {
    * episode, begun past its own intro (step), or the end of this one where
    * there is nothing to go on to.
    */
-  private async applySkip(offer: SkipOffer, how: 'auto' | 'button'): Promise<void> {
+  private async applySkip(offer: SkipOffer, how: 'button' | 'arrival'): Promise<void> {
     const m = this.marks;
     if (!offer || !m || this.closed) return;
-    this.autoSkipped[offer] = true;
     this.offer = null;
     this.skipBtn.hidden = true;
     if (offer === 'intro') {
       this.skipIntroOnArrival = false;
       this.seekTo(m.introEnd!);
-      if (how === 'auto') showToast('Skipped the intro');
+      if (how === 'arrival') showToast('Skipped the intro');
       return;
     }
-    if (how === 'auto') showToast('Skipping the credits');
     const moved = await this.step(1, { pastCredits: true });
     if (!moved && !this.closed) this.seekTo(Math.max(0, this.totT() - 0.1));
   }
@@ -3061,101 +3020,6 @@ class VideoOverlay {
     this.lastSaved = d;
     savePosition(this.item.id, d, d);
     this.opts.onPosition?.(this.item.id, d, d);
-  }
-
-  /** Show the marks form, or put it away. */
-  private toggleSkips(show = this.skipsEl.hidden): void {
-    if (show) this.renderSkips();
-    this.skipsEl.hidden = !show;
-    this.showControls();
-  }
-
-  /**
-   * The form: where the intro and the credits are, for this season, for
-   * every season, or for this episode alone. Each mark can be typed as a
-   * clock or taken from wherever the film has got to, which is how they are
-   * meant to be set — pause where the intro ends, press "here".
-   */
-  private renderSkips(): void {
-    const it = this.item;
-    const scopes: [string, string][] = [];
-    if (it.series && it.season) scopes.push(['season', `Season ${it.season}`]);
-    if (it.series) scopes.push(['series', 'Every season']);
-    scopes.push(['episode', 'This episode only']);
-    const scope = this.skipScope && scopes.some(([v]) => v === this.skipScope) ? this.skipScope : scopes[0]![0];
-    this.skipScope = scope;
-    const m = (this.marksAll?.[scope as keyof SkipResponse] ?? {}) as Marks;
-    const clock = (v: number | undefined): string => (v ? formatDuration(v) : '');
-    this.skipsEl.innerHTML = `
-      <div class="skips-head">Skip in <b>${esc(it.series || it.name)}</b></div>
-      <label class="skips-row">For
-        <select data-scope>${scopes
-          .map(([v, l]) => `<option value="${v}"${v === scope ? ' selected' : ''}>${esc(l)}</option>`)
-          .join('')}</select>
-      </label>
-      <div class="skips-row"><span>Intro from</span>
-        <input type="text" data-f="introStart" value="${clock(m.introStart)}" placeholder="0:00" aria-label="Where the intro starts">
-        <button type="button" class="txt-btn" data-here="introStart" title="Use the current position">here</button>
-        <span>to</span>
-        <input type="text" data-f="introEnd" value="${clock(m.introEnd)}" placeholder="1:30" aria-label="Where the intro ends">
-        <button type="button" class="txt-btn" data-here="introEnd" title="Use the current position">here</button>
-      </div>
-      <div class="skips-row"><span>Credits start</span>
-        <input type="text" data-f="outro" value="${clock(m.outro)}" placeholder="1:00" aria-label="How long before the end the credits start">
-        <span>before the end</span>
-        <button type="button" class="txt-btn" data-here="outro" title="The credits start at the current position">here</button>
-      </div>
-      <label class="skips-row"><input type="checkbox" data-auto${autoSkip() ? ' checked' : ''}> Skip by itself, without asking</label>
-      <div class="skips-actions">
-        <button type="button" class="btn" data-save>Save</button>
-        <button type="button" class="txt-btn" data-clear>Clear</button>
-        <button type="button" class="txt-btn" data-done>Close</button>
-      </div>`;
-    const field = (name: string): HTMLInputElement => this.skipsEl.querySelector<HTMLInputElement>(`[data-f="${name}"]`)!;
-    this.skipsEl.querySelector<HTMLSelectElement>('[data-scope]')!.addEventListener('change', (ev) => {
-      this.skipScope = (ev.target as HTMLSelectElement).value;
-      this.renderSkips();
-    });
-    for (const btn of this.skipsEl.querySelectorAll<HTMLElement>('[data-here]')) {
-      btn.addEventListener('click', () => {
-        const name = btn.dataset.here!;
-        const t = this.curT();
-        field(name).value = formatDuration(name === 'outro' ? Math.max(0, this.totT() - t) : t);
-      });
-    }
-    this.skipsEl.querySelector<HTMLInputElement>('[data-auto]')!.addEventListener('change', (ev) => {
-      setAutoSkip((ev.target as HTMLInputElement).checked);
-    });
-    this.skipsEl.querySelector('[data-save]')!.addEventListener('click', () => {
-      const introStart = parseClock(field('introStart').value);
-      const introEnd = parseClock(field('introEnd').value);
-      const outro = parseClock(field('outro').value);
-      if ([introStart, introEnd, outro].some((v) => Number.isNaN(v))) {
-        showToast('Times as minutes:seconds, like 1:32');
-        return;
-      }
-      void this.saveSkips({ scope, introStart, introEnd, outro });
-    });
-    this.skipsEl.querySelector('[data-clear]')!.addEventListener('click', () => {
-      void this.saveSkips({ scope, introStart: 0, introEnd: 0, outro: 0 });
-    });
-    this.skipsEl.querySelector('[data-done]')!.addEventListener('click', () => this.toggleSkips(false));
-  }
-
-  private async saveSkips(update: { scope: string; introStart: number; introEnd: number; outro: number }): Promise<void> {
-    const id = this.item.id;
-    try {
-      const resp = await putSkip(id, update);
-      if (this.closed || this.item.id !== id) return;
-      this.marksAll = resp;
-      this.marks = effectiveMarks(resp);
-      this.autoSkipped = { intro: false, credits: false };
-      this.checkSkips();
-      showToast(effectiveMarks(resp) ? 'Saved' : 'Cleared');
-      this.toggleSkips(false);
-    } catch (e) {
-      showToast(`Could not save: ${String(e)}`);
-    }
   }
 
   /** Show the keys, or put them away. */

@@ -44,6 +44,7 @@ var (
 	linkBucket  = []byte("links")
 	featBucket  = []byte("features")
 	skipBucket  = []byte("skips")
+	printBucket = []byte("prints")
 )
 
 // epochKey names the value that identifies this store to clients. See Epoch.
@@ -95,7 +96,7 @@ func Open(path string) (*DB, error) {
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, b := range [][]byte{
 			thumbBucket, metaBucket, itemBucket, flagBucket, posBucket, infoBucket, cropBucket,
-			linkBucket, featBucket, skipBucket,
+			linkBucket, featBucket, skipBucket, printBucket,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
@@ -710,7 +711,7 @@ func putJSON(b *bolt.Bucket, id string, v any) error {
 func (s *DB) Prune(live map[string]struct{}) (int, error) {
 	n := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, featBucket} {
+		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, featBucket, skipBucket, printBucket} {
 			b := tx.Bucket(name)
 			var stale [][]byte
 			err := b.ForEach(func(k, _ []byte) error {
@@ -775,9 +776,8 @@ func (s *DB) EachFeatures(fn func(id string, mtime, size int64, version int, vec
 
 // Skip says where an episode's opening and closing credits are, in seconds:
 // the intro from IntroStart to IntroEnd, and the credits beginning Outro
-// seconds before the end. Keyed by the scope it applies to — one episode, one
-// season of a show, or the whole show (server/skips.go) — and, like the
-// flags, the owner's own data: no mtime or size, and pruned by nothing.
+// seconds before the end. Keyed by the item, as the library found them from
+// the sound (library/skipdetect.go), and pruned with it.
 type Skip struct {
 	IntroStart float64 `json:"is,omitempty"`
 	IntroEnd   float64 `json:"ie,omitempty"`
@@ -809,4 +809,77 @@ func (s *DB) PutSkip(key string, m Skip) error {
 		}
 		return putJSON(b, key, m)
 	})
+}
+
+// Prints are an episode's fingerprints (library/fingerprint.go): its
+// opening minutes from the start, and its closing minutes from TailFrom
+// seconds in. Stamped with the file's identity like the features are, so a
+// file that changes is read again and one that does not is read once.
+type Prints struct {
+	Head     []uint32
+	TailFrom float64
+	Tail     []uint32
+}
+
+// printsVersion is the fingerprint recipe; raising it reads every episode
+// again.
+const printsVersion = 1
+
+// PutPrints stores one episode's fingerprints.
+func (s *DB) PutPrints(id string, mtime, size int64, p Prints) error {
+	body := make([]byte, 4+8+4+4*len(p.Head)+4+4*len(p.Tail))
+	binary.BigEndian.PutUint32(body, printsVersion)
+	binary.BigEndian.PutUint64(body[4:], math.Float64bits(p.TailFrom))
+	at := 12
+	for _, part := range [][]uint32{p.Head, p.Tail} {
+		binary.BigEndian.PutUint32(body[at:], uint32(len(part)))
+		at += 4
+		for _, h := range part {
+			binary.BigEndian.PutUint32(body[at:], h)
+			at += 4
+		}
+	}
+	v := stamp(mtime, size, body)
+	return s.db.Batch(func(tx *bolt.Tx) error {
+		return tx.Bucket(printBucket).Put([]byte(id), v)
+	})
+}
+
+// GetPrints reads them back, where they were made from the file as it is
+// now and by the current recipe.
+func (s *DB) GetPrints(id string, mtime, size int64) (Prints, bool) {
+	var body []byte
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		body = unstamp(tx.Bucket(printBucket).Get([]byte(id)), mtime, size)
+		return nil
+	})
+	if len(body) < 16 || binary.BigEndian.Uint32(body) != printsVersion {
+		return Prints{}, false
+	}
+	p := Prints{TailFrom: math.Float64frombits(binary.BigEndian.Uint64(body[4:]))}
+	at := 12
+	read := func() ([]uint32, bool) {
+		if at+4 > len(body) {
+			return nil, false
+		}
+		n := int(binary.BigEndian.Uint32(body[at:]))
+		at += 4
+		if at+4*n > len(body) {
+			return nil, false
+		}
+		out := make([]uint32, n)
+		for i := range out {
+			out[i] = binary.BigEndian.Uint32(body[at:])
+			at += 4
+		}
+		return out, true
+	}
+	var ok bool
+	if p.Head, ok = read(); !ok {
+		return Prints{}, false
+	}
+	if p.Tail, ok = read(); !ok {
+		return Prints{}, false
+	}
+	return p, true
 }

@@ -293,6 +293,9 @@ type Event struct {
 
 // Library is the concurrent-safe media index.
 type Library struct {
+	// skips is what has been found about every show's credits (skipdetect.go).
+	skips skipState
+
 	// Guarded by rootsMu, which is never taken while mu is held the other
 	// way round: mu is taken first where both are needed.
 	rootsMu  sync.RWMutex

@@ -1355,24 +1355,65 @@ Change propagation is the core loop:
   listing sorted by episode. A listing rather than a sheet, deliberately: it
   is what the player steps through, so going on to the next episode is
   something it already does.
-- **A show's credits are marked once and skipped every episode** (`skips.go`,
-  `skips.ts`, `GET`/`PUT /api/skip/{id}`). Nothing in a file says where its
-  opening and closing are, so the owner does, in the player's own form: the
-  intro from one moment to another and the credits as **seconds before the
-  end** — before the end rather than at a time, since the episodes of a
-  season differ in length by seconds and the credits sit at the end of
-  each. Marks are kept by **what they apply to**, not by file: `e|<id>` for
-  one episode, `s|<series key>|<season>` for a season, `t|<series key>` for
-  the show (the key being `SeriesKey`, as the grouping's), so a season's
-  marks survive an episode being replaced and reach one that arrives later.
-  The narrowest scope that says anything wins (`effectiveMarks`, tested):
-  one odd episode can be marked on its own under a season marked for all of
-  them, and an empty record at a narrower scope is passed over rather than
-  read as "nothing to skip". They are the owner's data like the flags —
-  held in memory for the run, written through to the blob database in the
-  order they were settled in, lasting the run with `-db off` — and go
-  through the face like every by-id route, so a caller that cannot see the
-  film can neither read nor mark it.
+- **A show's intro and credits are found from the sound, and skipped with a
+  button** (`fingerprint.go`, `skipdetect.go`, `skips.ts`, `GET /api/skip/{id}`).
+  Nothing in a file says where its opening and closing are, and nobody is
+  asked to mark them — the owner said so: no dialogs. What can be acted on
+  is that every episode of a season opens and closes with the **same
+  audio**, and nothing else in the season repeats. So each episode's first
+  minutes (`skipHeadWindow`, 6, capped at 40% of the episode) and last
+  minutes (`skipTailWindow`, 4, capped at 30%) are reduced to a fingerprint,
+  and the intro of an episode is the longest stretch of its opening that
+  another episode's opening also holds; the credits, the same at the end.
+  **The fingerprint is Haitsma and Kalker's** (2002): 32 bands of energy
+  between 300 Hz and 2 kHz, spaced by ratio, one frame per sixteenth of a
+  second, each of 31 bits saying whether the difference between two
+  neighbouring bands rose or fell since the last frame. Signs only, so the
+  level of a copy is invisible (tested: the same sound at three tenths of
+  the volume matches frame for frame); differences only, so a broadcast's
+  equalisation nearly so. Two frames of one sound differ in a few bits and
+  two frames of different sounds in about half of them (`fpMaxBits`, nine).
+  **One bit is kept for silence**, because the bands of a silent frame are
+  noise and noise matches noise: without it the black seconds that open
+  half of all episodes matched each other and read as an intro.
+  **A match is a run at one alignment** (`commonRun`): every alignment of
+  the two fingerprints is tried and walked — six minutes against six at
+  sixteen frames a second is thirty-three million popcounts, tens of
+  milliseconds — riding over up to a second of misses (a sound effect over
+  the theme) and at least three fifths matches overall. **The run is then
+  trimmed to where the matches are dense** (`trimRun`): unrelated frames
+  match one time in sixty, the gap tolerance lets a few of those chain onto
+  a run's ends, and the longest run wins the vote below — measured, two and
+  three quarter seconds of somebody else's scene in front of the credits,
+  padding that won. **Neighbours have to agree.** Each episode is compared
+  with the nearest others until three have answered or six have been asked,
+  and a stretch counts when two answers agree on it within four seconds: one
+  neighbour alone can share more than the intro with an episode (a two-part
+  story, a recap of the same scene) and two rarely share the same accident.
+  A single answer stands only where every other episode of the season was
+  asked — a two-episode season, or a small one with a recap in it. A run
+  longer than `skipMaxIntro` (three minutes) is not an intro but the same
+  footage twice. Marks are kept to a quarter of a second, and the credits as
+  seconds **before the end**, since the episodes of a season differ in
+  length by seconds and the credits sit at the end of each.
+  **It runs in the lowest tier, once per episode, and first for what is
+  being opened.** `SkipDetectLoop` runs beside the music analysis, on its
+  gate: standing down for playback, thumbnails, tag reading and a viewer
+  using the interface, one episode at a time, resting a minute between
+  passes. A season is judged when its membership changes (`signature`: ids,
+  identities, lengths) and not again; its episodes' fingerprints are kept in
+  the blob database stamped with the file's identity (`prints`, pruned with
+  the item, `printsVersion` for the recipe), so a season costs its decodes
+  once and a new episode costs its own minutes and a comparison. What a
+  decode costs is stated plainly: for a container that interleaves sound
+  with picture, nearly the whole of those ten minutes read from the disk —
+  the sweep of a large library is a matter of days at the lowest priority,
+  like the analysis it runs beside. The season of an episode somebody is
+  opening does not wait: `GET /api/skip/{id}` calls `WantSkips`, which puts
+  that season at the front of the next pass and wakes the loop, and an
+  asked-for season is read past the busy gate as the page's own tags are —
+  the viewer is waiting. The results (`SkipFor`, `LoadSkips`, the `skips`
+  bucket keyed by item) are served through the face like every by-id route.
   **The skip is a button, and a second one is what skipping a season's
   credits means.** While the intro plays a *Skip intro* button stands above
   the controls, outside their fade; while the credits roll, *Next episode*
@@ -1383,17 +1424,12 @@ Change propagation is the core loop:
   it as unwatched and resume it there. An episode with a cold open before
   its intro starts at the cold open and is offered the intro skip when it
   gets there; arriving from the previous episode's credits, that skip is
-  taken by itself (`skipIntroOnArrival`), the viewer having asked. Either
-  skip can be set to happen by itself (`media.autoSkip`, remembered per
-  browser, off by default: a jump nobody asked for is a scene lost where a
-  mark is wrong, and marks are set by hand) — and each is taken by itself
-  **once per file**, so a viewer who seeks back into the intro on purpose
-  is offered the button and not thrown out again. The intro's last second
+  taken by itself (`skipIntroOnArrival`), the viewer having asked — once,
+  so seeking back into it afterwards is offered the button and not thrown
+  out. Nothing else is ever skipped without a press: a wrong mark is then a
+  button nobody presses rather than a scene lost. The intro's last second
   is not offered (`SKIP_MARGIN_S`): a button that appears and vanishes
-  before it can be read is noise. The form's fields are typed as a clock
-  (`parseClock`, tested — "1:32", "92", "1:02:03", and nothing else) or
-  taken from the playhead, and the player's own key handler stands down
-  while a field has focus, or "1:32" would be four shortcuts.
+  before it can be read is noise.
 - **Genres** (`genres.go`) are grouped from albums exactly as artists are,
   and for the same reason — a view grouped from tracks could disagree with
   the album view about what a release is filed under. A genre carries the one

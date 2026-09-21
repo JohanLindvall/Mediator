@@ -453,14 +453,20 @@ func analysisInput(it Item) (input string, extra []string, err error) {
 // given offset, as ffmpeg decodes it. Past the end of the file it returns
 // nothing, which is not an error.
 func decodeWindow(ctx context.Context, input string, extra []string, offset float64) ([]float32, error) {
+	return decodeSpan(ctx, input, extra, offset, analysisWindow.Seconds(), featRate)
+}
+
+// decodeSpan is decodeWindow for any stretch and any rate: the credits
+// detection reads minutes at a lower rate where the analysis reads seconds.
+func decodeSpan(ctx context.Context, input string, extra []string, offset, seconds float64, rate int) ([]float32, error) {
 	args := []string{"-nostdin", "-v", "error"}
 	args = append(args, extra...)
 	args = append(args,
 		"-ss", strconv.FormatFloat(offset, 'f', 2, 64),
-		"-t", strconv.FormatFloat(analysisWindow.Seconds(), 'f', 0, 64),
+		"-t", strconv.FormatFloat(seconds, 'f', 2, 64),
 		"-i", input,
 		"-vn", "-sn", "-dn",
-		"-ac", "1", "-ar", strconv.Itoa(featRate),
+		"-ac", "1", "-ar", strconv.Itoa(rate),
 		"-f", "f32le", "pipe:1")
 	cmd := exec.CommandContext(ctx, FFmpegPath(), args...)
 	var out, errb bytes.Buffer

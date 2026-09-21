@@ -46,8 +46,6 @@ var rootTypes = []any{
 	server.PlayResponse{},
 	server.ClientFault{},
 	server.SkipMarks{},
-	server.SkipResponse{},
-	server.SkipUpdate{},
 	server.LikeUpdate{},
 	server.LikeResponse{},
 	server.AlbumDetailResponse{},

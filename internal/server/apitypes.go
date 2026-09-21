@@ -319,32 +319,12 @@ type CastControl struct {
 }
 
 // LinkRequest asks for a shortlink to a piece of app state.
-// SkipMarks says where an episode's opening and closing credits are, so the
-// player can offer to skip them (skips.go). Seconds: the intro runs from
-// IntroStart to IntroEnd, and the credits begin Outro seconds before the
-// end — before the end rather than at a time, since the episodes of a season
-// differ in length by seconds and the credits sit at the end of each.
+// SkipMarks says where an episode's opening and closing credits are, as the
+// library found them from the sound (skips.go). Seconds: the intro runs
+// from IntroStart to IntroEnd, and the credits begin Outro seconds before
+// the end. All nought where nothing has been found, which is also what a
+// film that is nobody's episode answers.
 type SkipMarks struct {
-	IntroStart float64 `json:"introStart,omitempty"`
-	IntroEnd   float64 `json:"introEnd,omitempty"`
-	Outro      float64 `json:"outro,omitempty"`
-}
-
-// SkipResponse is what is marked at each scope an episode belongs to. The
-// player takes the narrowest that says anything: the episode's own marks,
-// else its season's, else the show's.
-type SkipResponse struct {
-	Episode *SkipMarks `json:"episode,omitempty"`
-	Season  *SkipMarks `json:"season,omitempty"`
-	Series  *SkipMarks `json:"series,omitempty"`
-}
-
-// SkipUpdate is the body of PUT /api/skip/{id}: which scope, and the marks
-// for it. All three at zero clears that scope.
-type SkipUpdate struct {
-	// Scope is "episode", "season" or "series". A film that is not an
-	// episode of anything has only the first.
-	Scope      string  `json:"scope"`
 	IntroStart float64 `json:"introStart,omitempty"`
 	IntroEnd   float64 `json:"introEnd,omitempty"`
 	Outro      float64 `json:"outro,omitempty"`

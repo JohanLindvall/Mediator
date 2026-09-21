@@ -1,13 +1,15 @@
 /**
- * Where the credits are, and what to do about them.
+ * What to do about the credits.
  *
- * The pure half of skipping a show's opening and closing: which marks apply
- * to an episode, whether the position is inside one, and where the next
- * episode should begin when the viewer skipped this one's credits. The
- * player (video.ts) owns the buttons and the seeks; everything that can be
- * wrong quietly is here, and tested.
+ * The pure half of skipping a show's opening and closing: whether the
+ * position is inside one, and where the next episode should begin when the
+ * viewer skipped this one's credits. Where the credits *are* is the
+ * server's to say — it finds them from the sound that recurs across a
+ * season (library/skipdetect.go) — and the player (video.ts) owns the
+ * buttons and the seeks. Everything that can be wrong quietly is here, and
+ * tested.
  */
-import type { SkipMarks, SkipResponse } from './types.gen';
+import type { SkipMarks } from './types.gen';
 
 export type Marks = SkipMarks;
 
@@ -28,19 +30,6 @@ export function hasOutro(m: Marks): boolean {
 
 export function marksEmpty(m: Marks | null | undefined): boolean {
   return !m || (!hasIntro(m) && !hasOutro(m));
-}
-
-/**
- * The marks that apply to an episode: its own, else its season's, else the
- * show's. The narrowest that says anything wins, so one odd episode can be
- * marked on its own under a season that is marked for all of them.
- */
-export function effectiveMarks(r: SkipResponse | null | undefined): Marks | null {
-  if (!r) return null;
-  for (const m of [r.episode, r.season, r.series]) {
-    if (m && !marksEmpty(m)) return m;
-  }
-  return null;
 }
 
 export type SkipOffer = 'intro' | 'credits' | null;
@@ -70,19 +59,4 @@ export function startAfterIntro(m: Marks | null | undefined, startAt: number): n
   if (!m || !hasIntro(m)) return startAt;
   if (startAt >= (m.introStart ?? 0) && startAt < m.introEnd!) return m.introEnd!;
   return startAt;
-}
-
-/**
- * Seconds out of a clock the way a person writes one: "1:32", "0:07",
- * "1:02:03", or a bare number of seconds. NaN for anything else, which the
- * form refuses rather than saving a guess.
- */
-export function parseClock(text: string): number {
-  const s = text.trim();
-  if (s === '') return 0;
-  if (!/^\d+(:\d{1,2}){0,2}(\.\d+)?$/.test(s)) return NaN;
-  const parts = s.split(':').map(Number);
-  let secs = 0;
-  for (const p of parts) secs = secs * 60 + p;
-  return secs;
 }

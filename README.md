@@ -529,16 +529,19 @@ Go binary with the TypeScript frontend embedded.
   television driven over DLNA the set is handed each episode in turn. The
   soundtrack and subtitle language chosen once hold for the whole season,
   here and on the set alike, matched by language in each file.
-- **Skip the intro and the credits** — for an episode of a show, the player
-  has a button to mark where the opening and the closing credits are: for
-  this season, for every season, or for this episode alone, each mark typed
-  as a clock or taken from wherever the film has got to ("here"). Marked, a
-  *Skip intro* button appears while the opening plays and a *Next episode*
-  button while the credits roll — and that one goes on to the next episode
-  with its intro skipped as well, since that is what skipping a season's
-  credits means. Both can be told to happen by themselves. The credits are
-  measured from the end of the episode, so episodes that differ in length by
-  a few seconds share one mark. `S` takes whichever skip is on offer.
+- **Skip the intro and the credits** — nothing to mark and nothing to
+  configure: the server finds where a show's opening and closing are from
+  the sound itself. Every episode of a season opens and closes with the same
+  audio and nothing else in the season repeats, so each episode's first and
+  last minutes are fingerprinted and the stretch that recurs across the
+  season's episodes is the intro, or the credits. Found, a *Skip intro*
+  button appears while the opening plays and a *Next episode* button while
+  the credits roll — and that one goes on to the next episode with its
+  intro skipped as well, since that is what skipping a season's credits
+  means. `S` takes whichever is on offer. The looking happens in the
+  background at the lowest priority, once per episode (the fingerprints are
+  kept), and the season of an episode being opened is looked at first.
+  `-credits=false` turns it off.
 - **Series** — television grouped by show, with its seasons folded under it:
   the chip lists the programmes, one opens its seasons, and a season opens
   its episodes in order. There is nothing to tag and nothing to configure —
@@ -721,6 +724,7 @@ Flags:
 | `-db`      | `<data>/media.db`  | Blob database (thumbnails + metadata); `off` disables caching  |
 | `-rescan`  | `10m`              | Full reconciliation rescan interval (`0` disables)             |
 | `-analyze` | `true` | Read how the music sounds in the background (ffmpeg needed), for similar tracks, radio, similar releases and performers, and audiobook detection; `-analyze=false` turns it off |
+| `-credits` | `true` | Find each show's intro and credits from the sound, so the player can skip them (needs ffmpeg) |
 | `-version` | | Print the build (version, commit, time, toolchain) and exit |
 | `-tmp`     | system temp        | Where converted files are kept (see below)                     |
 | `-tmp-max` | `8G`               | How much converted material may be held at once; `off` (or `0`) for no limit |
@@ -1160,8 +1164,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
 | `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays: the whole film as a VOD playlist beginning at `t`, its segments made as they are asked for, one session per film, mode, soundtrack and rung; `X-Media-Timeline: film` says so, `session` that the older growing playlist from the seek is being served |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
-| `GET /api/skip/{id}`                      | Where a video's intro and credits are marked, at every scope it belongs to: its own, its season's, its show's; the player takes the narrowest that says anything |
-| `PUT /api/skip/{id}`                      | Mark one scope (`scope`: `episode`, `season` or `series`; `introStart`, `introEnd`, `outro` in seconds, the last counted back from the end); all three at nought clears it. Answers as the GET does |
+| `GET /api/skip/{id}`                      | Where a video's intro and credits are, as found from the sound (`introStart`, `introEnd`, `outro` in seconds, the last counted back from the end); all nought where nothing has been found. Asking puts the episode's season at the front of the search |
 | `POST /api/log`                           | One fault the page reports — a conversion whose connection came apart, a request that never arrived, an error the page raised — so it lands in the server's log beside the requests that explain it. Bounded per process; answers 204 whether it recorded it or not |
 | `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
