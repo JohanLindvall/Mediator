@@ -1361,7 +1361,7 @@ Change propagation is the core loop:
   asked to mark them — the owner said so: no dialogs. What can be acted on
   is that every episode of a season opens and closes with the **same
   audio**, and nothing else in the season repeats. So each episode's first
-  minutes (`skipHeadWindow`, 6, capped at 40% of the episode) and last
+  minutes (`skipHeadWindow`, ten, capped at 40% of the episode — six cut the intro off in two episodes of a measured season and missed it in two more, cold opens running five minutes and longer) and last
   minutes (`skipTailWindow`, 4, capped at 30%) are reduced to a fingerprint,
   and the intro of an episode is the longest stretch of its opening that
   another episode's opening also holds; the credits, the same at the end.
@@ -1393,7 +1393,11 @@ Change propagation is the core loop:
   A single answer stands only where every other episode of the season was
   asked — a two-episode season, or a small one with a recap in it. A run
   longer than `skipMaxIntro` (three minutes) is not an intro but the same
-  footage twice. Marks are kept to a quarter of a second, and the credits as
+  footage twice. **An intro that runs into the window's end was cut by the
+  window**, not by the episode, and takes the season's typical length from
+  its own start (`typicalIntro`, the median of the ones seen whole): a skip
+  that lands a third of the way into the intro is one that has to be pressed
+  twice. Marks are kept to a quarter of a second, and the credits as
   seconds **before the end**, since the episodes of a season differ in
   length by seconds and the credits sit at the end of each.
   **It runs in the lowest tier, once per episode, and first for what is
@@ -1412,8 +1416,12 @@ Change propagation is the core loop:
   opening does not wait: `GET /api/skip/{id}` calls `WantSkips`, which puts
   that season at the front of the next pass and wakes the loop, and an
   asked-for season is read past the busy gate as the page's own tags are —
-  the viewer is waiting. The results (`SkipFor`, `LoadSkips`, the `skips`
-  bucket keyed by item) are served through the face like every by-id route.
+  the viewer is waiting — **and read from the asked-for episode outwards**
+  (`nearestFirst`), the season judged once that episode and its nearest
+  neighbours are in hand and again whole at the end, so the episode in
+  front of them has its marks after a few decodes rather than after the
+  season's. The results (`SkipFor`, `LoadSkips`, the `skips` bucket keyed by
+  item) are served through the face like every by-id route.
   **The skip is a button, and a second one is what skipping a season's
   credits means.** While the intro plays a *Skip intro* button stands above
   the controls, outside their fade; while the credits roll, *Next episode*

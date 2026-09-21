@@ -37,10 +37,13 @@ import (
 
 const (
 	// skipHeadWindow and skipTailWindow are how much of each episode is
-	// fingerprinted: the opening, where an intro sits after a cold open of
-	// a few minutes at most, and the closing, where the credits are. Each
-	// is also capped as a share of the episode, for a short one.
-	skipHeadWindow = 6 * time.Minute
+	// fingerprinted: the opening, where an intro sits after a cold open,
+	// and the closing, where the credits are. Each is also capped as a
+	// share of the episode, for a short one. Ten minutes at the head
+	// because cold opens run long — measured on a real season, six minutes
+	// cut the intro off in two episodes of ten and missed it in two more,
+	// their cold opens being five minutes and longer.
+	skipHeadWindow = 10 * time.Minute
 	skipTailWindow = 4 * time.Minute
 	skipHeadShare  = 0.4
 	skipTailShare  = 0.3
@@ -70,13 +73,14 @@ const (
 
 // skipState is what the library holds about the credits.
 type skipState struct {
-	once   sync.Once
-	mu     sync.Mutex
-	marks  map[string]blob.Skip   // by item id: where the credits are
-	judged map[string]string      // by season: the membership last judged
-	wanted map[string]time.Time   // by season: asked for, and when
-	prints map[string]blob.Prints // by identity, only without a database
-	wake   chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
+	marks    map[string]blob.Skip   // by item id: where the credits are
+	judged   map[string]string      // by season: the membership last judged
+	wanted   map[string]time.Time   // by season: asked for, and when
+	wantedEp map[string]string      // by season: the episode that was asked for
+	prints   map[string]blob.Prints // by identity, only without a database
+	wake     chan struct{}
 }
 
 func (s *skipState) init() {
@@ -84,6 +88,7 @@ func (s *skipState) init() {
 		s.marks = map[string]blob.Skip{}
 		s.judged = map[string]string{}
 		s.wanted = map[string]time.Time{}
+		s.wantedEp = map[string]string{}
 		s.prints = map[string]blob.Prints{}
 		s.wake = make(chan struct{}, 1)
 	})
@@ -139,6 +144,7 @@ func (l *Library) WantSkips(it Item) {
 	l.skips.init()
 	l.skips.mu.Lock()
 	l.skips.wanted[seasonKey(it)] = time.Now()
+	l.skips.wantedEp[seasonKey(it)] = it.ID
 	l.skips.mu.Unlock()
 	select {
 	case l.skips.wake <- struct{}{}:
@@ -236,11 +242,14 @@ func (l *Library) skipPass(ctx context.Context, db *blob.DB, busy func() bool) {
 	for k, at := range l.skips.wanted {
 		if now.Sub(at) > skipWantFor {
 			delete(l.skips.wanted, k)
+			delete(l.skips.wantedEp, k)
 		}
 	}
 	wanted := map[string]time.Time{}
+	wantedEp := map[string]string{}
 	for k, at := range l.skips.wanted {
 		wanted[k] = at
+		wantedEp[k] = l.skips.wantedEp[k]
 	}
 	judged := map[string]string{}
 	for k, sig := range l.skips.judged {
@@ -266,21 +275,37 @@ func (l *Library) skipPass(ctx context.Context, db *blob.DB, busy func() bool) {
 			continue
 		}
 		_, asked := wanted[s.key]
-		if !l.judgeSeason(ctx, db, s, busy, asked) {
+		if !l.judgeSeason(ctx, db, s, busy, asked, wantedEp[s.key]) {
 			return // the context ended
 		}
 		l.skips.mu.Lock()
 		l.skips.judged[s.key] = sig
 		delete(l.skips.wanted, s.key)
+		delete(l.skips.wantedEp, s.key)
 		l.skips.mu.Unlock()
 	}
 }
 
 // judgeSeason fingerprints what the season lacks, compares the episodes,
 // and records what it found. False only where the context ended.
-func (l *Library) judgeSeason(ctx context.Context, db *blob.DB, s skipSeason, busy func() bool, asked bool) bool {
+//
+// An asked-for season is read from the asked-for episode outwards, and
+// judged once that episode and its nearest neighbours are in hand — a
+// viewer is waiting, and the whole of a long season is minutes of decoding
+// they should not wait through for the episode in front of them. The rest
+// follows, and the season is judged again whole.
+func (l *Library) judgeSeason(ctx context.Context, db *blob.DB, s skipSeason, busy func() bool, asked bool, askedEp string) bool {
+	order := s.eps
+	if askedEp != "" {
+		order = nearestFirst(s.eps, askedEp)
+	}
 	var eps []episodePrints
-	for _, it := range s.eps {
+	early := false
+	for _, it := range order {
+		if askedEp != "" && !early && len(eps) > skipPartners {
+			l.recordSeason(db, s, eps)
+			early = true
+		}
 		if it.Duration <= 0 {
 			continue // nowhere to place the credits from until the length is read
 		}
@@ -316,9 +341,46 @@ func (l *Library) judgeSeason(ctx context.Context, db *blob.DB, s skipSeason, bu
 			head: p.Head, tailFrom: p.TailFrom, tail: p.Tail,
 		})
 	}
-	if len(eps) < 2 {
-		return true
+	l.recordSeason(db, s, eps)
+	return true
+}
+
+// nearestFirst orders a season's episodes by distance from one of them.
+func nearestFirst(eps []Item, id string) []Item {
+	at := -1
+	for i, it := range eps {
+		if it.ID == id {
+			at = i
+		}
 	}
+	if at < 0 {
+		return eps
+	}
+	out := []Item{eps[at]}
+	for d := 1; at-d >= 0 || at+d < len(eps); d++ {
+		if at+d < len(eps) {
+			out = append(out, eps[at+d])
+		}
+		if at-d >= 0 {
+			out = append(out, eps[at-d])
+		}
+	}
+	return out
+}
+
+// recordSeason compares the episodes in hand and writes down what they
+// agree on. Order matters to the comparison — neighbours are neighbours by
+// position — so the episodes are put back in the season's order first.
+func (l *Library) recordSeason(db *blob.DB, s skipSeason, eps []episodePrints) {
+	if len(eps) < 2 {
+		return
+	}
+	sort.Slice(eps, func(i, j int) bool {
+		if eps[i].episode != eps[j].episode {
+			return eps[i].episode < eps[j].episode
+		}
+		return eps[i].id < eps[j].id
+	})
 	found := detectSeason(eps)
 	intros, credits := 0, 0
 	for _, e := range eps {
@@ -342,7 +404,6 @@ func (l *Library) judgeSeason(ctx context.Context, db *blob.DB, s skipSeason, bu
 	}
 	l.log.Info("credits looked for", "series", s.series, "season", s.season,
 		"episodes", len(eps), "intros", intros, "credits", credits)
-	return true
 }
 
 // printsOf is an episode's stored fingerprints, where they match the file
@@ -456,7 +517,46 @@ func detectSeason(eps []episodePrints) map[string]blob.Skip {
 			out[e.id] = m
 		}
 	}
+	// An intro that runs into the end of the window was cut off by it,
+	// not by the episode: the comparison cannot see past what was
+	// fingerprinted. Where the rest of the season says how long the intro
+	// is, the cut one is given that length from its own start — measured
+	// on a season with five-minute cold opens, two of ten were cut this
+	// way, and a skip that lands a third of the way into the intro is a
+	// skip that has to be pressed twice.
+	typical := typicalIntro(eps, out)
+	if typical > 0 {
+		for _, e := range eps {
+			m, ok := out[e.id]
+			if !ok || m.IntroEnd == 0 || !cutByWindow(e, m) {
+				continue
+			}
+			m.IntroEnd = roundMark(m.IntroStart + typical)
+			out[e.id] = m
+		}
+	}
 	return out
+}
+
+// cutByWindow says an intro ends where the fingerprint does, give or take
+// a second, which is the window's end and not the intro's.
+func cutByWindow(e episodePrints, m blob.Skip) bool {
+	return m.IntroEnd >= fpSeconds(len(e.head))-1
+}
+
+// typicalIntro is the median length of the intros that were seen whole.
+func typicalIntro(eps []episodePrints, marks map[string]blob.Skip) float64 {
+	var lengths []float64
+	for _, e := range eps {
+		if m, ok := marks[e.id]; ok && m.IntroEnd > 0 && !cutByWindow(e, m) {
+			lengths = append(lengths, m.IntroEnd-m.IntroStart)
+		}
+	}
+	if len(lengths) == 0 {
+		return 0
+	}
+	sort.Float64s(lengths)
+	return lengths[len(lengths)/2]
 }
 
 // partnersOf orders the other episodes by distance from this one — the

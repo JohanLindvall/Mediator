@@ -821,9 +821,10 @@ type Prints struct {
 	Tail     []uint32
 }
 
-// printsVersion is the fingerprint recipe; raising it reads every episode
-// again.
-const printsVersion = 1
+// printsVersion is the fingerprint recipe, the windows included; raising
+// it reads every episode again. 2: the head window grew from six minutes
+// to ten.
+const printsVersion = 2
 
 // PutPrints stores one episode's fingerprints.
 func (s *DB) PutPrints(id string, mtime, size int64, p Prints) error {

@@ -2,6 +2,7 @@ package library
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/JohanLindvall/Mediator/internal/blob"
@@ -156,5 +157,50 @@ func TestSkipMarksAreHeldAndAskedFor(t *testing.T) {
 	l.skips.mu.Unlock()
 	if !wanted || n != 1 {
 		t.Errorf("wanted = %v (%d entries), want the one season", wanted, n)
+	}
+}
+
+// An intro that runs into the end of the fingerprint was cut by the window
+// and not by the episode. Where the rest of the season shows how long the
+// intro is, the cut one gets that length from its own start.
+func TestDetectSeasonRepairsAnIntroCutByTheWindow(t *testing.T) {
+	theme := synthSound(700, 60)
+	const headSecs = 150.0
+	ep := func(id string, seed int64, coldOpen float64) episodePrints {
+		var head []float32
+		if coldOpen+60 >= headSecs {
+			// The theme runs into the end of the window and is cut there.
+			head = concat(synthSound(seed, coldOpen), theme)[:int(headSecs*fpRate)]
+		} else {
+			head = concat(synthSound(seed, coldOpen), theme, synthSound(seed+1, headSecs-coldOpen-60))
+		}
+		return episodePrints{id: id, duration: 1320, head: fingerprintPCM(head),
+			tailFrom: 1200, tail: fingerprintPCM(synthSound(seed+2, 120))}
+	}
+	got := detectSeason([]episodePrints{ep("a", 800, 10), ep("b", 810, 20), ep("c", 820, 120), ep("d", 830, 15)})
+	c, ok := got["c"]
+	if !ok {
+		t.Fatal("the cut episode was not marked at all")
+	}
+	if math.Abs(c.IntroStart-120) > 1 {
+		t.Errorf("the cut episode's intro starts at %.2f, want 120", c.IntroStart)
+	}
+	if math.Abs(c.IntroEnd-180) > 1.5 {
+		t.Errorf("the cut episode's intro ends at %.2f, want the season's 60 s from its start (180)", c.IntroEnd)
+	}
+	if a := got["a"]; math.Abs(a.IntroEnd-70) > 1.5 {
+		t.Errorf("an episode seen whole was changed: %+v", a)
+	}
+	// Reading a season from the asked-for episode outwards.
+	eps := []Item{{ID: "1"}, {ID: "2"}, {ID: "3"}, {ID: "4"}, {ID: "5"}}
+	var order []string
+	for _, it := range nearestFirst(eps, "3") {
+		order = append(order, it.ID)
+	}
+	if strings.Join(order, "") != "34251" {
+		t.Errorf("nearest first from the third of five: %v", order)
+	}
+	if got := nearestFirst(eps, "nope"); len(got) != 5 || got[0].ID != "1" {
+		t.Errorf("an unknown episode reorders nothing: %v", got)
 	}
 }
