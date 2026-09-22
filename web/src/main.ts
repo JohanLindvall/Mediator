@@ -375,6 +375,13 @@ function years(from?: number, to?: number): string {
  * what they actually differ in is the handful of fields below.
  */
 interface CollectionCard {
+  /**
+   * A second, smaller badge in the other corner, for a fact that must not
+   * take the count's place: a playlist album said "M3U" where every other
+   * card says how many tracks it holds, and its count was then nowhere on
+   * the card at all.
+   */
+  tag?: string;
   /** What makes this rendering: a card whose key is unchanged is left alone. */
   key: string;
   cls: string;
@@ -405,7 +412,7 @@ function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
     <div class="thumb square">
       <div class="thumb-fallback">${card.icon}</div>
       <img alt="" decoding="async" draggable="false">
-      <span class="badge">${card.badge}</span>${play}
+      <span class="badge">${card.badge}</span>${card.tag ? `<span class="badge tag">${esc(card.tag)}</span>` : ''}${play}
     </div>
     <div class="meta">
       <div class="title" title="${esc(card.title)}">${esc(card.title)}</div>
@@ -437,7 +444,11 @@ function renderAlbumCell(el: HTMLElement, album: Album | undefined): void {
     key: `${album.id}:${album.mtime}:${album.coverId ?? ''}:${album.tracks}:${album.year ?? ''}:${genres.join('|')}:${album.plays ?? 0}`,
     cls: '',
     icon: icons.disc,
-    badge: album.source === 'm3u' ? 'M3U' : `${album.tracks} ♪`,
+    // The count in the corner for every release, playlist or directory;
+    // that a release is its own playlist is the smaller fact, and goes in
+    // the other corner.
+    badge: `${album.tracks} ♪`,
+    tag: album.source === 'm3u' ? 'M3U' : undefined,
     play: 'Play this album',
     title: album.name,
     subTitle: facts([alike(album.similarity), album.artist, album.year, genres.join(' · '), plays(album.plays)]),

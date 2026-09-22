@@ -501,6 +501,13 @@ body.has-audio #spacer {
 .badge:empty {
   display: none;
 }
+/* The other corner: a fact beside the count, never instead of it. */
+.badge.tag {
+  right: auto;
+  left: 8px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.8);
+}
 .hover-play {
   position: absolute;
   inset: 0;

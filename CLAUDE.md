@@ -1581,6 +1581,14 @@ Change propagation is the core loop:
   an art subdirectory and inside the tags: this says "certainly has one"
   rather than "the only ones that have one", which is all a preference
   needs, and a library that embeds its artwork simply keeps the old rule.
+- **A release card counts its tracks in the corner, whatever it is made of.**
+  The badge on the artwork is the track count for a directory album and used
+  to be "M3U" for a playlist one, with the count then nowhere on the card:
+  the caption carries the performer, the year, the genres and the plays, and
+  the count only where there is no performer to name. The playlist marker is
+  the smaller fact and has the other corner now (`CollectionCard.tag`), so
+  every release says how many tracks it holds and a playlist still says it
+  is one.
 - **A card says what is known about the thing on it.** A release shows its
   performer, year and genre; a performer shows their tracks, running time,
   the span their dated releases cover and what most of them are filed under
