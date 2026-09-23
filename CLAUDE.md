@@ -1323,6 +1323,33 @@ Change propagation is the core loop:
   the disk, has its own answer. Counted from what the caller can actually
   see, with the same rule the grouping applies: more than one episode in
   front of them, or it is not a series to them either.
+  **A show is found by its name or by any episode in it, and the chip counts
+  by the listing's own rule** (`answers`, `answering` in `series.go`, which
+  both `SearchSeries` and `CountsFor` go through). The two were separate
+  rules, and differed: the chip counted shows with two episodes answering
+  the search while the listing asked the show's name, so a search naming two
+  episode titles and not the show read "Series 1" over a grid saying nothing
+  matched. The episode rule is the one kept, because the file listing
+  answers such a search with those very episodes and a query that answers
+  there should not come back empty one view across — the reason a release is
+  searched on where it is kept. Each episode is matched by its own search
+  text (`Item.lower`, carried on the show as `eps`), every word in one
+  episode as in the file listing, and **one is enough**: whether a show is a
+  show at all was settled by the grouping over what the caller may see, so
+  the search chooses among shows and a confined caller cannot find one by an
+  episode it may not see. Found by its name, or through every season, a show
+  is handed out whole; found through some seasons, it is a copy naming them
+  (`Series.Matched`), and the seasons view offers those (`seasonsOffered` in
+  `query.ts`, tested) — the listing inside a season applies the search to the
+  episodes as well, so the narrowing runs all the way down instead of
+  leading to seasons that each say nothing matched. The card is still the
+  whole show, as a release's card is the whole release. Because the seasons
+  view reads the shows list rather than fetching, it asks for that list
+  again when the search has changed since it was fetched
+  (`CollectionSource.searched`), or it would keep offering what the last
+  search found. The hidden and favourite flags no longer reach this count,
+  which they did through its walk over episodes: shows are counted as the
+  releases are, as collections.
   **The listing has to be grouped the same way, and for a while it was not**:
   `SearchSeries` took the restriction and ignored it, so a face restricted to
   one directory drew forty-two shows under a chip that said thirty-two, with

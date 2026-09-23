@@ -269,6 +269,12 @@ export class CollectionSource<T> {
   private subject = '';
   /** Whether an answer is on its way; see count. */
   private loading = false;
+  /**
+   * The search the rows were last asked for, for a view that reads them
+   * without fetching: a show's seasons are read out of the shows list, and
+   * which of them are offered depends on the search the list answered.
+   */
+  searched: string | null = null;
   onUpdate: () => void = () => {};
   onError: (err: Error) => void = () => {};
 
@@ -287,6 +293,7 @@ export class CollectionSource<T> {
 
   load(q: QueryState): void {
     this.loading = true;
+    this.searched = q.q;
     const subject = this.subjectOf(q);
     if (subject !== this.subject) {
       this.subject = subject;
@@ -332,6 +339,7 @@ export class CollectionSource<T> {
   reset(): void {
     this.gen++;
     this.loading = false; // nothing is on its way until something asks again
+    this.searched = null;
     this.clear();
   }
 

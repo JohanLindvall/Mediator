@@ -146,6 +146,14 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 			allGenres = l.Genres()
 		}
 	}
+	// And the shows, for the same reason: a restricted caller's are a
+	// regrouping, which walks the index. Television is video's own, and a
+	// performer or a genre is music's — narrowed to either, there is no show
+	// in front of the viewer.
+	var shows []*Series
+	if q.Kinds.Has(KindVideo) && q.Artist == "" && q.Genre == "" {
+		shows = l.AllowedSeries(q.Paths)
+	}
 
 	l.counts.mu.Lock()
 	defer l.counts.mu.Unlock()
@@ -161,11 +169,6 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	plays := l.playsSnapshot()
 	likes := l.likesSnapshot()
 	watch := l.watchSnapshot()
-	// The episodes of each show that this caller can actually see. Counted
-	// here rather than read off the grouped list, because that list is of
-	// the whole library: a face restricted to films-only, or to part of the
-	// disk, has its own answer and the running total is not it.
-	episodes := map[string]int{}
 	var out Counts
 	l.mu.RLock()
 	for _, it := range l.items {
@@ -188,9 +191,6 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 			continue
 		}
 		addKind(&out, it.Kind, 1)
-		if it.Series != "" {
-			episodes[SeriesKey(it.Series)]++
-		}
 		if plays[it.ID] > 0 || likes[it.ID] != 0 {
 			out.Played++
 		}
@@ -236,16 +236,13 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 			genres[strings.ToLower(g)] = struct{}{}
 		}
 	}
-	// Television is video's own, and a show is still a show only where more
-	// than one of its episodes is in front of the viewer — the same rule the
-	// grouping itself applies, applied to what this caller can see.
-	if q.Kinds.Has(KindVideo) {
-		for _, n := range episodes {
-			if n >= 2 {
-				out.Series++
-			}
-		}
-	}
+	// The shows are counted by the rule that lists them (answering), over the
+	// shows grouped from what this caller may see — where a show is a show
+	// only with more than one episode in front of the viewer. It used to be a
+	// rule of its own, counting shows with two episodes answering the search,
+	// while the listing asked the show's name: a search naming two episodes
+	// read "Series 1" over a grid that found nothing.
+	out.Series = len(answering(shows, words))
 	if !music {
 		out.Artists, out.Genres = 0, 0
 	} else if q.Genre != "" || q.Paths.Restricted() {

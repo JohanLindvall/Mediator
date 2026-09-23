@@ -23,6 +23,7 @@ import {
   drawCount,
   arrivalPlan,
   viewFetches,
+  seasonsOffered,
   type ItemSource,
   type QueryState,
 } from './query.ts';
@@ -245,4 +246,15 @@ test('every view fetches except a show\'s seasons', () => {
   assert.ok(viewFetches({ mode: 'series' })); // the shows
   assert.ok(viewFetches({ mode: 'series', series: 'An Episode', season: 2 })); // a season's episodes
   assert.ok(!viewFetches({ mode: 'series', series: 'An Episode' })); // the seasons list
+});
+
+// A show found by its name offers every season; one found by some of its
+// episodes offers the seasons holding them, which is where the search inside
+// a season will find something.
+test('a show offers the seasons its search leads to', () => {
+  const seasons = [{ season: 1 }, { season: 2 }, { season: 3 }];
+  assert.deepEqual(seasonsOffered({ seasons }), seasons);
+  assert.deepEqual(seasonsOffered({ seasons, matched: [3, 1] }), [{ season: 1 }, { season: 3 }]);
+  // A season the list does not hold is not invented.
+  assert.deepEqual(seasonsOffered({ seasons, matched: [7] }), []);
 });

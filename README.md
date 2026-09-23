@@ -555,7 +555,12 @@ Go binary with the TypeScript frontend embedded.
   its episodes in order. There is nothing to tag and nothing to configure —
   the show, the season and the episode are read out of the names, taken from
   whichever part of the path actually says them, which is usually not the
-  file (a release names the group as often as the programme).
+  file (a release names the group as often as the programme). A search finds
+  a show by its name or by any of its episodes — a word from one episode's
+  title finds the show, and opening it offers just the seasons holding what
+  the search found, and in them just those episodes — and the Series chip
+  counts by the same rule, so it never promises a show the grid then cannot
+  find.
 - **A phone-sized top bar** — on touch screens the chip counts compact
   ("210k" rather than "209,857"), the sort controls share the chips' last
   row, and the whole bar slides away while you browse, returning on the
@@ -1160,7 +1165,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/tracks?of&…`                    | The tracks behind a view (`of` = albums, artists, genres or items, with that view's own parameters), in the order a queue plays them; `of=similar&id=…&n=` the tracks that sound most like one (`n` at most 200) |
 | `GET /api/albums?near={id}`               | The releases that sound like one, nearest first (`order=asc` turns it round), each with `similarity`; `audiobooks=1` lists the audiobook shelf instead of the records |
 | `GET /api/artists?near={name}`            | The performers that sound like one, nearest first (`order=asc` turns it round) |
-| `GET /api/series?q&sort&order`            | Television, read out of the file and directory names; each show carries its seasons |
+| `GET /api/series?q&sort&order`            | Television, read out of the file and directory names; each show carries its seasons. `q` finds a show by its name or by any episode in it; one found through some of its seasons carries `matched`, those seasons |
 | `POST /api/plays/{id}`                    | Count one play; returns the new total    |
 | `POST /api/like/{id}`                     | Record a verdict (`{"like": 1 / -1 / 0}`); returns what is stored |
 | `GET /api/albums/{id}`                    | Album detail with tracks                 |

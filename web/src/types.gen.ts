@@ -158,6 +158,7 @@ export interface Series {
   likes?: number;
   mtime: number;
   added?: number;
+  matched?: number[];
 }
 
 export interface Season {

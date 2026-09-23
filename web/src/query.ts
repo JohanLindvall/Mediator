@@ -281,6 +281,19 @@ export function arrivalPlan(
 }
 
 /**
+ * The seasons a show offers: all of them, unless the search it was found by
+ * answered in some of its episodes and not in its name, and then the seasons
+ * holding those (`matched`, which the server sets only then). The listing
+ * inside a season applies the search to the episodes too, so a show found by
+ * two episode titles leads to those two episodes and not to every season of
+ * a show where the rest would each say nothing matched.
+ */
+export function seasonsOffered<S extends { season: number }>(show: { seasons: S[]; matched?: number[] }): S[] {
+  const m = show.matched;
+  return m ? show.seasons.filter((s) => m.includes(s.season)) : show.seasons;
+}
+
+/**
  * Whether a view fetches its own rows. Every view does except a show's
  * seasons, which are read from the shows list the series source already
  * holds — see viewSource, which groups the seasons with those shows.

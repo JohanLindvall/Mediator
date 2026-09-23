@@ -275,9 +275,24 @@ type Series struct {
 	ModTime  int64    `json:"mtime"`
 	// Added is when its newest episode first appeared here; see Album.Added.
 	Added int64 `json:"added,omitempty"`
+	// Matched is set only on the copies a search hands out, and only where
+	// the show was found by its episodes rather than by its name: the
+	// seasons holding an episode that answers the search, which are the
+	// ones its seasons view offers. Absent, every season is on offer.
+	Matched []int `json:"matched,omitempty"`
 
 	lower    string
 	sortName string
+	// eps is what each episode is searched by (Item.lower) and the season
+	// it is in: the words a search is matched against when the show's name
+	// does not answer it (answers).
+	eps []seriesEpisode
+}
+
+// seriesEpisode is one episode as a search sees it.
+type seriesEpisode struct {
+	season int
+	lower  string
 }
 
 // Season is one season of one show.
@@ -359,6 +374,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 			a.seasons[it.Season] = se
 		}
 		n, k := plays[it.ID], likes[it.ID]
+		a.s.eps = append(a.s.eps, seriesEpisode{it.Season, it.lower})
 		a.s.Episodes++
 		a.s.Size += it.Size
 		a.s.Plays += n
@@ -458,16 +474,70 @@ func (k episodeKey) before(o episodeKey) bool {
 	return k.id < o.id
 }
 
-// SearchSeries filters and sorts the shows this caller may see.
-func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilter) []*Series {
-	all := l.AllowedSeries(paths)
-	words := searchWords(search)
-	out := make([]*Series, 0, len(all))
-	for _, s := range all {
-		if matchWords(s.lower, words) {
-			out = append(out, s)
+// answers says whether a show answers a search, and hands back the show as
+// the answer carries it.
+//
+// **A show is found by its name, or by any episode in it**, each episode by
+// the words it is found by in the file listing — its name, where it is kept
+// and its tags. The name alone used to decide the listing while the chip over
+// it counted episodes, so a search matching two episodes' titles and not the
+// show's name read "Series 1" above a grid saying nothing matched. And the
+// file listing had answered that search with those very episodes, one view
+// across; a query that answers there should not come back empty here — the
+// rule the releases follow by being searched on where they are kept.
+//
+// One episode is enough. Whether a show is a show at all — more than one
+// episode in front of the viewer — was settled by the grouping, which saw
+// what the caller may see; the search then chooses among shows, and asking
+// for two matching episodes would lose a show to a query naming one of them.
+//
+// Found by its name, the show is the answer whole. Found by its episodes, it
+// is a copy saying which seasons hold them (Matched), so that the seasons
+// view offers the ones the search leads to rather than every season of a
+// show that answers in two — the listing inside a season applies the search
+// to the episodes as well, so the narrowing runs all the way down. The show's
+// own card is still the whole show, as a release's card is the whole release
+// whatever part of it a search answered.
+func (s *Series) answers(words []string) (*Series, bool) {
+	if len(words) == 0 || matchWords(s.lower, words) {
+		return s, true
+	}
+	var seasons []int
+	for _, e := range s.eps {
+		if !slices.Contains(seasons, e.season) && matchWords(e.lower, words) {
+			seasons = append(seasons, e.season)
 		}
 	}
+	if len(seasons) == 0 {
+		return nil, false
+	}
+	if len(seasons) == len(s.Seasons) {
+		// Every season holds one, so every season is on offer: the show
+		// whole, as a name match hands it out.
+		return s, true
+	}
+	slices.Sort(seasons)
+	c := *s
+	c.Matched = seasons
+	return &c, true
+}
+
+// answering is the shows among these that answer a search, as answers hands
+// them out. The listing and the chip over it both go through here, which is
+// what makes them agree: they used to be two rules, and differed.
+func answering(shows []*Series, words []string) []*Series {
+	out := make([]*Series, 0, len(shows))
+	for _, s := range shows {
+		if c, ok := s.answers(words); ok {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// SearchSeries filters and sorts the shows this caller may see.
+func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilter) []*Series {
+	out := answering(l.AllowedSeries(paths), searchWords(search))
 	orderBy(out, desc,
 		func(s *Series) bool { return knownLength(sortKey, s.Duration) },
 		func(a, b *Series) int { return compareSeries(a, b, sortKey) },

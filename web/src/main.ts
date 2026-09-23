@@ -61,6 +61,7 @@ import {
   countsToShow,
   listFilters,
   narrowed,
+  seasonsOffered,
   viewFetches,
   viewSource,
   type ViewSource,
@@ -936,9 +937,10 @@ async function playSeason(season: number): Promise<void> {
   openVideo(first.item, playerOpts(src, first.index));
 }
 
-/** The seasons of the show that is open, or none. */
+/** The seasons the open show offers under the search, or none. */
 function seasonsOf(): Season[] {
-  return (state.series && seriesSource.find(state.series)?.seasons) || [];
+  const show = state.series ? seriesSource.find(state.series) : undefined;
+  return show ? seasonsOffered(show) : [];
 }
 
 const grid = new VirtualGrid<Item | Album | Artist | Genre | Series | Season>(
@@ -1362,7 +1364,11 @@ function applyQuery(push = false, fromAddress = false): void {
     // seasons out of the series list. That list may never have loaded,
     // though (a cold boot, or a shortlink straight to a season), so fetch
     // it where it is missing rather than showing an empty view for good.
-    if (!seriesSource.find(state.series)) seriesSource.load(queryState());
+    // And again where the search has changed since it was fetched: which
+    // seasons a show offers depends on the search that found it
+    // (seasonsOffered), and a list answering the last search would keep
+    // offering what that one found. The rows stay up while it is asked.
+    if (!seriesSource.find(state.series) || seriesSource.searched !== state.q) seriesSource.load(queryState());
     grid.refresh();
   }
   // No reset of the grid beyond what setAdapter did: pointing it at the same
