@@ -978,7 +978,7 @@ func splitGenres(s string) []string {
 }
 
 func cleanTag(s string) string {
-	return reinterpretCyrillic(reinterpretThai(displayText(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff")))))
+	return reinterpretCyrillic(displayText(strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(s), "\ufeff"))))
 }
 
 // cleanYear reduces a year tag to a year.

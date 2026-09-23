@@ -44,14 +44,15 @@ var cp1252High = [32]rune{
 
 // displayText returns s as valid UTF-8, reading what is not valid UTF-8 as
 // Thai where it looks like Thai and as Windows-1252 otherwise. Valid UTF-8 is
-// returned untouched and unallocated, which is nearly every name.
+// returned as it is unless it is a misreading that can be put back
+// (reinterpretParts), and unallocated, which is nearly every name.
 //
 // Decoding byte by byte rather than the whole string at once is what makes a
 // half-broken name — most of it UTF-8, one stray byte from somewhere else —
 // come out with the good part intact.
 func displayText(s string) string {
 	if utf8.ValidString(s) {
-		return s
+		return reinterpretParts(s)
 	}
 	if thai := decodeTIS620([]byte(s)); thai != "" {
 		return thai
@@ -154,25 +155,156 @@ func decodeTIS620(b []byte) string {
 	return out.String()
 }
 
-// reinterpretThai puts back a string that was read as Latin-1 but was Thai.
+// Text that was read in the wrong encoding and then written out again.
 //
-// This is the tag reader's leavings rather than the filesystem's: by the
-// time a frame reaches us it has already been decoded, so what arrives is
-// valid UTF-8 made of Latin-1 letters. Turning each of those back into the
-// byte it came from is only possible because every one of them is below
-// U+0100 — anything else means the string was never a mis-read at all.
-func reinterpretThai(s string) string {
-	b := make([]byte, 0, len(s))
+// Everything above is about bytes that are not UTF-8, which at least say by
+// being invalid that something is wrong. The worse case is text that was
+// read wrongly and *stored*: a download tool, an archiver or a tagger took
+// some bytes for Windows-1252 (or Latin-1), and wrote what it thought it saw
+// back out as perfectly valid UTF-8. Nothing is invalid any more; the letters
+// are simply the wrong letters. Two shapes of it turn up here:
+//
+//   - **UTF-8 read as Windows-1252.** Every character that is more than one
+//     byte in UTF-8 comes out as two to four Western ones — "ö" as "Ã¶", a
+//     closing quote as "â€™", a Thai letter as "à¸" and one more. Measured
+//     over this library's 253,575 names: 155, and every one of them a real
+//     misreading — quotes and dashes, fullwidth question marks from web
+//     downloads, accents, emoji, and whole names in Thai, Cyrillic, Arabic
+//     and Japanese. A handful had been through it twice.
+//   - **TIS-620 read as Latin-1**, the same Thai misreading the tags suffer
+//     (see above), stored in a file's name: 290 pictures in three folders.
+//
+// Both are undone the same way: the text is turned back into the bytes the
+// misreading made it from (westernBytes), and those bytes are read the way
+// they were meant. It can only work where every character is one a Western
+// reading produces, so genuine Thai, Cyrillic or Chinese — written properly —
+// is refused at its first letter and left alone.
+//
+// Whether the bytes were UTF-8 is not a guess: UTF-8 has a structure — a lead
+// byte and then exactly the continuation bytes it announces — which Western
+// text almost never has by accident, since an accented capital would have to
+// be followed immediately by a symbol from the top of the table. Almost never
+// is not never, and the one false reading found here says what it looks like:
+// a title tag of the shape "WolfÒ‘s Den", whose two bytes spell a Ukrainian
+// letter — "Wolfґs". A letter of another alphabet against a Latin one is
+// not a word in either (strandedLetter, the rule reinterpretCyrillic
+// already reasons by), so a reading that leaves one is refused.
+
+// misreadRounds is how many times one text is put back: a name misread twice
+// takes two rounds ("Ã¢â‚¬â„¢" to "â€™" to a quote). None here needed more;
+// the bound only stops a loop.
+const misreadRounds = 3
+
+// reinterpretParts puts back each part of a path on its own. One folder
+// damaged and its neighbours not is the ordinary case, and a part that was
+// never a misreading — a Thai folder written properly — must not stop the
+// part that was from being put back.
+func reinterpretParts(s string) string {
+	if !mayBeMisread(s) {
+		return s
+	}
+	parts := strings.Split(s, "/")
+	changed := false
+	for i, p := range parts {
+		if r := reinterpret(p); r != p {
+			parts[i] = r
+			changed = true
+		}
+	}
+	if !changed {
+		return s
+	}
+	return strings.Join(parts, "/")
+}
+
+// mayBeMisread is the cheap question asked of every name first. A misreading
+// of UTF-8 always leaves a lead byte's letter behind (U+00C2 to U+00F4), and
+// one of TIS-620 is made of U+00A1 to U+00FB, so text holding nothing in
+// U+00A1 to U+00FF has nothing to put back — which is nearly every name.
+func mayBeMisread(s string) bool {
 	for _, r := range s {
-		if r > 0xFF {
+		if r >= 0xA1 && r <= 0xFF {
+			return true
+		}
+	}
+	return false
+}
+
+// reinterpret puts back one piece of text that was misread, or returns it as
+// it is.
+func reinterpret(s string) string {
+	for range misreadRounds {
+		b, ok := westernBytes(s)
+		if !ok {
 			return s
 		}
-		b = append(b, byte(r))
-	}
-	if thai := decodeTIS620(b); thai != "" {
-		return thai
+		if !utf8.Valid(b) {
+			// Not UTF-8, so possibly Thai: the tag reader's leavings, or a
+			// name stored the same way. After the UTF-8 question, not
+			// before, since UTF-8's Thai is made of TIS-620's range too.
+			if thai := decodeTIS620(b); thai != "" {
+				return thai
+			}
+			return s
+		}
+		t := string(b)
+		if t == s || strandedLetter(t) {
+			return s
+		}
+		s = t
 	}
 	return s
+}
+
+// westernBytes turns text back into the bytes a Windows-1252 reading would
+// have made it from — a Latin-1 character is its own byte, and Windows keeps
+// its quotation marks and the like in 0x80-0x9F — or says it cannot have been
+// made that way: a character neither table holds is proof the text was never
+// a misreading. The five bytes Windows leaves undefined arrive as the control
+// characters of the same number, which is what a Windows reading makes of
+// them, and go back as themselves.
+func westernBytes(s string) ([]byte, bool) {
+	b := make([]byte, 0, len(s))
+	for _, r := range s {
+		if r < 0x100 {
+			b = append(b, byte(r))
+			continue
+		}
+		c, ok := cp1252Byte[r]
+		if !ok {
+			return nil, false
+		}
+		b = append(b, c)
+	}
+	return b, true
+}
+
+// cp1252Byte is cp1252High the other way round, for the characters above
+// U+00FF that Windows-1252 puts in a single byte.
+var cp1252Byte = func() map[rune]byte {
+	m := make(map[rune]byte, len(cp1252High))
+	for i, r := range cp1252High {
+		if r >= 0x100 {
+			m[r] = byte(0x80 + i)
+		}
+	}
+	return m
+}()
+
+// strandedLetter reports whether a putting-back left a letter of another
+// alphabet directly against a Latin one: Greek, Cyrillic, Armenian, Hebrew,
+// Arabic — the scripts two bytes of UTF-8 reach, which are where a Western
+// accident spells something. Three-byte scripts are not asked about: Chinese
+// and Japanese sit against Latin letters in ordinary titles, and an accident
+// spelling three bytes of UTF-8 is too unlikely to guard against.
+func strandedLetter(s string) bool {
+	rs := []rune(s)
+	for i, r := range rs {
+		if r >= 0x0370 && r <= 0x07FF && unicode.IsLetter(r) && latinNeighbour(rs, i) {
+			return true
+		}
+	}
+	return false
 }
 
 // Cyrillic where a Nordic vowel should be.

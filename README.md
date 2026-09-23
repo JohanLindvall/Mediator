@@ -592,8 +592,12 @@ Go binary with the TypeScript frontend embedded.
   back too: CP1251 keeps Russian letters where Latin-1 keeps its accented
   ones, so a Nordic title tagged by a program guessing Russian arrives with a
   Cyrillic letter inside a Latin word. That, and only that, is repaired — a
-  Cyrillic *word* is left exactly as it is. The file itself is still opened
-  by the exact bytes on disk; nothing is renamed.
+  Cyrillic *word* is left exactly as it is. And a name or a tag that some
+  program read in the wrong encoding and then saved that way — valid text,
+  wrong letters: "KÃ¶ln" for "Köln", "â€™" for an apostrophe, a Thai name
+  as a run of "à¸" — is read the way it was meant, in any alphabet, a folder
+  at a time. The file itself is still opened by the exact bytes on disk;
+  nothing is renamed.
 - **Less clutter** — a release's sample is skipped when the full version
   sits beside it, whether it is a folder or a lone `Sample.mkv` next to the
   film, so short excerpts stay out of the library. Never on the name alone:

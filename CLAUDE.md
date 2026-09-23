@@ -1554,12 +1554,50 @@ Change propagation is the core loop:
   nothing marks it as damaged, and the lead character could have been any of
   Ã Á À Â Ä Å. Those were renamed on disk instead, which is the honest fix
   for two files and would be a guess as a rule.
+- **Text misread and stored again is put back** (`reinterpret`,
+  `reinterpretParts`, `westernBytes` in `name.go`, tested). The paragraphs
+  above are about bytes that are not UTF-8, which at least say so by being
+  invalid; the worse case is a name a download tool or a tagger read as
+  Windows-1252 and wrote back out as perfectly valid UTF-8 — the letters are
+  simply the wrong letters, and nothing is invalid any more. A Thai name was
+  reported arriving as a run of "à¸" pairs, each Thai letter three Western
+  characters and the bytes Windows leaves undefined come through as control
+  characters. The text is turned back into the bytes that misreading made it
+  from and those are read as meant: as UTF-8 where they are UTF-8, and as
+  TIS-620 where they look like Thai — the tags' old trouble, which turned up
+  in file names too. Measured over this library's 253,575 names before it
+  was written: 155 were UTF-8 misread (quotes and dashes, fullwidth question
+  marks from web downloads, accents, emoji, and whole names in Thai,
+  Cyrillic, Arabic and Japanese), every one of them a real misreading, a
+  handful misread twice — hence up to `misreadRounds` passes — and 290
+  pictures in three folders were TIS-620. UTF-8 is asked first, since its
+  Thai is built from TIS-620's own byte range.
+  It is safe because UTF-8 has a structure Western text almost never has by
+  accident, and text in another alphabet cannot be the product of a Western
+  reading at all (`westernBytes` refuses it at the first such letter — a
+  Thai or Cyrillic name written properly is never touched). "Almost never"
+  was measured too: over 109,247 tag values the rule would have changed
+  three, and one was wrong — a title whose two bytes happened to spell a
+  Ukrainian letter in the middle of an English word. A letter from the
+  scripts two UTF-8 bytes reach (Greek to Arabic) against a Latin one is
+  not a word in either alphabet, the rule `reinterpretCyrillic` already
+  reasons by, so such a reading is refused (`strandedLetter`); three-byte
+  scripts are not asked, Chinese and Japanese sitting against Latin letters
+  in ordinary titles. A path is repaired **a part at a time**
+  (`reinterpretParts`), since one folder damaged among good ones is the
+  ordinary case; and the cheap question first (`mayBeMisread`): a
+  misreading always leaves a character in U+00A1..U+00FF, so everything else
+  returns at once, unallocated.
+  It lives in `displayText`, which is what makes it reach everything shown —
+  names, display paths, search text, album and folder names — and it reaches
+  what is already stored without a rescan, the warm start rebuilding every
+  display name from the raw path and cleaning every tag on the way in.
 - `cleanTag` decodes the same way, for the ID3v1 frames that are never
-  UTF-8, and `setMeta` trims tag whitespace. It also puts Thai back
-  (`reinterpretThai`): a tag reader has already turned the frame into
-  Latin-1 letters by the time it reaches us, so there the bytes have to be
-  reconstructed from the string before they can be read properly — which
-  works only because every one of them is below U+0100. Padded values are common in real files,
+  UTF-8, and `setMeta` trims tag whitespace. It also puts misread text back
+  through `displayText` — the tag reader has already turned a frame into
+  Latin-1 letters by the time it reaches us, so the bytes are reconstructed
+  from the string (`westernBytes`) before they can be read properly, Thai
+  and UTF-8 alike. Padded values are common in real files,
   and an artist stored with a leading space both sorts to the top and
   becomes a second artist of its own; normalising at the single point where
   metadata enters the index cleans up cached values too.
