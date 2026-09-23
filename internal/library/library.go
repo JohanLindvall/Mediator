@@ -620,6 +620,14 @@ func (l *Library) rel(path string) string {
 	return filepath.ToSlash(path)
 }
 
+// displayPath is a place on the disk as the listing names one: rel, decoded
+// for showing (name.go). A place inside a container — a folder within a set
+// of volumes — is the container's path with the rest after a NUL, and is
+// shown the way an archived member's own path is, a slash where the NUL is.
+func (l *Library) displayPath(path string) string {
+	return displayText(strings.ReplaceAll(l.rel(path), "\x00", "/"))
+}
+
 // upsert adds or updates a file in the index. changed reports whether the
 // index was modified; dup reports that another path already represents this
 // exact file (a hard link or a symlink), in which case nothing is indexed.

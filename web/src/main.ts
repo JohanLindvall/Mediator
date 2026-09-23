@@ -50,7 +50,9 @@ import {
   formatBytes,
   formatDate,
   formatDuration,
+  hoverLines,
   mediaShape,
+  releaseShape,
 } from './format';
 import { watchState } from './playback';
 import {
@@ -310,7 +312,7 @@ function renderItemCell(el: HTMLElement, item: Item | undefined): void {
   // was made with. It goes on the tile as a whole rather than on the name
   // alone, since the picture is what a pointer lands on — and on the name too,
   // which is the part a long one runs off the end of.
-  const tip = facts([item.path, mediaShape(item)]).replace(' · ', '\n');
+  const tip = hoverLines(item.path, mediaShape(item));
   el.title = tip;
   el.innerHTML = `
     <div class="thumb">
@@ -394,6 +396,14 @@ interface CollectionCard {
   subTitle?: string;
   /** A play badge over the cover, where the card has something to play. */
   play?: string;
+  /**
+   * Where the thing on the card is kept and what it is made of, for the
+   * hover — set on the card as a whole, as a tile's path and technical line
+   * are, since the cover is what a pointer lands on. Only a release has
+   * one: a performer, a genre and a show are made of releases and episodes
+   * in many places rather than of one place on the disk.
+   */
+  tip?: string;
   coverId?: string;
   mtime: number;
 }
@@ -407,6 +417,11 @@ function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
   if (el.dataset.key === card.key) return;
   el.dataset.key = card.key;
   el.className = `cell card album-card ${card.cls}`.trimEnd();
+  // Set or taken away on every render, not only on recycling: a key change
+  // redraws the card in place, and what the last rendering said on hover is
+  // no more true of this one than its title is.
+  if (card.tip) el.title = card.tip;
+  else el.removeAttribute('title');
   const play = card.play ? `<span class="hover-play" data-play title="${esc(card.play)}">${icons.play}</span>` : '';
   el.innerHTML = `
     <div class="thumb square">
@@ -415,7 +430,7 @@ function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
       <span class="badge">${card.badge}</span>${card.tag ? `<span class="badge tag">${esc(card.tag)}</span>` : ''}${play}
     </div>
     <div class="meta">
-      <div class="title" title="${esc(card.title)}">${esc(card.title)}</div>
+      <div class="title" title="${esc(hoverLines(card.title, card.tip))}">${esc(card.title)}</div>
       <div class="sub" title="${esc(card.subTitle ?? card.sub)}">${card.sub}</div>
     </div>`;
   wireThumb(el, card.coverId ? thumbUrl(card.coverId, THUMB_W, card.mtime) : null);
@@ -437,11 +452,15 @@ function renderAlbumCell(el: HTMLElement, album: Album | undefined): void {
     return;
   }
   const genres = album.genres ?? (album.genre ? [album.genre] : []);
+  // Where the release is kept and what it is made of — what the card does
+  // not show, which is the rule every hover here follows (belongsTo).
+  const tip = hoverLines(album.path, releaseShape(album));
   renderCollectionCell(el, {
     // The year and the genre arrive with enrichment, so they belong in the
     // key: a card rendered before the tags were read has to be redrawn when
-    // they are, and nothing else about the release will have changed.
-    key: `${album.id}:${album.mtime}:${album.coverId ?? ''}:${album.tracks}:${album.year ?? ''}:${genres.join('|')}:${album.plays ?? 0}`,
+    // they are, and nothing else about the release will have changed. The
+    // hover too, whose running time arrives only once every track is read.
+    key: `${album.id}:${album.mtime}:${album.coverId ?? ''}:${album.tracks}:${album.year ?? ''}:${genres.join('|')}:${album.plays ?? 0}:${tip}`,
     cls: '',
     icon: icons.disc,
     // The count in the corner for every release, playlist or directory;
@@ -450,6 +469,7 @@ function renderAlbumCell(el: HTMLElement, album: Album | undefined): void {
     badge: `${album.tracks} ♪`,
     tag: album.source === 'm3u' ? 'M3U' : undefined,
     play: 'Play this album',
+    tip,
     title: album.name,
     subTitle: facts([alike(album.similarity), album.artist, album.year, genres.join(' · '), plays(album.plays)]),
     sub: subFacts(

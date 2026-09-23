@@ -806,6 +806,9 @@ func (s *Server) albumFor(r *http.Request, id string) (*library.Album, []library
 			return nil, nil, false
 		}
 		tracks = kept
+		// And without the path of a place the caller may not see, as the
+		// listings hand it out (library.AllowedAlbums).
+		album = album.ShownUnder(paths)
 	}
 	return album, tracks, true
 }

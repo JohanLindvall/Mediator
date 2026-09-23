@@ -107,6 +107,8 @@ export interface Album {
   mtime: number;
   spoken?: boolean;
   similarity?: number;
+  path?: string;
+  formats?: string[];
 }
 
 export interface Artist {

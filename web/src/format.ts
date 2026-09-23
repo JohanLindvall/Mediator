@@ -326,11 +326,63 @@ export function mediaShape(it: MediaShape): string {
     if (it.width && it.height) parts.push(`${it.width}×${it.height}`);
   } else if (it.kind === 'audio') {
     // The container is what a listener calls the format, and it is in the
-    // name — no probe reads a file to find out it is an mp3.
-    parts.push(codecName(it.acodec) || extBadge(it.name ?? ''));
+    // name — no probe reads a file to find out it is an mp3. Spelled as a
+    // codec is where it names one, which is what keeps a track and its
+    // release (releaseShape) saying one format the same way.
+    parts.push(codecName(it.acodec) || codecName(extBadge(it.name ?? '')));
     parts.push(bitrate(it.size, it.duration));
   }
   return parts.filter(Boolean).join(' · ');
+}
+
+/** What a release is, technically: the facts `releaseShape` reads. */
+export interface ReleaseShape {
+  formats?: string[];
+  size?: number;
+  duration?: number;
+}
+
+/**
+ * What a release is made of, the way `mediaShape` says it of one file: the
+ * formats its tracks are in, what it averages, how much of the disk it takes
+ * and how long it runs.
+ *
+ * A card shows none of these — it carries the performer, the year, the
+ * genres and the plays, and the track count in the corner — so they are what
+ * its hover is for, beside where the release is kept. The rate is the whole
+ * release over its whole length, which is the one figure there is for a
+ * release of variable-rate files, and it is claimed only where the length is:
+ * the server sends a running time only once every track has been measured,
+ * and half the length over the whole size would be twice the truth.
+ *
+ * The formats come commonest first, as the server counted them, and nearly
+ * always there is one. Two spellings of one format are one format — a codec
+ * and an extension can both come out "WMA" — so they are merged after they
+ * are named.
+ */
+export function releaseShape(a: ReleaseShape): string {
+  const formats = [...new Set((a.formats ?? []).map(codecName).filter(Boolean))].join('/');
+  return [
+    formats,
+    bitrate(a.size, a.duration),
+    a.size ? formatBytes(a.size) : '',
+    a.duration ? formatDuration(a.duration / 1000) : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/**
+ * A hover of several lines — where a thing is, then what it is — each
+ * dropped when there is nothing on it.
+ *
+ * One line apiece rather than one line cut in two afterwards: a tile's hover
+ * used to be the path and the technical line joined with a separator and
+ * then split at the first separator, which lands inside the path wherever a
+ * folder's own name holds one.
+ */
+export function hoverLines(...lines: (string | undefined)[]): string {
+  return lines.filter(Boolean).join('\n');
 }
 
 /**

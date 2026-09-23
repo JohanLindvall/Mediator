@@ -174,7 +174,15 @@ Go binary with the TypeScript frontend embedded.
   and they are written to the database so they are read once. The containers
   with no reader of their own here (Matroska, AVI, the transport streams) do
   cost an `ffprobe`, but once each rather than per page, and the result is
-  kept with the rest.
+  kept with the rest. **A release's card does the same for the whole
+  release**: where it is kept — its folder, the one above its disc folders
+  for a release split over several, or the playlist file — and what it is
+  made of: the format its tracks are in (every one, where a release mixes
+  them), what it averages, its size on disk and its running time. The open
+  release says the same over its title. The rate is the whole release over
+  its whole length, so it appears once every track has been measured and
+  not before. A caller confined to part of the library (`X-Allowed-Paths`)
+  is not told where a playlist is kept when that is outside what it may see.
   Album and track views prefer tags over the filesystem: ID3 titles instead
   of filenames, tag track numbers, per-track and total playing time instead
   of byte sizes, and the album's year and genre in its header. Anything not
@@ -1146,7 +1154,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | Endpoint                                  | Description                              |
 | ----------------------------------------- | ---------------------------------------- |
 | `GET /api/library?kind&q&sort&order&offset&limit` | Paged, filtered, sorted listing  |
-| `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead |
+| `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead. Each carries `path` (where the release is kept, as the listing names a file) and `formats` (what its tracks are, commonest first) |
 | `GET /api/artists?q&sort&order`           | Artists, grouped from album tags         |
 | `GET /api/genres?q&sort&order`            | Genres, grouped from album tags          |
 | `GET /api/tracks?of&…`                    | The tracks behind a view (`of` = albums, artists, genres or items, with that view's own parameters), in the order a queue plays them; `of=similar&id=…&n=` the tracks that sound most like one (`n` at most 200) |

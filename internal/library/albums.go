@@ -45,9 +45,24 @@ type Album struct {
 	// Similarity is set only on the copies a "similar releases" answer hands
 	// out: how much this sounds like the release asked about, 0..1.
 	Similarity float32 `json:"similarity,omitempty"`
+	// Path is where the release is kept, named the way the listing names a
+	// file (the root's own name and the way down from it): the directory
+	// for a directory album — the one above the disc folders, where several
+	// were folded into one — and the playlist file for an m3u album. What a
+	// card says on hover, beside what the files are. Left out of what a
+	// caller confined to part of the library is handed where the release is
+	// kept outside it (shownTo).
+	Path string `json:"path,omitempty"`
+	// Formats is what the tracks are, the commonest first (formatOf): one
+	// entry for nearly every release, and more only where one mixes them.
+	Formats []string `json:"formats,omitempty"`
 
 	lower    string // tokenized search text (name, artist, genre, year, path)
 	sortName string // lowercased name, for ordering
+	// where is the absolute path Path shows, which is what a caller's
+	// path filter is asked about (paths.go matches the disk, never the
+	// display form).
+	where string
 	// hasArt says a picture sits beside this release's tracks, so a
 	// collection choosing a cover can prefer it. See buildAlbums.
 	hasArt bool
@@ -144,12 +159,37 @@ func (l *Library) AllowedAlbums(all []*Album, f PathFilter) []*Album {
 	for _, a := range all {
 		for _, id := range a.TrackIDs {
 			if it, ok := l.items[id]; ok && allowed(it.Path) {
-				out = append(out, a)
+				out = append(out, a.shownTo(allowed))
 				break
 			}
 		}
 	}
 	return out
+}
+
+// shownTo is the release as a caller who may see only what allowed admits is
+// handed it: the release itself, or — where it is kept somewhere outside
+// what they may see — a copy without its path. A playlist in one place
+// naming tracks in another is the case: the tracks are theirs to see and the
+// playlist's directory is not, and a caller allowed one branch of the tree
+// has no business learning what the others are called. A copy, because the
+// release belongs to the cached build every other caller is handed too.
+func (a *Album) shownTo(allowed func(string) bool) *Album {
+	if a.Path == "" || allowed(a.where) {
+		return a
+	}
+	c := *a
+	c.Path = ""
+	return &c
+}
+
+// ShownUnder is shownTo for a caller holding one release and a filter, where
+// a pass over many releases prepares the predicate once.
+func (a *Album) ShownUnder(f PathFilter) *Album {
+	if !f.Restricted() {
+		return a
+	}
+	return a.shownTo(f.allower())
 }
 
 // SearchAlbums filters and sorts the album list. A non-empty artist or genre
@@ -359,6 +399,7 @@ func (l *Library) buildAlbums() []*Album {
 	// it is: the tags, the verdicts, the reading.
 	finish := func(a *Album, path string, tracks []*Item) {
 		fillAlbum(a, path, tracks, plays, known)
+		a.Path = l.displayPath(path)
 		// Whether this release has a sleeve to show, asked of the track the
 		// cover is taken from — the tracks in hand, not the index, which is
 		// no longer under the lock here. Read off the index rather than the
@@ -637,14 +678,19 @@ func artistFromParent(path string, known map[string]string) string {
 }
 
 func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, known map[string]string) {
+	a.where = path
 	tagCount := map[string]int{}
 	artistCount := map[string]int{}
 	genreCount := map[string]int{}
 	yearCount := map[string]int{}
+	formatCount := map[string]int{}
 	knownDurations := 0
 	for _, t := range tracks {
 		a.TrackIDs = append(a.TrackIDs, t.ID)
 		a.Size += t.Size
+		if f := formatOf(t); f != "" {
+			formatCount[f]++
+		}
 		if t.Duration > 0 {
 			a.Duration += t.Duration
 			knownDurations++
@@ -711,6 +757,7 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	if year, n := mostCommon(yearCount); n*2 >= len(tracks) {
 		a.Year, _ = strconv.Atoi(year)
 	}
+	a.Formats = byCount(formatCount)
 	// After the name is settled and the year is known from the tags, since
 	// this both changes the one and may supply the other.
 	liftYear(a)
@@ -733,6 +780,40 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	}
 	a.lower = searchText(a.Name, a.Artist, a.Genre, year, displayText(path))
 	a.sortName = strings.ToLower(a.Name)
+}
+
+// formatOf is what a track is, in the word a listener uses for it: the codec
+// where a probe has named one, and otherwise the file's extension. Music is
+// read by the tag reader and the header parsers and hardly ever probed —
+// measured on this library, not one of 28,727 tracks carries a codec — so the
+// extension is nearly always the answer, and for music it is also what
+// people call the format; the codec wins where there is one because it can
+// say more than the container does (an .m4a is AAC or ALAC). Lower-cased, so
+// one release's ".MP3" and ".mp3" are one format; the client spells it.
+func formatOf(t *Item) string {
+	if t.ACodec != "" {
+		return strings.ToLower(t.ACodec)
+	}
+	return strings.ToLower(strings.TrimPrefix(filepath.Ext(t.Name), "."))
+}
+
+// byCount lists the keys commonest first, ties broken by name so two builds
+// of one library cannot disagree about the order.
+func byCount(m map[string]int) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b string) int {
+		if c := cmp.Compare(m[b], m[a]); c != 0 {
+			return c
+		}
+		return strings.Compare(a, b)
+	})
+	return keys
 }
 
 // mostCommon returns the most frequent key and its count, ties broken by

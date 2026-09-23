@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { codecName, mediaShape } from './format.ts';
+import { codecName, hoverLines, mediaShape, releaseShape } from './format.ts';
 
 // The names a probe uses are the ones the rest of the app reasons with, and
 // none of them are the ones anybody writes.
@@ -56,8 +56,41 @@ test('a track says its format and what it averages', () => {
     mediaShape({ kind: 'audio', acodec: 'flac', name: 'a track.mp3', size: 1000, duration: 1000 }),
     'FLAC · 8 kbps',
   );
-  // Nothing to divide by, so nothing claimed.
-  assert.equal(mediaShape({ kind: 'audio', name: 'a track.opus' }), 'OPUS');
+  // Nothing to divide by, so nothing claimed — and an extension that names
+  // a codec is spelled as the codec is, as its release spells it.
+  assert.equal(mediaShape({ kind: 'audio', name: 'a track.opus' }), 'Opus');
+  assert.equal(mediaShape({ kind: 'audio', name: 'a track.wav' }), 'WAV');
+});
+
+// A release says what a track says of itself, for all of it at once: the
+// formats, what it averages, how much disk it takes and how long it runs.
+test('a release says what it is made of', () => {
+  // 98 MB over 41 minutes is 319 kbps.
+  assert.equal(
+    releaseShape({ formats: ['mp3'], size: 98_000_000, duration: 2_460_000 }),
+    'MP3 · 319 kbps · 98 MB · 41:00',
+  );
+  // A release mixing formats names them all, the commonest first as the
+  // server counted them.
+  assert.equal(releaseShape({ formats: ['flac', 'mp3'], size: 412_000_000 }), 'FLAC/MP3 · 412 MB');
+  // Two spellings of one format are one format.
+  assert.equal(releaseShape({ formats: ['wmav2', 'wma'] }), 'WMA');
+  // No running time yet — the server sends none until every track is
+  // measured — so no rate is claimed and no length is shown.
+  assert.equal(releaseShape({ formats: ['opus'], size: 5_000_000 }), 'Opus · 5.0 MB');
+  // And a release nothing is known about says nothing, rather than a line
+  // of separators around nothing.
+  assert.equal(releaseShape({}), '');
+  assert.equal(releaseShape({ formats: [''], size: 0 }), '');
+});
+
+// A hover is a line per fact, never a line cut at its first separator: a
+// folder whose own name holds one would be cut inside the path.
+test('a hover is its lines, each dropped when empty', () => {
+  assert.equal(hoverLines('Music/Band · Live/Set', 'MP3 · 320 kbps'), 'Music/Band · Live/Set\nMP3 · 320 kbps');
+  assert.equal(hoverLines('Music/Set', ''), 'Music/Set');
+  assert.equal(hoverLines(undefined, 'MP3'), 'MP3');
+  assert.equal(hoverLines(), '');
 });
 
 // The whole file over its playing time: the only figure obtainable without

@@ -3,7 +3,7 @@
  */
 import { albumZipUrl, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
 import { holdScroll, releaseScroll } from './scrollhold';
-import { esc, formatBytes, formatDuration, mediaShape, trackTitle } from './format';
+import { esc, formatBytes, formatDuration, hoverLines, mediaShape, releaseShape, trackTitle } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
 import { shareAlbum } from './links';
@@ -188,6 +188,12 @@ class AlbumPanel {
     }
     meta.push(`${a.tracks} track${a.tracks === 1 ? '' : 's'}`);
     meta.push(a.duration ? formatDuration(a.duration / 1000) : formatBytes(a.size));
+    // The card's hover, on the release's own name and facts here: where it
+    // is kept and what it is made of. The card and the sheet are one release,
+    // and one saying where it lives while the other does not would be two
+    // descriptions of it.
+    const tip = hoverLines(a.path, releaseShape(a));
+    const tipAttr = tip ? ` title="${esc(tip)}"` : '';
 
     const html = `
       <button class="icon-btn sheet-close" data-close aria-label="Close">${icons.close}</button>
@@ -195,13 +201,13 @@ class AlbumPanel {
         ${cover}
         <div class="sheet-headtext">
           <div class="sheet-kicker">${a.spoken ? 'Audiobook' : a.source === 'm3u' ? 'Playlist' : 'Album'}</div>
-          <h2 class="sheet-title">${esc(a.name)}</h2>
+          <h2 class="sheet-title"${tipAttr}>${esc(a.name)}</h2>
           <div class="sheet-sub">${
             a.artist
               ? `<button type="button" class="link-artist" data-artist="${esc(a.artist)}" title="Everything by ${esc(a.artist)}">${esc(a.artist)}</button>`
               : ''
           }</div>
-          <div class="sheet-meta">${meta.join(' · ')}</div>
+          <div class="sheet-meta"${tipAttr}>${meta.join(' · ')}</div>
           <div class="sheet-actions">
             <button class="btn primary" data-playall>${icons.play}<span>Play</span></button>
             <button class="btn" data-shuffleall>${icons.shuffle}<span>Shuffle</span></button>

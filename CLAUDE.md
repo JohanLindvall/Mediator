@@ -1589,6 +1589,37 @@ Change propagation is the core loop:
   the smaller fact and has the other corner now (`CollectionCard.tag`), so
   every release says how many tracks it holds and a playlist still says it
   is one.
+- **A release card's hover is where it is kept and what it is made of**
+  (`Album.Path`, `Album.Formats`, `releaseShape` and `hoverLines` in
+  `format.ts`, tested) — the tile's rule, path then technical line, for the
+  whole release. The card shows none of it: the caption is the performer,
+  the year, the genres and the plays. The path is the listing's own form of
+  one (`displayPath`: the root's name and the way down, decoded, a NUL shown
+  as a slash) of the folder — the one above the disc folders where several
+  were folded — or of the playlist file. The formats are counted by the
+  build, commonest first (`formatOf`): the codec where a probe named one and
+  the extension otherwise, which on this library is always — not one of
+  28,727 tracks carries a codec, music being read by the tag reader and the
+  header parsers — and the track hover now spells an extension through
+  `codecName` as well, so a track and its release name one format alike.
+  The rate is size over running time and so is claimed only where the
+  server sends a running time, which is once every track is measured. It is
+  set on the cell root and taken away on every render (a key change redraws
+  a card in place, where `scrubCell` only runs on recycling), and the name
+  element carries the name above it, that element's tooltip being there for
+  a name the card cuts off. The sheet puts the same text over its title and
+  its facts line: one release, one description.
+  **A confined caller is not told where a playlist is kept outside what it
+  may see** (`shownTo`, applied in `AllowedAlbums` and through `ShownUnder`
+  in the sheet's `albumFor`): such a caller is shown a playlist album whose
+  tracks it may see wherever the playlist file lives, and the path would
+  name a directory in a branch it has no business knowing. A copy without
+  the path, since the release belongs to the cached build every caller
+  shares. The test is on the absolute location (`where`), as every path
+  filter's is.
+  The tile's own hover was built by joining its two lines with a separator
+  and splitting at the first one, which cut inside the path wherever a
+  folder's name held one; both are one line apiece now.
 - **A card says what is known about the thing on it.** A release shows its
   performer, year and genre; a performer shows their tracks, running time,
   the span their dated releases cover and what most of them are filed under
