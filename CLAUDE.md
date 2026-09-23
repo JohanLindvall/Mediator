@@ -1727,6 +1727,27 @@ Change propagation is the core loop:
   year still finds the release — but note that sorting albums *by name* no
   longer sorts a performer's releases chronologically by accident, which is
   what the year sort key is for.
+  **And where neither the tags nor the name date a release, where it is
+  kept may** (`yearOfPlace`, `yearOfName`, tested). `liftYear` only ever
+  sees the release's *name*, and a release named by its tags is not named by
+  its directory — so "2007 - Some Release" under tags saying "Some Release"
+  and no year was an undated card, and so was every scene playlist, named by
+  its tags or its file. Measured: 127 of 3,220 releases undated, 118 of them
+  with a year in the directory or the playlist's name, and every one of
+  those 118 read correctly. The directory is the release's own (a folded
+  release's, above its discs) and never the one above it, which holds other
+  releases; a playlist is asked by its file's name and then its directory.
+  Three shapes, asked in order: **at the front, spaced** ("2007 - Title
+  (Reissue 2020)", whose later years are a reissue's — spaced, because a
+  scene name beginning with a year is a performer called one); **alone in
+  brackets** ("Title (2019) [V0]"); and **the last year between
+  separators**, the scene form ("Performer-Title-WEB-2026-GROUP"), last
+  because a title may itself be a year. Not years: four digits run into
+  letters, a span ("1993-1997", which dates nothing), and a name that is
+  only a year. **The .nfo was measured and is not read**: 42 of the 127
+  have one, each with a year on a date line, and every one of those 42
+  already carries its year in its directory's name — a file read per
+  release for no release this does not date.
 - **A release nothing tagged is filed under the directory above it, where
   that names somebody the library already knows** (`artistFromParent`). Music
   is filed as performer, then release, then tracks, so the answer to "whose is

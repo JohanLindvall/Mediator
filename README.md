@@ -580,7 +580,11 @@ Go binary with the TypeScript frontend embedded.
   track in write order.
 - **Cards say what is known** — a release card carries its performer, year
   and genre, and a year written into the directory name ("2018 - Release")
-  is lifted out of the title and shown as the year instead of twice; a performer carries their tracks, running time, the years their
+  is lifted out of the title and shown as the year instead of twice. A
+  release whose tags carry no year is dated by where it is kept — its
+  directory, or a playlist's own name — whether that is spelt "2018 -
+  Release", "Release (2018)" or the scene's "Performer-Release-WEB-2018-GROUP";
+  a performer carries their tracks, running time, the years their
   releases span and what most of them are filed under; a track carries its
   artist, year and genre. Whatever is untagged is simply left out rather than
   leaving a gap or a stray separator.
