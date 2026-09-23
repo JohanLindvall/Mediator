@@ -186,7 +186,7 @@ func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilt
 		}
 	}
 	orderBy(out, desc,
-		func(g *Genre) bool { return knownLength(sortKey, g.Duration) },
+		func(g *Genre) bool { return knownKey(sortKey, g.Duration, g.ModTime) },
 		func(a, b *Genre) int { return compareGenres(a, b, sortKey) },
 		func(g *Genre) string { return g.sortName },
 		func(g *Genre) string { return g.ID })

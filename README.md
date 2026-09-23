@@ -684,7 +684,9 @@ Go binary with the TypeScript frontend embedded.
   the grid instead of flashing it, and anything the two searches have in
   common keeps its tile and its loaded thumbnail. Type filter chips (all / videos / images / music /
   albums / artists). What can be sorted on follows the view: files by
-  modified date, name, popularity, size, date added or playing time; **videos also by
+  modified date (a file stamped with a date in the future, which some copies
+  leave behind, sorts after every real date rather than leading the list),
+  name, popularity, size, date added or playing time; **videos also by
   resolution and by bitrate**, which are two different questions — the
   biggest picture and the heaviest file are rarely the same release; albums
   also by artist, year, genre, track count and length; artists by how many

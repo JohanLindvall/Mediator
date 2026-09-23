@@ -716,6 +716,22 @@ Change propagation is the core loop:
   found it: those items are deliberately never persisted, so "now" dated
   every one of them today on every restart and put its release at the top
   of the Added order each morning.
+  **A modification time later than now is not a time** (`knownTime`,
+  `mtime.go`, tested). The file's time is what the file says, and a file can
+  say anything: four films here claim to have been written in 2097, stamped
+  by whatever copied them, and newest first put them at the head of the
+  whole library, where they would have stayed for seventy years. They are
+  still shown with the date they carry — that is what the file says — but
+  ordered as unknown: after every real time whichever way the listing runs,
+  the rule the grouped views already follow for a key they lack (`orderBy`,
+  and `knownKey`, which now covers the modified time beside the running
+  time). A collection's modified time, the newest of its members', is taken
+  from the real ones only — a release, a show and through them a performer
+  and a genre — so one track stamped in the future no longer makes its
+  release the newest there is, and a collection of nothing but such has no
+  time and sorts last. A day of slack (`mtimeSlack`) covers clocks that
+  merely disagree, a network share's or a camera's. A time far in the past
+  is not judged: none was found, and an old file is not an impossible one.
 - Listing (`List`) filters + sorts + pages under `RLock` and returns *copies*
   of items — background enrichment (`enrich.go`: audio tags incl.
   track/year/genre, plus durations for audio and video) mutates items under

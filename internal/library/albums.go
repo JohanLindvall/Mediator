@@ -315,10 +315,8 @@ func albumHasKey(a *Album, sortKey string) bool {
 		return a.Genre != ""
 	case "year":
 		return a.Year != 0
-	case "duration":
-		return a.Duration > 0
 	default:
-		return true
+		return knownKey(sortKey, a.Duration, a.ModTime)
 	}
 }
 
@@ -471,7 +469,11 @@ func (l *Library) buildAlbums() []*Album {
 			Source: "m3u",
 		}
 		finish(a, pl.Path, tracks)
-		a.ModTime = pl.ModTime
+		// The playlist's own time where it has a real one (knownTime);
+		// otherwise its tracks', which finish has taken.
+		if knownTime(pl.ModTime, nowMillis()) {
+			a.ModTime = pl.ModTime
+		}
 	}
 
 	albums = dropDuplicateAlbums(albums)
@@ -685,6 +687,7 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	yearCount := map[string]int{}
 	formatCount := map[string]int{}
 	knownDurations := 0
+	now := nowMillis()
 	for _, t := range tracks {
 		a.TrackIDs = append(a.TrackIDs, t.ID)
 		a.Size += t.Size
@@ -695,7 +698,9 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 			a.Duration += t.Duration
 			knownDurations++
 		}
-		if t.ModTime > a.ModTime {
+		// The newest real time among them: a track claiming to be from the
+		// future would otherwise make its release the newest there is.
+		if t.ModTime > a.ModTime && knownTime(t.ModTime, now) {
 			a.ModTime = t.ModTime
 		}
 		// When the newest of them turned up here, which is what "Added"

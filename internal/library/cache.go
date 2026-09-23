@@ -95,11 +95,18 @@ func orderBy[T any](out []T, desc bool, has func(T) bool, key func(a, b T) int, 
 	})
 }
 
-// knownLength is the one presence rule the collections share beyond the
-// albums' own: a total playing time is left at zero unless every part of it
-// was measured, so ordering by it is "known" against "not known" first.
-func knownLength(sortKey string, duration int64) bool {
-	return sortKey != "duration" || duration > 0
+// knownKey is the one presence rule the collections share beyond the albums'
+// own: a total playing time is left at zero unless every part of it was
+// measured, and a modified time unless some member had a real one
+// (knownTime), so ordering by either is "known" against "not known" first.
+func knownKey(sortKey string, duration, modTime int64) bool {
+	switch sortKey {
+	case "duration":
+		return duration > 0
+	case "mtime":
+		return modTime > 0
+	}
+	return true
 }
 
 // byID orders a built list so two builds of one library cannot disagree.

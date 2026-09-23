@@ -349,6 +349,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 		cover             episodeKey
 	}
 	byKey := map[string]*acc{}
+	now := nowMillis()
 
 	l.mu.RLock()
 	for _, it := range l.items {
@@ -390,12 +391,19 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 			a.unmeasured = true
 			a.unmeasuredSeasons[it.Season] = true
 		}
-		if it.ModTime > se.ModTime || (it.ModTime == se.ModTime && it.ID > se.CoverID) {
-			se.ModTime = it.ModTime
+		// The newest real time (knownTime): an episode claiming to be from
+		// the future would otherwise make its show the newest there is. It
+		// still has its turn as a season's cover, as the oldest.
+		mt := it.ModTime
+		if !knownTime(mt, now) {
+			mt = 0
+		}
+		if mt > se.ModTime || (mt == se.ModTime && it.ID > se.CoverID) {
+			se.ModTime = mt
 			se.CoverID = it.ID
 		}
-		if it.ModTime > a.s.ModTime {
-			a.s.ModTime = it.ModTime
+		if mt > a.s.ModTime {
+			a.s.ModTime = mt
 		}
 		// When the newest episode turned up here — the answer to "what has
 		// arrived lately", which the file's own timestamp does not give.
@@ -539,7 +547,7 @@ func answering(shows []*Series, words []string) []*Series {
 func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilter) []*Series {
 	out := answering(l.AllowedSeries(paths), searchWords(search))
 	orderBy(out, desc,
-		func(s *Series) bool { return knownLength(sortKey, s.Duration) },
+		func(s *Series) bool { return knownKey(sortKey, s.Duration, s.ModTime) },
 		func(a, b *Series) int { return compareSeries(a, b, sortKey) },
 		func(s *Series) string { return s.sortName },
 		func(s *Series) string { return s.ID })

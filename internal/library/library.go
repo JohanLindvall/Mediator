@@ -1541,6 +1541,22 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		inner := order
 		order = func(a, b sortEntry) int { return -inner(a, b) }
 	}
+	if q.Sort == "mtime" {
+		// A time later than now is not a time (knownTime), and goes after
+		// every real one whichever way the listing runs — or newest first
+		// is led, for decades, by whatever a copy stamped with a year that
+		// has not happened.
+		now, inner := nowMillis(), order
+		order = func(a, b sortEntry) int {
+			if ka, kb := knownTime(a.it.ModTime, now), knownTime(b.it.ModTime, now); ka != kb {
+				if ka {
+					return -1
+				}
+				return 1
+			}
+			return inner(a, b)
+		}
+	}
 	slices.SortFunc(entries, order)
 	l.mu.RUnlock()
 

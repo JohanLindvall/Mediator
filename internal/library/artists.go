@@ -192,7 +192,7 @@ func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFil
 	// The length is left at zero unless every album underneath was measured,
 	// so ordering by it is "known" against "not known" first, as with albums.
 	orderBy(out, desc,
-		func(a *Artist) bool { return knownLength(sortKey, a.Duration) },
+		func(a *Artist) bool { return knownKey(sortKey, a.Duration, a.ModTime) },
 		func(a, b *Artist) int { return compareArtists(a, b, sortKey) },
 		func(a *Artist) string { return a.sortName },
 		func(a *Artist) string { return a.ID })
