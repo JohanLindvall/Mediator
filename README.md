@@ -446,7 +446,8 @@ Go binary with the TypeScript frontend embedded.
   every track the music listing shows. One request — the server flattens the
   view into its tracks — and there is no limit worth the name: the whole
   library goes into the queue and is shuffled there, the queue panel drawing
-  a window of it rather than every row. **Resting the pointer on a row says
+  a window of it rather than every row, its columns lined up whatever the
+  tracks' lengths. **Resting the pointer on a row says
   what the row has no space for**: the sleeve, the release, the year and the
   genre, with the format and bitrate under them. It is the rule every hover
   here follows — what you are shown is what the row is not already showing,

@@ -20,6 +20,7 @@ import {
   recentArtists,
   recordingKey,
   resumable,
+  runsHours,
   shuffleInPlace,
   windowRows,
 } from './queue.ts';
@@ -256,4 +257,15 @@ test('freshFrom reads the sets and does not add the whole pool to them', () => {
   // by the caller, as it appends.
   assert.deepEqual([...ids], ['a']);
   assert.equal(heard.size, 1);
+});
+
+// The queue's time column is one width all the way down, and that width is
+// hours only where a track needs them.
+test('the time column is wide enough for hours only where a track runs one', () => {
+  assert.equal(runsHours([]), false);
+  // Ten minutes and more is one digit wider, and still not hours.
+  assert.equal(runsHours([{ duration: 272_000 }, { duration: 765_000 }, {}]), false);
+  assert.equal(runsHours([{ duration: 272_000 }, { duration: 3_600_000 }]), true);
+  // Only what was added since the last asking is read.
+  assert.equal(runsHours([{ duration: 3_600_000 }, { duration: 1_000 }], 1), false);
 });

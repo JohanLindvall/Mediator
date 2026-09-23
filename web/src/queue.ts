@@ -77,6 +77,24 @@ export function windowRows(
 }
 
 /**
+ * Whether a queue's time column has to be wide enough for hours.
+ *
+ * The column keeps one width all the way down, or the performer beside it
+ * steps left on every track of ten minutes or more, the one extra digit
+ * pushing it over. That width is "59:59" unless a track in the queue runs an
+ * hour, and then "9:59:59". Asked of the whole queue rather than of the rows
+ * in view, so scrolling never moves the column — and of only what was added
+ * since it was last asked (`from`), since a queue grows a batch at a time and
+ * can hold the whole library.
+ */
+export function runsHours(tracks: readonly { duration?: number }[], from = 0): boolean {
+  for (let i = from; i < tracks.length; i++) {
+    if ((tracks[i]?.duration ?? 0) >= 3_600_000) return true;
+  }
+  return false;
+}
+
+/**
  * Whether pressing play would continue rather than start over. Nothing
  * loaded, a failed element and a queue that has played out are not
  * continuable; nor is the final boundary with nothing after it, where

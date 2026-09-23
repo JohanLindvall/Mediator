@@ -30,6 +30,7 @@ import {
   pickRadio,
   placeFirst,
   resumable,
+  runsHours,
   shuffleInPlace,
   windowRows,
 } from './queue';
@@ -247,6 +248,8 @@ export class AudioPlayer {
   /** The queue panel's pending repaint, and the window it last drew. */
   private queueRaf = 0;
   private queuePainted = { first: -1, last: -1, cur: -1 };
+  /** What runsHours last answered, of which queue and how much of it. */
+  private hours: { queue: Item[] | null; read: number; found: boolean } = { queue: null, read: 0, found: false };
 
   private root: HTMLElement;
   /** The stack above the bar: the queue, and the spectrum under it. */
@@ -1613,6 +1616,9 @@ export class AudioPlayer {
       );
     }
     this.queuePanel.querySelector('[data-qcount]')!.textContent = `Queue · ${this.order.length.toLocaleString()}`;
+    // One width for the time column all the way down (runsHours), or the
+    // performers beside it do not line up.
+    list.classList.toggle('q-hours', this.queueRunsHours());
     (list.firstElementChild as HTMLElement).style.height = `${this.order.length * Q_ROW}px`;
     // The current track is brought to the middle only when it is out of
     // view: a listener reading further down the queue was yanked back to
@@ -1625,6 +1631,22 @@ export class AudioPlayer {
     // the window and reorders everything in it.
     this.queuePainted = { first: -1, last: -1, cur: -1 };
     this.paintQueue();
+  }
+
+  /**
+   * Whether any track in the queue runs an hour, reading only what was added
+   * since the last asking: a queue is replaced or appended to, never edited
+   * in place, so a new array or a shorter one is read again from the top.
+   */
+  private queueRunsHours(): boolean {
+    const h = this.hours;
+    if (h.queue !== this.queue || this.queue.length < h.read) {
+      this.hours = { queue: this.queue, read: 0, found: false };
+    }
+    const now = this.hours;
+    if (!now.found) now.found = runsHours(this.queue, now.read);
+    now.read = this.queue.length;
+    return now.found;
   }
 
   /**

@@ -2504,7 +2504,13 @@ Frontend (`web/src`, no framework, no runtime deps):
   rows say how long each track is, which is the figure somebody scanning a
   queue is adding up; it is the one column that never gives way, the title
   yielding first, and it is absent rather than zero until the library has
-  measured the file.
+  measured the file. **It is one width all the way down**, right-aligned:
+  sized by its own text, a track of ten minutes or more was a digit wider
+  than its neighbours and pushed its performer left, so the performer column
+  beside it zigzagged. Wide enough for "59:59", or for "9:59:59" where the
+  queue holds a track that long (`runsHours` in `queue.ts`, tested) — asked
+  of the whole queue rather than the window, so scrolling never moves it, and
+  of only what was appended since it was last asked.
   **What the bar does when a set stops.** `endCast` always re-points the
   decks to the current track at the set's position (autoplaying only when
   the listener chose to play here), since `startCast` cleared their sources
