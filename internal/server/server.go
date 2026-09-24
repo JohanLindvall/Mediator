@@ -169,6 +169,7 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	s.mux.HandleFunc("GET /api/subs/{id}/{index}", s.handleSubFile)
 	s.mux.HandleFunc("GET /api/thumb/{id}", s.handleThumb)
 	s.mux.HandleFunc("GET /api/sprite/{id}", s.handleSprite)
+	s.mux.HandleFunc("GET /api/frame/{id}", s.handleFrame)
 	s.mux.HandleFunc("PUT /api/flags", s.handleFlagsBatch)
 	s.mux.HandleFunc("PUT /api/flags/{id}", s.handleFlagsPut)
 	s.mux.HandleFunc("GET /api/state", s.handleStateAll)

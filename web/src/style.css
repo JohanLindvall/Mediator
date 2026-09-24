@@ -1047,6 +1047,55 @@ body.viewing #app {
   opacity: 1;
   transform: translateY(-50%) scale(1);
 }
+/* The frame under the pointer (seekframe.ts). It stands over the bar and
+   takes no pointer events, so the bar underneath still takes every press;
+   it is placed by a transform along the bar, and its size is set from the
+   player and the picture when it opens. What it shows while the frame for
+   this moment is still being made is the last one that arrived, dimmed —
+   an older picture is not passed off as this moment's. */
+.seek-preview {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 10px);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  pointer-events: none;
+}
+.seek-preview[hidden] {
+  display: none;
+}
+.seek-preview-frame {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 7px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.65);
+}
+.seek-preview-frame img {
+  display: block;
+  flex: none;
+  object-fit: contain;
+  transition: opacity 0.12s;
+}
+.seek-preview-frame img:not([src]) {
+  visibility: hidden;
+}
+.seek-preview.waiting img {
+  opacity: 0.5;
+}
+.seek-preview-time {
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 .vo-row {
   display: flex;
   align-items: center;

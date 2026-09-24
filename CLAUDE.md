@@ -5625,6 +5625,55 @@ Serving details worth knowing before "fixing" them:
   test is: `preview.ts` cannot be imported by the test runner at all, its
   constructor using parameter properties, which strip-only type removal
   refuses.
+- **The seek bar shows the frame at the moment under the pointer**
+  (`seekframe.go`, `GET /api/frame/{id}?t=&w=`; `seekframe.ts`, tested). The
+  scrub sheet is ten frames, which is a tour of a film and not a way to find a
+  moment in it — a picture every twelve minutes across two hours — and what
+  was asked for is the frame at the exact millisecond the pointer or the
+  finger is on. So it is taken then and there: an input seek to the keyframe
+  before the moment and a decode forward from it (`frameArgs` with
+  `accurate`), the frame a player shows there to within one frame's length.
+  Nothing is kept on the server — the bar maps pixels to moments differently
+  at every width, and a store would be a database growing with every hover —
+  and the answer is served immutable with the file's mtime in the URL, so a
+  moment gone back to is the browser's to remember. Frames take a slot of
+  their own (`frameSem`, 2), not the tiles': the viewer is waiting on this
+  one, and a screenful of tiles must not stand in front of it.
+  **What it costs decided the client.** Measured on a loaded machine (load
+  average 17): half a second for a 1080p H.264 film, 2.5 to 4 s for 4K HEVC.
+  The keyframe alone was no cheaper for 4K (2.8 and 4.5 s), so the decode
+  forward is not what costs, and the graphics engine was slower still (8 to
+  13 s, busy converting) — software decoding stays. So nothing waits:
+  `SeekFrames` keeps **one request in flight**, the box and the time under it
+  follow the pointer on every move, and the picture is the exact frame where
+  it is cached, else the last one that arrived, dimmed (`.waiting`) so an
+  older picture is not passed off as this moment's. Moving keeps the request
+  in flight and asks for the latest moment when it lands, so a drag shows
+  pictures at whatever pace the server makes them rather than none until the
+  pointer stops; resting (`SETTLE_MS`) drops a request for somewhere the
+  pointer has left — aborting the fetch, which ends the request's context and
+  kills its ffmpeg — and asks for where it rests. Thirty-two frames are kept
+  per film as object URLs, released on eviction, on a new film and on close;
+  the one on screen is released when it is replaced. A frame is decoded off
+  the page before it is swapped in (`showFrame`, generation-guarded), or the
+  box would blink empty between two pictures.
+  **The size is the player's and the picture's** (`previewBox`): a fifth of a
+  wide player between 160 and 320 CSS pixels, a picture taller than wide
+  bounded by a quarter of the player's height between 120 and 240, turned
+  with the film the player has turned, and asked for at the screen's density
+  capped at two, rounded up to 32 so nearby sizes share their frames. The
+  element's own shape is used where it has one, else the library's.
+  Hover is for pointers that hover; a finger gets the preview only while it
+  drags. A DVD title is read by position (`library.SeekByte`), its clock not
+  being continuous, so its frame is where the reading enters — near the
+  moment, not at it; content with nothing but a pipe to be read through has
+  no frame at all.
+  Two things the accuracy test taught (`TestTheFrameIsTheMomentsToTheFrame`,
+  a clip whose brightness is its clock): an encoder takes a brightness ramp
+  for a run of scene cuts and made 200 of 250 frames keyframes until told not
+  to, and ffmpeg without the accurate seek lands three frames early rather
+  than at the keyframe — so the tolerance is set between the two, or the test
+  cannot tell them apart.
 - `state.Store` (playback positions) lives in the same blob database as
   everything else — thumbnails, metadata, the mirrored index, flags — so
   there is one file to back up and one file to delete for a clean slate. It

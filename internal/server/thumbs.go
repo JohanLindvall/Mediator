@@ -107,6 +107,11 @@ type Thumbnailer struct {
 	sem   chan struct{} // limits concurrent image decodes
 	ffSem chan struct{} // limits concurrent ffmpeg processes
 	bgSem chan struct{} // collapses generation to one job while streaming
+	// frameSem bounds the seek bar's frames (seekframe.go) across every
+	// viewer. A slot of their own, not the tiles': a viewer on the bar is
+	// waiting on the answer, and a screenful of tiles being made must not
+	// stand in front of it — nor the other way round.
+	frameSem chan struct{}
 
 	negMu sync.Mutex
 	neg   map[string]time.Time // keys that recently failed, and when
@@ -144,6 +149,7 @@ func NewThumbnailer(store *blob.DB, streaming func() bool, log *slog.Logger) *Th
 		sem:       make(chan struct{}, n),
 		ffSem:     make(chan struct{}, 2),
 		bgSem:     make(chan struct{}, 1),
+		frameSem:  make(chan struct{}, 2),
 		neg:       make(map[string]time.Time),
 		gen:       make(map[string]*genEntry),
 	}
@@ -859,9 +865,13 @@ type frameSpec struct {
 	// internal marker, a socket timeout and an inaccurate seek — see below.
 	loopback bool
 	// accurate decodes forward to the frame asked for rather than taking the
-	// keyframe at or before it. A scrub sheet on a plain file wants it; a
-	// tile does not, and over loopback nothing does.
+	// keyframe at or before it. A scrub sheet on a plain file wants it, and
+	// the seek bar's frame everywhere; a tile does not.
 	accurate bool
+	// pre is input options that go in front of the input, and seek may be
+	// empty: a DVD title is seeked by where it starts reading rather than by
+	// time (library.SeekByte), and then there is no -ss to give.
+	pre []string
 }
 
 // frameArgs is the ffmpeg command line for one scaled frame at a seek — the
@@ -887,8 +897,11 @@ func frameArgs(f frameSpec) []string {
 			"-rw_timeout", strconv.Itoa(int(archiveSeekReadTimeout/time.Microsecond)),
 			"-headers", library.LoopbackHeaderArg())
 	}
+	args = append(args, f.pre...)
+	if f.seek != "" {
+		args = append(args, "-ss", f.seek)
+	}
 	return append(args,
-		"-ss", f.seek,
 		"-i", f.input,
 		"-map", "0:v:0", "-an", "-sn", "-dn",
 		"-frames:v", "1", "-vf", videoFilter(square(fmt.Sprintf("scale=%d:-2", f.width))),

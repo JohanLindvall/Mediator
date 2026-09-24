@@ -25,7 +25,9 @@ import {
   type Item,
   type Subtitle,
   qualityLadder,
+  frameUrl,
 } from './api';
+import { SeekFrames, momentAt, previewBox, previewLeft, type PreviewBox } from './seekframe';
 import {
   airPlaySupported,
   playingRemotely,
@@ -340,6 +342,21 @@ class VideoOverlay {
   private seeking = false;
   /** Where the finger is on the bar while a converted stream is being scrubbed. */
   private seekAt = 0;
+  /**
+   * The frame under the pointer on the bar (seekframe.ts): the box and the
+   * picture in it, the frames of this film, the box's size for as long as it
+   * is up, the moment under the pointer and the one whose frame is up, and a
+   * generation so a frame decoded late cannot replace a later one.
+   */
+  private previewEl!: HTMLElement;
+  private previewFrame!: HTMLElement;
+  private previewImg!: HTMLImageElement;
+  private previewTime!: HTMLElement;
+  private frames!: SeekFrames;
+  private previewGeom: PreviewBox | null = null;
+  private previewMs = -1;
+  private previewShownMs = -1;
+  private previewGen = 0;
   private closed = false;
 
   // Transcode fallback: when the browser cannot decode the video track
@@ -1779,6 +1796,10 @@ class VideoOverlay {
           <div class="seek-track"></div>
           <div class="seek-buf"></div>
           <div class="seek-fill"><div class="seek-dot"></div></div>
+          <div class="seek-preview" aria-hidden="true" hidden>
+            <div class="seek-preview-frame"><img alt="" draggable="false"></div>
+            <span class="seek-preview-time"></span>
+          </div>
         </div>
         <div class="vo-row">
           <button class="icon-btn" data-play aria-label="Play/Pause (Space)">${icons.play}</button>
@@ -1833,6 +1854,19 @@ class VideoOverlay {
     this.seekEl = this.q('.seek');
     this.seekFill = this.q('.seek-fill');
     this.seekBuf = this.q('.seek-buf');
+    this.previewEl = this.q('.seek-preview');
+    this.previewFrame = this.q('.seek-preview-frame');
+    this.previewImg = this.q('.seek-preview img');
+    this.previewTime = this.q('.seek-preview-time');
+    this.frames = new SeekFrames({
+      fetch: async (ms, signal) => {
+        const it = this.item;
+        const res = await fetch(frameUrl(it.id, ms, this.previewGeom?.frameW ?? 320, it.mtime), { signal });
+        return res.ok ? res.blob() : null;
+      },
+      show: (url, _exact, ms) => this.showFrame(url, ms),
+      waiting: () => {},
+    });
     this.timeEl = this.q('.vo-time');
     this.playBtn = this.q('[data-play]');
     this.muteBtn = this.q('[data-mute]');
@@ -1990,6 +2024,9 @@ class VideoOverlay {
   private beginFile(item: Item, at?: number): void {
     this.feed?.stop();
     this.feed = null;
+    // The last film's frames are not this one's.
+    this.hidePreview();
+    this.frames.reset();
     this.item = item;
     this.resume = this.opts.resumeFor?.(item.id);
     this.lastSaved = -1;
@@ -2647,18 +2684,118 @@ class VideoOverlay {
       this.seeking = true;
       this.seekEl.setPointerCapture(ev.pointerId);
       follow(ev);
+      this.previewAt(ev);
     });
     this.seekEl.addEventListener('pointermove', (ev) => {
       if (this.seeking) follow(ev);
+      // The frame under the pointer: hovering for a pointer that can hover,
+      // and for a finger only while it drags, a finger that is not touching
+      // the bar being nowhere.
+      if (this.seeking || ev.pointerType !== 'touch') this.previewAt(ev);
     });
-    const end = (): void => {
+    this.seekEl.addEventListener('pointerleave', () => {
+      if (!this.seeking) this.hidePreview();
+    });
+    const end = (ev: PointerEvent): void => {
       if (!this.seeking) return;
       this.seeking = false;
       if (this.tv) this.seekTo(this.tv.pos);
       else if (this.transcoding) this.seekTo(this.seekAt);
+      // A finger lifted is gone; a mouse released over the bar is still
+      // hovering it, and its leaving is what takes the preview down.
+      if (ev.pointerType === 'touch' || !this.seekEl.matches(':hover')) this.hidePreview();
     };
     this.seekEl.addEventListener('pointerup', end);
     this.seekEl.addEventListener('pointercancel', end);
+  }
+
+  /**
+   * Put the preview over the moment under the pointer: the box, its place and
+   * the time follow the pointer at once, and the frame is asked for without
+   * anything waiting on it (SeekFrames) — the picture already up stays,
+   * dimmed, until the one for this moment arrives.
+   */
+  private previewAt(ev: PointerEvent): void {
+    const dur = this.totT();
+    if (dur <= 0) return;
+    const bar = this.seekEl.getBoundingClientRect();
+    if (bar.width <= 0) return;
+    const x = ev.clientX - bar.left;
+    if (!this.previewGeom) this.openPreview();
+    const g = this.previewGeom!;
+    const ms = momentAt(x, bar.width, dur);
+    this.previewEl.style.transform = `translateX(${previewLeft(x, g.boxW, bar.width)}px)`;
+    this.previewTime.textContent = formatDuration(ms / 1000);
+    this.previewMs = ms;
+    this.previewEl.classList.toggle('waiting', this.previewShownMs !== ms);
+    this.frames.at(ms);
+  }
+
+  /**
+   * Size the box for this showing: to the player and the picture as it is on
+   * screen (previewBox) — the element's own shape where it has one, else the
+   * shape the library read, turned as the player turns the film.
+   */
+  private openPreview(): void {
+    const player = this.root.getBoundingClientRect();
+    const v = this.video;
+    const aspect =
+      v.videoWidth > 0 && v.videoHeight > 0
+        ? v.videoWidth / v.videoHeight
+        : this.item.width && this.item.height
+          ? this.item.width / this.item.height
+          : 16 / 9;
+    const turns = Math.round(this.rotation / 90);
+    const g = previewBox({
+      playerW: player.width,
+      playerH: player.height,
+      aspect,
+      quarterTurns: turns,
+      dpr: window.devicePixelRatio || 1,
+    });
+    this.previewGeom = g;
+    this.previewFrame.style.width = `${g.boxW}px`;
+    this.previewFrame.style.height = `${g.boxH}px`;
+    // The frame comes as the file has it; a film the player has turned is
+    // turned here the same way, inside a box already the turned shape.
+    const odd = turns % 2 !== 0;
+    this.previewImg.style.width = `${odd ? g.boxH : g.boxW}px`;
+    this.previewImg.style.height = `${odd ? g.boxW : g.boxH}px`;
+    this.previewImg.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+    this.previewEl.hidden = false;
+  }
+
+  /** Take the preview down, and stop making frames for it. */
+  private hidePreview(): void {
+    if (this.previewEl.hidden) return;
+    this.previewEl.hidden = true;
+    this.previewGeom = null;
+    this.previewMs = -1;
+    this.previewShownMs = -1;
+    this.previewGen++;
+    this.previewImg.removeAttribute('src');
+    this.frames.stop();
+  }
+
+  /**
+   * Put a frame up once it is decoded, off the page's own time: a picture
+   * swapped in before it is decoded is a blank box for a moment. A later
+   * frame supersedes one still decoding, and the box says whether what it
+   * shows is the moment under the pointer.
+   */
+  private showFrame(url: string, ms: number): void {
+    const gen = ++this.previewGen;
+    const probe = new Image();
+    probe.src = url;
+    void probe
+      .decode()
+      .catch(() => {})
+      .then(() => {
+        if (gen !== this.previewGen || this.previewEl.hidden) return;
+        this.previewImg.src = url;
+        this.previewShownMs = ms;
+        this.previewEl.classList.toggle('waiting', ms !== this.previewMs);
+      });
   }
 
   // ---- event handlers --------------------------------------------------
@@ -3055,6 +3192,8 @@ class VideoOverlay {
     if (this.closed) return;
     this.closed = true;
     releaseThumbs();
+    this.hidePreview();
+    this.frames.reset();
     this.persist(true);
     // A film left playing on a television with nothing on screen to stop it
     // would need the set's own remote to end; closing the player ends it.

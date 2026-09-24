@@ -73,10 +73,20 @@ Go binary with the TypeScript frontend embedded.
   URL and this stream has none; a television over DLNA is still offered.
 - **Hover a film and it moves** — the pointer resting on a tile plays ten
   frames from across the film in place of the still, a five-second tour of
-  what is in it. It is the same sheet the seek bar scrubs with, so it costs
-  one small image and no stream at all; the play badge stays on top of it,
-  the still comes back when the pointer leaves, and a touch screen — which
-  has no hover — is left alone.
+  what is in it. It is one small image and no stream at all; the play badge
+  stays on top of it, the still comes back when the pointer leaves, and a
+  touch screen — which has no hover — is left alone.
+- **The frame under the pointer on the seek bar** — hovering the player's
+  seek bar, or dragging along it with a finger, shows the frame at that exact
+  moment, to the millisecond, with the time under it. The server takes that
+  one frame then and there (about half a second for a 1080p film, a few for
+  4K on a busy machine) and nothing waits for it: the box and the time follow
+  the pointer at once, the last picture stays up dimmed until the new one
+  arrives, and a request the pointer has left behind is dropped. The box is
+  sized to the player and the picture — a fifth of a wide player, a portrait
+  clip bounded by its height, turned with the film — and asked for at the
+  screen's own density. A DVD title shows the frame where its reading
+  enters rather than at the exact moment, its clock not being continuous.
 - **Video player** — custom controls: play/pause, seek with buffer display,
   ±10s skip, volume/mute, playback speed, rotation for sideways footage
   (`r`/`R`, remembered per file and shared across devices, since a clip shot
@@ -1194,6 +1204,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
 | `GET /api/albums/{id}/zip`                | The release as one download                |
 | `GET /api/sprite/{id}`                    | Scrub sheet: ten frames across a video, taken by ten seeks (3.5 s for an 87-minute film) |
+| `GET /api/frame/{id}?t=MS&w=PX`           | The frame at one moment of a video, to the millisecond, `w` pixels wide (96–960): the seek bar's preview. Taken on request, not stored; served immutable with `v=<mtime>` |
 | `GET /api/playlist.m3u?…`                 | The current query as an m3u                |
 | `GET /api/info`                           | What the client needs before anything else: the thumbnail epoch, which classes of media this face may show, and the bitrate ladder (`qualities`) |
 | `POST /api/links`                         | Mint a shortlink to a view or to one item; asking twice for the same place returns the same code |

@@ -468,6 +468,17 @@ export function contentKnown(): boolean {
 }
 
 /**
+ * The frame of a video at one moment (milliseconds), `width` pixels wide:
+ * what the seek bar's preview shows under the pointer. Taken by the server
+ * then and there, to the millisecond, and answered 404 where there is no
+ * frame to be had. `v` is the file's mtime, as for thumbnails — the same
+ * moment of the same file is the same picture, so the browser keeps it.
+ */
+export function frameUrl(id: string, ms: number, width: number, v = 0): string {
+  return `/api/frame/${encodeURIComponent(id)}?t=${Math.round(ms)}&w=${width}${v ? `&v=${v}` : ''}`;
+}
+
+/**
  * Which frame of the sheet covers time t (seconds), and where it sits in the
  * tiled image as background-position percentages. Percentages rather than
  * pixels because the frame height follows the video's aspect ratio, which
