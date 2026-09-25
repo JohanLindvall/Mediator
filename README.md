@@ -82,7 +82,10 @@ Go binary with the TypeScript frontend embedded.
   Download and a release's sheet has *Delete release…* in its menu. Nothing
   is removed until the confirmation has shown exactly what would be: every
   file, every folder that goes whole, how many and how much, and anything
-  else sharing an archive or a disc with it. A film's release folder goes
+  else sharing an archive or a disc with it. A film sharing its folder with
+  other things takes only its own file and the subtitles named for it —
+  never another film's, even one whose name begins the same way — and the
+  folder and everything else in it stay. A film's release folder goes
   with it only when what is left there is the release's furniture — an
   .nfo, checksums, subtitles, cover art, a sample — and a folder holding
   anything else keeps it; a root of the library is never removed. A film

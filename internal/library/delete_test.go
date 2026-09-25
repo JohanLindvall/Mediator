@@ -347,3 +347,38 @@ func TestALinkKeepsItsFolder(t *testing.T) {
 		t.Fatalf("a folder with a link in it was planned to go: %v", plan.Folders)
 	}
 }
+
+// Beside "Film.mkv" and "Film.Part2.mkv", the subtitles named for the second
+// answer to the first's name too; each video takes only its own.
+func TestASubtitleGoesWithTheVideoItNamesMost(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Films", "Two Parts")
+	for name, body := range map[string]string{
+		"Night.Tide.mkv":          "one",
+		"Night.Tide.en.srt":       "1\n00:00:01,000 --> 00:00:02,000\none\n",
+		"Night.Tide.Part2.mkv":    "two",
+		"Night.Tide.Part2.en.srt": "1\n00:00:01,000 --> 00:00:02,000\ntwo\n",
+	} {
+		writeFile(t, filepath.Join(dir, name), body)
+	}
+	l := quietLib(root)
+	l.Scan(nil)
+	files := func(video string) []string {
+		t.Helper()
+		plan, err := l.PlanDelete(DeleteRequest{Kind: DeleteItem, ID: itemAt(t, l, filepath.Join(dir, video)).ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, f := range plan.Files {
+			out = append(out, filepath.Base(f.Path))
+		}
+		return out
+	}
+	if got, want := files("Night.Tide.mkv"), []string{"Night.Tide.en.srt", "Night.Tide.mkv"}; !slices.Equal(got, want) {
+		t.Errorf("the first part takes %v, want %v", got, want)
+	}
+	if got, want := files("Night.Tide.Part2.mkv"), []string{"Night.Tide.Part2.en.srt", "Night.Tide.Part2.mkv"}; !slices.Equal(got, want) {
+		t.Errorf("the second part takes %v, want %v", got, want)
+	}
+}

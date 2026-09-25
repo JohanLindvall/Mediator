@@ -5638,7 +5638,13 @@ Serving details worth knowing before "fixing" them:
   folder it is in; a folder that gained something since stays whole
   (`DeleteNow` re-runs `folderGoes`).
   **What goes is what the thing is made of.** A file and its own subtitle
-  sidecars (`Subtitles`). Content inside another file cannot be taken out,
+  sidecars (`Subtitles`) — **its own**, which is not the same thing as the
+  ones that answer to its name: a subtitle belongs to a video when its name
+  is the video's name and something after it, so beside `Film.mkv` and
+  `Film.Part2.mkv` the file `Film.Part2.en.srt` answers to both, and a first
+  version deleted the second part's subtitles with the first part. A
+  subtitle goes with the video whose name it carries most of
+  (`subtitleOfAnother`), read off the folder itself. Content inside another file cannot be taken out,
   so the container goes — every volume of a rar set (`rarVolumes`), the disc
   image, or a DVD folder's files — and its other members go with it and are
   named (`Others`). A release, a show, a season: their tracks or episodes.

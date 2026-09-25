@@ -224,10 +224,47 @@ func (p *planner) addItem(it Item) {
 		p.files[it.Path] = true
 	}
 	for _, s := range p.l.Subtitles(it) {
-		if s.path != "" {
+		if s.path != "" && !subtitleOfAnother(s.path, it) {
 			p.files[s.path] = true
 		}
 	}
+}
+
+// subtitleOfAnother says a subtitle beside this video belongs more closely to
+// another one in the same folder. A subtitle is a video's when its name is
+// the video's name and something after it (matchStem), so beside "Film.mkv"
+// and "Film.Part2.mkv" the file "Film.Part2.en.srt" answers to both — and
+// deleting the first would have taken the second's subtitles with it. A
+// subtitle goes with the video whose name it carries most of.
+func subtitleOfAnother(sub string, it Item) bool {
+	own := stemOf(filepath.Base(it.Path))
+	if container, member, inside := strings.Cut(it.Path, "\x00"); inside {
+		// Matched by the member's name or the set's; the longer of the two
+		// is how much of the subtitle's name this one can claim.
+		own = stemOf(filepath.Base(member))
+		if c := stemOf(filepath.Base(container)); len(c) > len(own) {
+			own = c
+		}
+	}
+	name := stemOf(filepath.Base(sub))
+	entries, err := os.ReadDir(filepath.Dir(sub))
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		other := e.Name()
+		if e.IsDir() || !videoExts[strings.ToLower(filepath.Ext(other))] {
+			continue
+		}
+		stem := stemOf(other)
+		if len(stem) <= len(own) || filepath.Join(filepath.Dir(sub), other) == it.Path {
+			continue
+		}
+		if _, ok := matchStem(name, stem); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // addContainer plans the whole of what an item inside another file lives in,
