@@ -86,7 +86,7 @@ func main() {
 	tmpDir := flag.String("tmp", "", "directory for converted files being served (default: the system temp directory)")
 	tmpMax := flag.String("tmp-max", "8G", `how much converted material may be held at once ("off" for no limit)`)
 	debug := flag.Bool("debug", false, "log every API request (method, range, status, bytes) and raise the log level")
-	lock := flag.Bool("lock", false, "refuse changes to the scanned directories: the preferences show what is indexed and nothing can alter it")
+	lock := flag.Bool("lock", false, "refuse changes to the scanned directories and deleting from the disk: the preferences show what is indexed and nothing can alter it")
 	var excludes stringList
 	flag.Var(&excludes, "exclude", "glob of paths to keep out of the index, repeatable (no slash in the pattern: matched against the file or directory name; otherwise against the whole path)")
 	flag.Usage = func() {
@@ -507,8 +507,11 @@ func run(cfg config, log *slog.Logger) error {
 	// somewhere its owner does not control wants this, since nothing here
 	// asks who is calling.
 	if cfg.lock {
-		log.Info("directories are locked; the preferences are read-only")
+		log.Info("directories are locked; the preferences are read-only and nothing can be deleted")
 	} else {
+		// Deleting from the disk is the owner's, and -lock is the owner
+		// saying nothing here may alter the library (server/delete.go).
+		srv.AllowDeletes()
 		// Two requests changing the directories at once are two
 		// read-modify-writes over two stores with nothing between them: one
 		// can write its list to the database while the other writes a

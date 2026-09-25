@@ -400,6 +400,9 @@ body.has-audio #spacer {
   left: 0;
   will-change: transform;
   contain: layout paint style;
+  /* A long press on a card is the card's menu, not the browser's offer to
+     save the picture. */
+  -webkit-touch-callout: none;
 }
 /*
  * A cell the new data brought eases in rather than appearing between one
@@ -891,6 +894,128 @@ body.viewing #app {
 .vo-menu-item.on {
   color: var(--accent-2);
   font-weight: 700;
+}
+/* Deleting from the disk: an offer that stands apart from the rest. */
+.vo-menu-item.danger {
+  color: #ff7b7b;
+}
+.vo-menu-item.danger:hover {
+  background: rgba(255, 90, 90, 0.14);
+}
+
+/* ---------- a card's menu, and the question before deleting ---------- */
+/* Opened at the pointer by a right click or a long press, and kept on the
+   screen; it goes on any press elsewhere, a scroll or Escape. */
+.card-menu {
+  position: fixed;
+  z-index: 300;
+  min-width: 180px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+}
+.card-menu .vo-menu-item,
+.confirm .btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-menu svg {
+  width: 16px;
+  height: 16px;
+}
+/* Over everything, the player included: the question is asked from there
+   too. Cancel has the focus, and the list says exactly what goes. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(5, 6, 10, 0.72);
+}
+.confirm {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  padding: 20px 22px;
+  border-radius: 16px;
+  background: var(--card-2);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.confirm-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #ff7b7b;
+}
+.confirm-head svg {
+  width: 22px;
+  height: 22px;
+}
+.confirm-head h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--text);
+}
+.confirm-what {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.confirm-what span,
+.confirm-others,
+.confirm-warn {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+.confirm-paths {
+  margin: 0;
+  padding: 10px 12px;
+  list-style: none;
+  max-height: 30vh;
+  overflow: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.confirm-more {
+  color: var(--muted);
+}
+.confirm-error {
+  margin: 0;
+  color: #ff7b7b;
+  font-size: 13px;
+}
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.btn.danger {
+  background: #c83a3a;
+  border-color: transparent;
+  color: #fff;
+}
+.btn.danger:hover {
+  background: #d94848;
+}
+.btn:disabled {
+  opacity: 0.55;
+  pointer-events: none;
 }
 /*
  * Nothing in the player scrolls, so no gesture over it belongs to the

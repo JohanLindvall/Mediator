@@ -12,6 +12,7 @@ import {
   subscribeEvents,
   streamUrl,
   thumbUrl,
+  canDelete,
   type Album,
   type Artist,
   type Counts,
@@ -71,6 +72,8 @@ import { openingDesc, openingSort, sortOptions } from './sorts';
 import { loadThumb, cancelThumb, retryThumbs } from './thumbs';
 import { showToast } from './toast';
 import { shareView } from './links';
+import { deleteLabel, deleteRequestFor } from './deleting';
+import { deleteWithConfirmation } from './deletedialog';
 
 type Mode = ViewMode;
 
@@ -949,6 +952,114 @@ const grid = new VirtualGrid<Item | Album | Artist | Genre | Series | Season>(
   plane,
   itemAdapter,
 );
+
+// ---- a card's menu -----------------------------------------------------
+
+/**
+ * What can be done to one card, from a right click or a long press: for now,
+ * deleting what it stands for from the disk — a file, a release, a show or a
+ * season — and only where this page may (canDelete). Nothing is removed from
+ * here: the offer opens the question (deletedialog.ts), which shows exactly
+ * what would go before anything does.
+ *
+ * A long press is the touch screen's right click, and Safari on a phone
+ * sends no contextmenu for one, so it is timed here: held still for
+ * LONG_PRESS_MS, it opens the menu and swallows the tap the lift would
+ * otherwise make — which would open the card. A finger that moves is
+ * scrolling, and a scroll the browser takes over cancels the press.
+ */
+const LONG_PRESS_MS = 550;
+let cardMenu: HTMLElement | null = null;
+
+function closeCardMenu(): void {
+  cardMenu?.remove();
+  cardMenu = null;
+}
+
+/** Open the menu for the card a cell shows, at a point; says whether it did. */
+function openCardMenu(cell: HTMLElement, x: number, y: number): boolean {
+  if (!canDelete()) return false;
+  const idx = Number(cell.dataset.idx);
+  const card = Number.isFinite(idx) ? adapterFor().get(idx) : undefined;
+  if (!card) return false;
+  // A season is asked about by its show, which is the view it is shown in.
+  const req = deleteRequestFor(card as Parameters<typeof deleteRequestFor>[0], state.series);
+  if (!req) return false;
+  closeCardMenu();
+  const menu = document.createElement('div');
+  menu.className = 'card-menu';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = `<button class="vo-menu-item danger" role="menuitem">${icons.trash}<span>${esc(deleteLabel(req))}</span></button>`;
+  document.body.appendChild(menu);
+  const r = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+  const item = menu.querySelector<HTMLButtonElement>('button')!;
+  item.addEventListener('click', () => {
+    closeCardMenu();
+    void deleteWithConfirmation(req);
+  });
+  item.focus();
+  cardMenu = menu;
+  return true;
+}
+
+plane.addEventListener('contextmenu', (ev) => {
+  const cell = (ev.target as HTMLElement).closest<HTMLElement>('.cell');
+  if (cell && openCardMenu(cell, ev.clientX, ev.clientY)) ev.preventDefault();
+});
+
+let press: { timer: number; x: number; y: number } | null = null;
+let swallowTap = false;
+function cancelPress(): void {
+  if (press) window.clearTimeout(press.timer);
+  press = null;
+}
+plane.addEventListener('pointerdown', (ev) => {
+  // Every gesture starts afresh: a long press that opened the menu and was
+  // lifted with no tap after it must not swallow the next one.
+  swallowTap = false;
+  if (ev.pointerType !== 'touch') return;
+  const cell = (ev.target as HTMLElement).closest<HTMLElement>('.cell');
+  if (!cell) return;
+  const { clientX: x, clientY: y } = ev;
+  cancelPress();
+  press = {
+    x,
+    y,
+    timer: window.setTimeout(() => {
+      press = null;
+      if (openCardMenu(cell, x, y)) swallowTap = true;
+    }, LONG_PRESS_MS),
+  };
+});
+plane.addEventListener('pointermove', (ev) => {
+  if (press && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 10) cancelPress();
+});
+plane.addEventListener('pointerup', cancelPress);
+plane.addEventListener('pointercancel', cancelPress);
+plane.addEventListener(
+  'click',
+  (ev) => {
+    if (!swallowTap) return;
+    swallowTap = false;
+    ev.stopPropagation();
+    ev.preventDefault();
+  },
+  true,
+);
+document.addEventListener(
+  'pointerdown',
+  (ev) => {
+    if (cardMenu && !cardMenu.contains(ev.target as Node)) closeCardMenu();
+  },
+  true,
+);
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeCardMenu();
+});
+scroller.addEventListener('scroll', closeCardMenu, { passive: true });
+window.addEventListener('resize', closeCardMenu);
 
 // The bar leaves while a phone browses and returns on the first upward
 // flick — the decision lives in barhide.ts, tested; this is only the wiring.

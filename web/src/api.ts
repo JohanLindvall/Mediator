@@ -30,7 +30,10 @@ import type {
   CropResponse,
   InfoResponse,
   KeyframeResponse,
-  SubtitlesResponse, SkipMarks } from './types.gen';
+  SubtitlesResponse, SkipMarks,
+  DeleteRequest,
+  DeletePlanResponse,
+  DeleteResult } from './types.gen';
 import { SPRITE, Quality } from './types.gen';
 import { reportFault } from './report';
 
@@ -455,6 +458,25 @@ let serverInfo: InfoResponse | null = null;
  */
 export function serverAbout(): InfoResponse | null {
   return serverInfo;
+}
+
+/**
+ * Whether this page may delete things from the disk: the whole library, on
+ * a server not started with -lock. The page offers deleting only where this
+ * says so; the server refuses everywhere else whatever the page does.
+ */
+export function canDelete(): boolean {
+  return serverInfo?.deletable === true;
+}
+
+/** What deleting something would remove — worked out, and nothing removed. */
+export function planDelete(req: DeleteRequest): Promise<DeletePlanResponse> {
+  return sendJSON<DeletePlanResponse>('POST', '/api/delete/plan', req);
+}
+
+/** Delete exactly what a plan listed, and nothing else. */
+export function confirmDelete(token: string): Promise<DeleteResult> {
+  return sendJSON<DeleteResult>('POST', '/api/delete', { token });
 }
 
 /**

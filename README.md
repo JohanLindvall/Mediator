@@ -76,6 +76,21 @@ Go binary with the TypeScript frontend embedded.
   what is in it. It is one small image and no stream at all; the play badge
   stays on top of it, the still comes back when the pointer leaves, and a
   touch screen — which has no hover — is left alone.
+- **Delete from the disk, after seeing what goes** — right-click a card (or
+  long-press it on a touch screen) for *Delete file…*, *Delete release…*,
+  *Delete show…* or *Delete season…*; the player has a delete button beside
+  Download and a release's sheet has *Delete release…* in its menu. Nothing
+  is removed until the confirmation has shown exactly what would be: every
+  file, every folder that goes whole, how many and how much, and anything
+  else sharing an archive or a disc with it. A film's release folder goes
+  with it only when what is left there is the release's furniture — an
+  .nfo, checksums, subtitles, cover art, a sample — and a folder holding
+  anything else keeps it; a root of the library is never removed. A film
+  inside a rar set or on a disc goes as the set or the disc. What is
+  confirmed is exactly what goes: a file that changed since it was shown is
+  left alone, and a folder that gained something keeps it. Only the whole
+  library can delete — not a face restricted to some media, not a caller
+  confined to part of the disk, and not a server started with `-lock`.
 - **The frame under the pointer on the seek bar** — hovering the player's
   seek bar, or dragging along it with a finger, shows the frame at that exact
   moment, to the millisecond, with the time under it. The server takes that
@@ -762,7 +777,7 @@ Flags:
 | `-version` | | Print the build (version, commit, time, toolchain) and exit |
 | `-tmp`     | system temp        | Where converted files are kept (see below)                     |
 | `-tmp-max` | `8G`               | How much converted material may be held at once; `off` (or `0`) for no limit |
-| `-lock`    | `false`            | Refuse changes to the scanned directories: the preferences become read-only |
+| `-lock`    | `false`            | Refuse changes to the scanned directories and deleting from the disk: the preferences become read-only and nothing can be deleted |
 | `-exclude` | —                  | Glob of paths to keep out of the index; repeatable             |
 | `-debug`   | `false`            | Log every request — method, range, status, bytes, duration     |
 
@@ -1199,6 +1214,8 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays: the whole film as a VOD playlist beginning at `t`, its segments made as they are asked for, one session per film, mode, soundtrack and rung; `X-Media-Timeline: film` says so, `session` that the older growing playlist from the seek is being served |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
 | `GET /api/skip/{id}`                      | Where a video's intro and credits are, as found from the sound (`introStart`, `introEnd`, `outro` in seconds, the last counted back from the end); all nought where nothing has been found. Asking puts the episode's season at the front of the search |
+| `POST /api/delete/plan`                   | What deleting something would remove — `{kind: item\|album\|series\|season, id, season}` — worked out and nothing removed: the folders and files, counts, size, and a token. JSON body only; refused (403) for a face, a confined caller or `-lock` |
+| `POST /api/delete`                        | Delete exactly what a plan listed, named by its token (`{token}`); once, within ten minutes, and each file only while it is still the one shown. 410 for a token that is used, unknown or too old |
 | `POST /api/log`                           | One fault the page reports — a conversion whose connection came apart, a request that never arrived, an error the page raised — so it lands in the server's log beside the requests that explain it. Bounded per process; answers 204 whether it recorded it or not |
 | `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
@@ -1235,6 +1252,8 @@ fetching a URL without a browser (an AirPlay receiver, a casting device, an
 external player handed an m3u) cannot answer a password challenge, which is
 what [signed media URLs](#signed-media-urls) are for. As shipped: whoever can reach the port can browse, stream and — unless the server
 was started with `-lock` — point the library at any directory the process can
-read. That is the posture for a personal server on a network its owner
-trusts. Thumbnails for `.avif` fall back to an icon
+read, and delete what the library holds from the disk. That is the posture
+for a personal server on a network its owner trusts; a face restricted by the
+proxy to some media or to part of the disk cannot delete, and `-lock` turns
+deleting off altogether. Thumbnails for `.avif` fall back to an icon
 (no pure-Go decoder); the full-size view still renders in the browser.

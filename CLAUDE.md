@@ -5625,6 +5625,73 @@ Serving details worth knowing before "fixing" them:
   test is: `preview.ts` cannot be imported by the test runner at all, its
   constructor using parameter properties, which strip-only type removal
   refuses.
+- **Deleting from the disk is two requests, and the split is the safety**
+  (`library/delete.go`, `server/delete.go`; `deleting.ts`, `deletedialog.ts`,
+  tested). `POST /api/delete/plan` works out exactly what would go and
+  changes nothing; the owner is shown that — every folder that goes whole,
+  every file that goes on its own, counts, size, and whatever else shares a
+  container with it — and `POST /api/delete` with the plan's token removes
+  exactly that. The plan is kept ten minutes and taken once, so a
+  confirmation left open overnight deletes nothing on the strength of a
+  disk that has moved on. Execution looks again at everything: a planned
+  file whose size or time changed since it was shown stays, and so does any
+  folder it is in; a folder that gained something since stays whole
+  (`DeleteNow` re-runs `folderGoes`).
+  **What goes is what the thing is made of.** A file and its own subtitle
+  sidecars (`Subtitles`). Content inside another file cannot be taken out,
+  so the container goes — every volume of a rar set (`rarVolumes`), the disc
+  image, or a DVD folder's files — and its other members go with it and are
+  named (`Others`). A release, a show, a season: their tracks or episodes.
+  A playlist release is its tracks and the playlist, unless a track lives
+  outside the playlist's folder, when it is a mixtape and only the list
+  goes. A release is asked for by its own id only: `AlbumByID` also answers
+  to a track's, and deleting a release because a track's id was sent would
+  delete more than was named.
+  **A folder goes whole only when what is left in it is furniture**
+  (`folderGoes`, `leftover`): .nfo, checksums, cue sheets, logs, playlists,
+  subtitles, the files an operating system leaves, a release's sample
+  (named like one or in a Sample folder), and pictures **named or filed as
+  artwork** (cover, folder, poster, scan, a Covers or Scans folder…).
+  Anything else keeps the folder: another item of the library, a document,
+  an archive nothing indexed, a symlink (which could point anywhere), and —
+  the case the rule is written around — **photographs**: the last clip in a
+  folder of holiday pictures goes alone, `IMG_0001.jpg` naming no artwork.
+  Never a root, nothing outside the roots, no folder with a root inside it,
+  and nothing past `folderScanLimit` entries. A folder that goes puts the
+  one above it in question **only when it was part of a release** — a
+  disc's, a season's, `VIDEO_TS`, a Sample or Subs folder (`partOfARelease`)
+  — which carries a DVD up to its release folder and a show's seasons up to
+  the show; never from a release up into the folder it is filed in, which a
+  first version did, removing an emptied `TV` folder along with the last
+  show in it.
+  Every planned file is **in the plan**, including those inside a folder
+  that goes whole (`PlannedFile.InFolder`): the second look at a folder has
+  to know them, and a first version that counted them only with the folder
+  found a rar set's own volumes at execution, took them for strangers and
+  kept the folder.
+  **Only the whole library deletes** (`mayDelete`): not a face restricted to
+  some media, not a caller confined to part of the disk, and not a server
+  started with `-lock`, which now refuses deleting as it refuses changing
+  the directories. With no authentication anywhere, what a caller is shown
+  is the only thing that says who it is, and a view somebody was given does
+  not remove the owner's files. `/api/info` says `deletable` so the page
+  offers it only there; the handlers are the guarantee. Both requests want
+  a JSON body, which a page on another origin cannot send without a
+  preflight that is refused, and the token is only in the plan's answer,
+  which such a page cannot read.
+  The index is told at once (`Library.Remove` per removed path, which covers
+  containers and sidecars and notifies), so the grid loses the card before
+  the watcher's events arrive. Every deletion is logged at Info whatever
+  `-debug` says, with what was kept and why: it is the one thing this server
+  does that cannot be undone.
+  **Where it is offered**: a card's menu (right click, or a long press timed
+  by hand, since Safari on a phone sends no `contextmenu`; the tap the lift
+  would make is swallowed, and the next gesture clears that), the player's
+  delete button (which goes on to the next file, or closes), and a release
+  sheet's menu (which closes the sheet). The question takes the keyboard in
+  the capture phase at the window, before the player's own capturing
+  listener on the document, so Escape answers the question rather than
+  closing the player; Cancel has the focus.
 - **The seek bar shows the frame at the moment under the pointer**
   (`seekframe.go`, `GET /api/frame/{id}?t=&w=`; `seekframe.ts`, tested). The
   scrub sheet is ten frames, which is a tour of a film and not a way to find a

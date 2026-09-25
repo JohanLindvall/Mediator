@@ -111,6 +111,12 @@ export interface Album {
   formats?: string[];
 }
 
+export interface DeleteRequest {
+  kind: string;
+  id: string;
+  season?: number;
+}
+
 export interface Artist {
   id: string;
   name: string;
@@ -327,6 +333,30 @@ export interface InfoResponse {
   build: Build;
   capabilities: Capabilities;
   streamExpires?: number;
+  deletable?: boolean;
+}
+
+export interface DeletePlanResponse {
+  token: string;
+  title: string;
+  files: number;
+  folders: number;
+  items: number;
+  bytes: number;
+  paths: string[];
+  more?: number;
+  others?: string[];
+}
+
+export interface DeleteConfirm {
+  token: string;
+}
+
+export interface DeleteResult {
+  files: number;
+  folders: number;
+  bytes: number;
+  kept?: string[];
 }
 
 export interface PrefsResponse {

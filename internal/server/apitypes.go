@@ -168,6 +168,50 @@ type InfoResponse struct {
 	// StreamExpires is when that token stops working, in unix seconds, so a
 	// page left open overnight can fetch another before it matters.
 	StreamExpires int64 `json:"streamExpires,omitempty"`
+	// Deletable says this caller may delete things from the disk: the whole
+	// library, no confinement, and a server not started with -lock. The page
+	// offers deleting only where it is set; the handlers are the guarantee.
+	Deletable bool `json:"deletable,omitempty"`
+}
+
+// DeletePlanResponse is what deleting something would remove, for the
+// confirmation (POST /api/delete/plan). Nothing has been removed yet; the
+// token is what confirming sends back, and it deletes exactly this.
+type DeletePlanResponse struct {
+	Token string `json:"token"`
+	// Title is what is being deleted, in words.
+	Title string `json:"title"`
+	// Files counts every file that goes, those inside folders that go whole
+	// included; Folders the folders that go whole; Items the things in the
+	// library that go.
+	Files   int   `json:"files"`
+	Folders int   `json:"folders"`
+	Items   int   `json:"items"`
+	Bytes   int64 `json:"bytes"`
+	// Paths is what goes, as the listing names places: the folders that go
+	// whole first, each ending in a slash, then the files that go on their
+	// own — the first of them, with More saying how many are not listed.
+	Paths []string `json:"paths"`
+	More  int      `json:"more,omitempty"`
+	// Others are things not asked for that go with a container they share
+	// with something that was: the other films in a rar set, the other titles
+	// of a disc.
+	Others []string `json:"others,omitempty"`
+}
+
+// DeleteConfirm is the body of POST /api/delete: the plan being confirmed.
+type DeleteConfirm struct {
+	Token string `json:"token"`
+}
+
+// DeleteResult is what a confirmed deletion did.
+type DeleteResult struct {
+	Files   int   `json:"files"`
+	Folders int   `json:"folders"`
+	Bytes   int64 `json:"bytes"`
+	// Kept are what the plan named and was left in place, and why: a file
+	// that changed since it was shown, a folder that gained something.
+	Kept []string `json:"kept,omitempty"`
 }
 
 // CropResponse is the body of GET /api/crop/{id}: where the picture actually

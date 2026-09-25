@@ -1,7 +1,8 @@
 /**
  * Album detail sheet: cover, metadata, play/shuffle/queue actions and a track list.
  */
-import { albumZipUrl, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
+import { albumZipUrl, canDelete, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
+import { deleteWithConfirmation } from './deletedialog';
 import { holdScroll, releaseScroll } from './scrollhold';
 import { esc, formatBytes, formatDuration, hoverLines, mediaShape, releaseShape, trackTitle } from './format';
 import { icons } from './icons';
@@ -226,6 +227,13 @@ class AlbumPanel {
                 <a class="vo-menu-item" data-zip href="${albumZipUrl(this.albumId)}" download
                    title="Download everything in this release as one file">Download</a>
                 <button class="vo-menu-item" data-share title="Copy a link to this release">Copy a link</button>
+                ${
+                  // Only where this page may delete: the whole library, on a
+                  // server not locked. The server refuses everywhere else.
+                  canDelete()
+                    ? '<button class="vo-menu-item danger" data-delete title="Delete this release from the disk, after showing what goes">Delete release…</button>'
+                    : ''
+                }
               </div>
             </div>
           </div>
@@ -259,6 +267,14 @@ class AlbumPanel {
     sheet.querySelector('[data-share]')!.addEventListener('click', () => {
       this.toggleMore(false);
       void shareAlbum(this.albumId, a.name);
+    });
+    sheet.querySelector('[data-delete]')?.addEventListener('click', () => {
+      this.toggleMore(false);
+      void deleteWithConfirmation({ kind: 'album', id: this.albumId }).then((done) => {
+        // Gone from the disk is gone from the screen: the sheet would be
+        // describing a release that is no longer there.
+        if (done && done.files + done.folders > 0) this.close();
+      });
     });
     sheet.querySelector('[data-close]')!.addEventListener('click', () => this.close());
     sheet.querySelector('[data-playall]')!.addEventListener('click', () => this.onPrimary());

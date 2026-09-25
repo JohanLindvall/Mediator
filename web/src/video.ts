@@ -26,7 +26,9 @@ import {
   type Subtitle,
   qualityLadder,
   frameUrl,
+  canDelete,
 } from './api';
+import { deleteWithConfirmation } from './deletedialog';
 import { SeekFrames, momentAt, previewBox, previewLeft, type PreviewBox } from './seekframe';
 import {
   airPlaySupported,
@@ -1789,6 +1791,7 @@ class VideoOverlay {
       <div class="vo-top vo-fade">
         <div class="vo-title"></div>
         <a class="icon-btn" data-dl download title="Download">${icons.download}</a>
+        <button class="icon-btn" data-delete aria-label="Delete this file from the disk" title="Delete…" hidden>${icons.trash}</button>
         <button class="icon-btn" data-close aria-label="Close (Esc)">${icons.close}</button>
       </div>
       <div class="vo-controls vo-fade">
@@ -1900,6 +1903,10 @@ class VideoOverlay {
     this.centerFlash = this.q('.vo-center');
     this.titleEl = this.q('.vo-title');
     this.dlLink = this.q('[data-dl]');
+    // Deleting the file being watched, where this page may delete at all.
+    const del = this.q<HTMLButtonElement>('[data-delete]');
+    del.hidden = !canDelete();
+    del.addEventListener('click', () => void this.deleteCurrent());
     this.poster = this.q('[data-poster]');
     this.prep = this.q('[data-prep]');
     this.prepMsg = this.q('[data-prepmsg]');
@@ -2415,6 +2422,19 @@ class VideoOverlay {
    * was one. Items of other kinds in between are passed over: this viewer
    * has nothing to show for a picture or a track.
    */
+  /**
+   * Delete the file being watched, once the owner has seen what goes and
+   * said so — and go on to the next, or close where there is none: the file
+   * on screen is no longer on the disk.
+   */
+  private async deleteCurrent(): Promise<void> {
+    const it = this.item;
+    const done = await deleteWithConfirmation({ kind: 'item', id: it.id });
+    if (!done || done.files + done.folders === 0 || this.closed || this.item.id !== it.id) return;
+    const moved = await this.step(1);
+    if (!moved && !this.closed) this.close();
+  }
+
   private async step(dir: 1 | -1, o: { pastCredits?: boolean } = {}): Promise<boolean> {
     const src = this.opts.nav?.src;
     if (!src) return false;

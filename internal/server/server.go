@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -74,9 +75,14 @@ type Server struct {
 	// roots silently flipping back at the next restart.
 	rootsMu      sync.Mutex
 	prefsPersist bool
-	access       bool
-	mux          *http.ServeMux
-	transSem     chan struct{} // caps concurrent live transcodes
+	// deletes says the owner may delete things from the disk here, which
+	// -lock leaves off (delete.go); pendingDeletes are the plans handed out
+	// and not yet confirmed.
+	deletes        atomic.Bool
+	pendingDeletes deletePlans
+	access         bool
+	mux            *http.ServeMux
+	transSem       chan struct{} // caps concurrent live transcodes
 	// clientLog bounds how often a page may write into this log
 	// (clientlog.go), which is the one route where it can.
 	clientLog clientLogLimit
@@ -170,6 +176,8 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	s.mux.HandleFunc("GET /api/thumb/{id}", s.handleThumb)
 	s.mux.HandleFunc("GET /api/sprite/{id}", s.handleSprite)
 	s.mux.HandleFunc("GET /api/frame/{id}", s.handleFrame)
+	s.mux.HandleFunc("POST /api/delete/plan", s.handleDeletePlan)
+	s.mux.HandleFunc("POST /api/delete", s.handleDelete)
 	s.mux.HandleFunc("PUT /api/flags", s.handleFlagsBatch)
 	s.mux.HandleFunc("PUT /api/flags/{id}", s.handleFlagsPut)
 	s.mux.HandleFunc("GET /api/state", s.handleStateAll)
@@ -281,6 +289,7 @@ func (s *Server) FindHardware() {
 
 func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 	token, expires, _ := s.sign.mint(time.Now())
+	deletable, _ := s.mayDelete(r)
 	ladder := make([]Quality, 0, len(qualityTiers))
 	for _, t := range qualityTiers {
 		ladder = append(ladder, Quality{Kbps: t.kbps, Height: t.height})
@@ -294,6 +303,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		Confined:      pathsOf(r).Restricted(),
 		Build:         buildOf(),
 		Capabilities:  s.capabilities(),
+		Deletable:     deletable,
 	})
 }
 
