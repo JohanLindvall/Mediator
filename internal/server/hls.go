@@ -1347,6 +1347,23 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 	// cuts from there, and whatever it writes before the first whole
 	// segment is thrown away.
 	seek, landed := tb.starts[k], tb.starts[k]
+	trimAt := 0.0
+	if tb.grid && k > 0 {
+		// A re-encode seeks accurately to the grid point — which assumes the
+		// demuxer lands at or before it, and not every one does (gridSeek).
+		// Where this one lands past it, the run seeks earlier and trims.
+		early, err := gridSeek(tb.starts[k], func(at float64) (float64, error) {
+			return h.seekLanding(ctx, s.item, at)
+		})
+		switch {
+		case err != nil:
+			h.log.Debug("hls: where a seek lands could not be read; seeking to the boundary", "path", s.item.Rel, "at", tb.starts[k], "err", err)
+		case early < tb.starts[k]:
+			seek, trimAt = early, tb.starts[k]
+			h.log.Debug("hls: this file's seeks land past where they are asked; seeking earlier and trimming",
+				"path", s.item.Rel, "at", tb.starts[k], "seek", early)
+		}
+	}
 	if !tb.grid && k > 0 {
 		var err error
 		seek, landed, err = h.landing(ctx, s.item, tb.starts[k])
@@ -1372,7 +1389,7 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 	}
 
 	for attempt := 1; ; attempt++ {
-		outcome := h.attemptTable(ctx, s, r, seek, times, to)
+		outcome := h.attemptTable(ctx, s, r, seek, trimAt, times, to)
 		if outcome == attemptAgain && attempt < hlsMaxAttempts && r.state.produced == 0 {
 			h.clearRun(s, r)
 			r.seen = 0
@@ -1383,7 +1400,7 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 }
 
 // attemptTable is one ffmpeg over a run.
-func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek float64, times []float64, to float64) attemptOutcome {
+func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek, trimAt float64, times []float64, to float64) attemptOutcome {
 	it := s.item
 	repaired := aspects.has(it)
 	plan, err := planConversion(ctx, h.ffmpeg, it, seek, s.copyVideo, s.audio, s.q, repaired, true, h.log)
@@ -1392,6 +1409,9 @@ func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek f
 		return attemptDone
 	}
 	defer plan.close()
+	if trimAt > 0 {
+		plan.trimTo(trimAt, it.ACodec != "")
+	}
 	r.hardware = plan.hardware
 	pattern := fmt.Sprintf("run%d-seg%%05d.ts", r.seq)
 	args := append(plan.args, hlsTableArgs(s.dir, r.list, pattern, r.fileStart, times, s.table.grid, to)...)
@@ -1640,6 +1660,112 @@ func (h *HLS) landing(ctx context.Context, it library.Item, boundary float64) (s
 		return 0, 0, fmt.Errorf("a seek to %.3f landed past it, at %.3f", seek, landed)
 	}
 	return seek, landed, nil
+}
+
+// gridSeekStep is how far back the first earlier seek is tried, and each
+// after it twice as far: a keyframe every ten seconds is the long end of
+// ordinary, and a file with them further apart takes a step or two more.
+const gridSeekStep = 10.0
+
+// gridSeek finds an input seek that lands at or before a grid point.
+//
+// A re-encoded run seeks accurately to the point, which trusts the demuxer to
+// land on the keyframe at or before it and to decode forward from there.
+// Not every one does: a Windows Media file's index sent a seek to 328 s to
+// the keyframe at 332.56 — after it — so the run's first frame was 332.56,
+// the keyframes it forced four seconds apart from there, and the first
+// segment ended at 336.56 where the table said 332. The session was given up
+// as the table promised, and the film could not be watched past a seek.
+//
+// So where a seek to the point lands past it, the seek is tried further back
+// — gridSeekStep, then twice that and on, to the film's start — until one
+// lands at or before it; the run seeks there and trims to the point
+// (conversion.trimTo). A file whose seeks land where they should costs one
+// packet read and changes nothing. land says where a seek lands.
+func gridSeek(point float64, land func(float64) (float64, error)) (float64, error) {
+	landed, err := land(point)
+	if err != nil {
+		return point, err
+	}
+	if landed <= point+hlsLandTol {
+		return point, nil
+	}
+	for back := gridSeekStep; ; back *= 2 {
+		seek := math.Max(point-back, 0)
+		landed, err = land(seek)
+		if err != nil {
+			return point, err
+		}
+		if landed <= point+hlsLandTol || seek == 0 {
+			return seek, nil
+		}
+	}
+}
+
+// seekLanding asks ffmpeg where an input seek lands: the time of the first
+// packet of the picture it copies out after the same seek a conversion
+// makes. Read from a framecrc listing, which prints every packet's time
+// whatever the codec — the transport stream probe cannot see a WMV picture
+// at all, which becomes a stream of private data there, and those are the
+// files this is for.
+func (h *HLS) seekLanding(ctx context.Context, it library.Item, seek float64) (float64, error) {
+	input, _, err := convertInput(it, 0)
+	if err != nil {
+		return 0, err
+	}
+	if input.pipe != nil {
+		_ = input.pipe.Close()
+		return 0, errors.New("content read through a pipe cannot be seeked")
+	}
+	ctx, cancel := context.WithTimeout(ctx, hlsProbeBudget)
+	defer cancel()
+	args := append(ffmpegBase(), "-ss", strconv.FormatFloat(seek, 'f', 3, 64), "-copyts")
+	args = append(args, input.args...)
+	args = append(args, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "framecrc", "pipe:1")
+	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if pts, ok := framecrcFirstPTS(out); ok {
+		return pts, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return 0, errors.New("the probe read no packet")
+}
+
+// framecrcFirstPTS reads the first packet's presentation time, in seconds,
+// out of a framecrc listing: "#tb <stream>: <num>/<den>" lines give each
+// stream's time base, and then a line a packet, "stream, dts, pts, ...".
+func framecrcFirstPTS(out []byte) (float64, bool) {
+	tbs := map[string]float64{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "#tb "); ok {
+			stream, tb, ok := strings.Cut(rest, ":")
+			num, den, ok2 := strings.Cut(strings.TrimSpace(tb), "/")
+			n, err1 := strconv.ParseFloat(num, 64)
+			d, err2 := strconv.ParseFloat(den, 64)
+			if ok && ok2 && err1 == nil && err2 == nil && d != 0 {
+				tbs[strings.TrimSpace(stream)] = n / d
+			}
+			continue
+		}
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		f := strings.Split(line, ",")
+		if len(f) < 3 {
+			continue
+		}
+		tb, ok := tbs[strings.TrimSpace(f[0])]
+		pts, err := strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
+		if !ok || err != nil {
+			return 0, false
+		}
+		return pts * tb, true
+	}
+	return 0, false
 }
 
 // probe copies one packet out from a seek and reads its time.

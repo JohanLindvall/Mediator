@@ -4899,7 +4899,28 @@ Serving details worth knowing before "fixing" them:
   the file it was writing — and every line is judged against the table
   (`verify`; the first line's start always reads zero, so only its end
   counts): a cut anywhere else ends the session rather than serving a
-  playlist that has become a lie. Files are named per run
+  playlist that has become a lie. **A re-encoded run is asked where its
+  seek lands too** (`gridSeek`, `seekLanding`, tested), which it used not
+  to be: it seeks accurately to the grid point, and the forced keyframes
+  count from the first frame that reaches the encoder — so the whole grid
+  rests on the demuxer landing at or before the point and decoding forward.
+  A Windows Media file's index sent a seek to 328 s to the keyframe at
+  332.56, *after* it; the run began there, forced its keyframes four
+  seconds apart from 332.56, the first segment ended at 336.56 where the
+  table said 332, and the session was given up as it should be — which to
+  the viewer was a film that would not play past any seek. Where a seek to
+  the point lands past it, earlier ones are tried (`gridSeekStep`, doubling,
+  down to the start) until one lands at or before, and the run seeks there
+  and trims the picture's chain and the soundtrack to the point
+  (`conversion.trimTo`) — a trim in the graph, since a seek on the output
+  side starts the clock again at nought and the segments must keep the
+  film's. Measured on that file: every segment then on the grid, a keyframe
+  on each boundary, the soundtrack within one frame of the picture. The
+  landing is read from a **framecrc** listing (`framecrcFirstPTS`), not the
+  transport-stream probe the copies use, because a WMV picture copied into a
+  transport stream becomes a stream of private data that probe cannot see —
+  and those are exactly the files this is for. A file whose seeks land where
+  they should pays one packet read and is otherwise untouched. Files are named per run
   (`run<n>-seg<k>.ts`) so a later run never writes over what an earlier one
   made and is serving; the manifest (`done.txt`) is the record a later
   process adopts. A request for a segment not yet made waits on the run

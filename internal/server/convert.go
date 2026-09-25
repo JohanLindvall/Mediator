@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -250,6 +251,34 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		c.args = append(c.args, "-avoid_negative_ts", "make_zero")
 	}
 	return c, nil
+}
+
+// trimTo makes what is encoded begin at t on the film's clock, for a run
+// whose input seek had to land earlier than that (gridSeek): the picture's
+// chain and the soundtrack are each trimmed to t, which keeps their
+// timestamps where a seek on the output side would start the clock again at
+// nought — and a segmented run has to keep the film's clock to join the
+// segments around it. sound says the file has a soundtrack to trim.
+//
+// It is the first frame through the trim that the forced keyframes count
+// from, so a run trimmed to a grid point is on the grid again.
+func (c *conversion) trimTo(t float64, sound bool) {
+	at := strconv.FormatFloat(t, 'f', 3, 64)
+	for i := 0; i+1 < len(c.args); i++ {
+		if c.args[i] == "-vf" {
+			c.args[i+1] = "trim=start=" + at + "," + c.args[i+1]
+			break
+		}
+	}
+	if !sound {
+		return
+	}
+	for i, a := range c.args {
+		if a == "-c:a" {
+			c.args = slices.Insert(c.args, i, "-af", "atrim=start="+at)
+			return
+		}
+	}
 }
 
 // gridKeyframeExpr makes the encoder put a keyframe on the first frame at

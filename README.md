@@ -332,7 +332,10 @@ Go binary with the TypeScript frontend embedded.
   or on a four-second grid the encoder is held to for a re-encoded one — so
   the player shows the film's real length and position, iOS's own fullscreen
   player included, and seeks anywhere in it natively; the segments are made
-  as they are asked for, from wherever a seek lands. Where the container
+  as they are asked for, from wherever a seek lands — and a file whose seeks
+  land after the moment asked for (some Windows Media files' index does this)
+  is seeked earlier and trimmed to the moment, so it seeks as well as any
+  other. Where the container
   keeps no keyframe index this can read (anything but Matroska and MP4) a
   copied conversion falls back to a playlist that grows with it, and the
   player is told which it got (`X-Media-Timeline`). Everything else is
