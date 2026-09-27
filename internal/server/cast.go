@@ -384,8 +384,31 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	}
 
 	meta := s.castMeta(r, d, it, src, mimeType)
-	if err := d.SetURI(ctx, src, meta); err != nil {
+	// A set busy where it is — the measured one sits in a state whose only
+	// action is Stop — refuses a new file until it is stopped, so it is
+	// stopped and asked again (dlna.SetURIFromAnyState).
+	stopped, err := d.SetURIFromAnyState(ctx, src, meta)
+	if stopped {
+		s.log.Info("cast: stopped the set first, as it would not take a file from where it was",
+			"renderer", d.Name, "item", it.Name)
+	}
+	if err != nil {
 		if s.castTaken(ctx, w, r, d, it) {
+			return
+		}
+		// A refusal is an answer: the set has said no, and asking it for six
+		// seconds whether it is showing the file after all only delays
+		// saying so. One still refusing after it was stopped is stuck
+		// somewhere a Stop does not reach, and its own remote is what
+		// reaches it.
+		var refusal *dlna.Fault
+		if errors.As(err, &refusal) {
+			what := "did not accept the file"
+			if refusal.Code == dlna.TransitionNotAvailable {
+				what = "is busy and would not take the file"
+			}
+			s.log.Warn("cast failed", "renderer", d.Name, "item", it.Name, "err", err)
+			http.Error(w, castFault(d.Name, what, err), http.StatusBadGateway)
 			return
 		}
 		// A set that has not answered has not necessarily failed. Measured

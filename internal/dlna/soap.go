@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -78,12 +79,53 @@ func (r *Renderer) call(ctx context.Context, service, action string, args ...arg
 		// A refusal carries its reason in the same envelope; saying which
 		// code came back is the difference between a fault we can look up
 		// and "it did not work".
+		f := &Fault{Renderer: r.Name, Action: action, Description: resp.Status}
 		if code := out["errorCode"]; code != "" {
-			return nil, fmt.Errorf("dlna: %s refused %s: %s %s", r.Name, action, code, out["errorDescription"])
+			f.Description = out["errorDescription"]
+			if n, err := strconv.Atoi(code); err == nil {
+				f.Code = n
+			} else {
+				f.Description = strings.TrimSpace(code + " " + f.Description)
+			}
 		}
-		return nil, fmt.Errorf("dlna: %s refused %s: %s", r.Name, action, resp.Status)
+		return nil, f
 	}
 	return out, nil
+}
+
+// Fault is a set's refusal of one action: the reason it gave, in the same
+// envelope an answer would have come in. It is an answer, which silence is
+// not — a set that refused has said so, where one that did not reply may
+// still be doing what it was asked — and the code is what a caller can act
+// on: 701 says the transport cannot get there from where it is, which a Stop
+// cures, where 714 says the set will not play this kind of file, which
+// nothing here can.
+type Fault struct {
+	Renderer string
+	Action   string
+	// Code is the UPnP errorCode, 0 where the set answered with an HTTP
+	// status and no envelope.
+	Code int
+	// Description is the set's errorDescription, or the HTTP status where
+	// it gave none.
+	Description string
+}
+
+func (f *Fault) Error() string {
+	if f.Code != 0 {
+		return fmt.Sprintf("dlna: %s refused %s: %d %s", f.Renderer, f.Action, f.Code, f.Description)
+	}
+	return fmt.Sprintf("dlna: %s refused %s: %s", f.Renderer, f.Action, f.Description)
+}
+
+// TransitionNotAvailable is UPnP's 701: the action cannot be taken from the
+// state the transport is in.
+const TransitionNotAvailable = 701
+
+// Refused reports whether err is a set's refusal with the given UPnP code.
+func Refused(err error, code int) bool {
+	var f *Fault
+	return errors.As(err, &f) && f.Code == code
 }
 
 // outArgs collects every element in the envelope that holds text, which for
@@ -125,6 +167,50 @@ func (r *Renderer) SetURI(ctx context.Context, uri, metadata string) error {
 	_, err := r.call(ctx, avTransport, "SetAVTransportURI",
 		arg{"InstanceID", "0"}, arg{"CurrentURI", uri}, arg{"CurrentURIMetaData", metadata})
 	return err
+}
+
+// How a set that would not take a new file from where it was is asked again
+// once it has been stopped: at once, then this far apart, this many times
+// more. Variables only so a test need not wait them out.
+var (
+	stopSettle  = 400 * time.Millisecond
+	stopRetries = 5
+)
+
+// SetURIFromAnyState is SetURI for a set that may be in the middle of
+// something else, and it reports whether the set had to be stopped first.
+//
+// The transport is a state machine, and a set may refuse a new file from a
+// state it cannot leave that way — UPnP's 701, "Transition not available".
+// Measured on a television: a cast was refused with 701 and worked on the
+// second press, only because the page's clean-up after the failure had sent
+// a Stop; and handed a file it could not open, the same set sat for minutes
+// in a state of its maker's own (LG_TRANSITIONING) whose one available
+// action is Stop — Play hung there, and a new file would have been refused.
+// So that one refusal is answered by doing what the set asks: stop, and
+// hand it the file again. Any other refusal is the set's word about the file
+// and comes back as it came.
+func (r *Renderer) SetURIFromAnyState(ctx context.Context, uri, metadata string) (stopped bool, err error) {
+	err = r.SetURI(ctx, uri, metadata)
+	if !Refused(err, TransitionNotAvailable) {
+		return false, err
+	}
+	if serr := r.Stop(ctx); serr != nil {
+		return false, fmt.Errorf("%w (and it would not stop: %v)", err, serr)
+	}
+	for try := 0; ; try++ {
+		err = r.SetURI(ctx, uri, metadata)
+		// A set on its way to stopped can refuse once more on the way; one
+		// that goes on refusing is stuck somewhere a Stop does not reach.
+		if !Refused(err, TransitionNotAvailable) || try >= stopRetries {
+			return true, err
+		}
+		select {
+		case <-ctx.Done():
+			return true, ctx.Err()
+		case <-time.After(stopSettle):
+		}
+	}
 }
 
 // SetNextURI tells the set what to play *after* the current file, which is

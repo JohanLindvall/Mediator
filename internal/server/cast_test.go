@@ -1,9 +1,21 @@
 package server
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/JohanLindvall/Mediator/internal/dlna"
 	"github.com/JohanLindvall/Mediator/internal/library"
 )
 
@@ -211,5 +223,110 @@ func TestAnIndexAtTheBackIsWorthTheCopy(t *testing.T) {
 	it.MoovLate = true
 	if !remuxable(it) {
 		t.Error("an MP4 whose index sits behind its data was refused the copy that moves it")
+	}
+}
+
+// fakeSet is a television on a port of its own: a device description, and
+// SOAP answered by refuse (a UPnP code, or 0 to answer normally). It records
+// the actions it was asked, in order.
+type fakeSet struct {
+	mu      sync.Mutex
+	actions []string
+	refuse  func(action string, asked []string) int
+}
+
+func (f *fakeSet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		fmt.Fprint(w, `<?xml version="1.0"?><root xmlns="urn:schemas-upnp-org:device-1-0"><device>`+
+			`<friendlyName>Sitting Room</friendlyName><UDN>uuid:sitting-room</UDN><serviceList>`+
+			`<service><serviceType>urn:schemas-upnp-org:service:AVTransport:1</serviceType><controlURL>/avt</controlURL></service>`+
+			`</serviceList></device></root>`)
+		return
+	}
+	_, action, _ := strings.Cut(strings.Trim(r.Header.Get("SOAPAction"), `"`), "#")
+	f.mu.Lock()
+	f.actions = append(f.actions, action)
+	code := f.refuse(action, f.actions)
+	f.mu.Unlock()
+	if code != 0 {
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>`+
+			`<faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring><detail><UPnPError xmlns="urn:schemas-upnp-org:control-1-0">`+
+			`<errorCode>%d</errorCode><errorDescription>Transition not available</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>`, code)
+		return
+	}
+	fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>`+
+		`<u:%sResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1"></u:%sResponse></s:Body></s:Envelope>`, action, action)
+}
+
+func (f *fakeSet) asked() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return strings.Join(f.actions, ",")
+}
+
+// castTo stands a fake set up, points the server at it, and plays one clip on
+// it, answering the status and body.
+func castTo(t *testing.T, set *fakeSet) (int, string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clip.mkv")
+	writeMKV(t, path, 2)
+	ts, srv, _ := serverUnderTest(t, dir)
+	u, _ := url.Parse(ts.URL)
+	port, _ := strconv.Atoi(u.Port())
+	srv.SetLocalPort(port)
+	fake := httptest.NewServer(set)
+	t.Cleanup(fake.Close)
+	d, err := dlna.Describe(context.Background(), fake.URL+"/desc.xml")
+	if err != nil || d == nil {
+		t.Fatalf("describing the fake set: %v", err)
+	}
+	srv.cast.discover = func(context.Context, time.Duration) []*dlna.Renderer { return []*dlna.Renderer{d} }
+	res, err := http.Post(ts.URL+"/api/renderers/"+d.ID+"/play/"+library.PathID(path), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(res.Body)
+	return res.StatusCode, strings.TrimSpace(string(body))
+}
+
+// The measured case end to end: a set that will take no new file from where
+// it is until it is stopped is stopped, handed the file again and played —
+// the cast that failed on the first press and worked on the second, working
+// on the first.
+func TestABusySetIsStoppedAndThenPlays(t *testing.T) {
+	set := &fakeSet{refuse: func(action string, asked []string) int {
+		if action == "SetAVTransportURI" && !slices.Contains(asked, "Stop") {
+			return 701
+		}
+		return 0
+	}}
+	code, body := castTo(t, set)
+	if code != http.StatusOK {
+		t.Fatalf("the cast answered %d %q", code, body)
+	}
+	if got, want := set.asked(), "SetAVTransportURI,Stop,SetAVTransportURI,Play"; got != want {
+		t.Errorf("the set was asked %s, want %s", got, want)
+	}
+}
+
+// A refusal is an answer. One that outlasts the stop is reported at once and
+// in words that say what to do — never asked about for six seconds as though
+// the set had merely gone quiet, which is what silence gets.
+func TestARefusalIsNotWaitedOnAsSilence(t *testing.T) {
+	set := &fakeSet{refuse: func(action string, _ []string) int {
+		if action == "SetAVTransportURI" {
+			return 701
+		}
+		return 0
+	}}
+	code, body := castTo(t, set)
+	if code != http.StatusBadGateway || body != "Sitting Room is busy and would not take the file" {
+		t.Errorf("the cast answered %d %q", code, body)
+	}
+	if asked := set.asked(); strings.Contains(asked, "GetTransportInfo") || strings.Contains(asked, "Play") {
+		t.Errorf("a set that refused was asked %s: polled as if silent, or played regardless", asked)
 	}
 }

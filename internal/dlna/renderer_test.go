@@ -2,6 +2,7 @@ package dlna
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,9 @@ type fakeRenderer struct {
 	actions []string                   // every action asked, in order
 	bodies  []string                   // the raw request bodies, for argument checks
 	answer  func(action string) string // inner response elements per action
+	// refuse answers an action with a UPnP fault instead, where it returns
+	// a code: the envelope and the 500 a set sends.
+	refuse func(action string) (code int, description string)
 }
 
 func (f *fakeRenderer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +33,16 @@ func (f *fakeRenderer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	_, action, _ := strings.Cut(soapAction, "#")
 	f.actions = append(f.actions, action)
 	f.bodies = append(f.bodies, string(body))
+	if f.refuse != nil {
+		if code, desc := f.refuse(action); code != 0 {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>`+
+				`<faultcode>s:Client</faultcode><faultstring>UPnPError</faultstring><detail>`+
+				`<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>%d</errorCode>`+
+				`<errorDescription>%s</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>`, code, desc)
+			return
+		}
+	}
 	inner := ""
 	if f.answer != nil {
 		inner = f.answer(action)
@@ -134,5 +148,123 @@ func TestVolumeRoundTrip(t *testing.T) {
 	}
 	if got := r.Volume(context.Background()); got != 37 {
 		t.Errorf("volume %d, want 37 (whitespace trimmed)", got)
+	}
+}
+
+// A refusal comes back as what it is — the set's code and reason — so a
+// caller can tell "not from here" from "not this file", and the words a log
+// line has always carried are unchanged.
+func TestARefusalCarriesItsCode(t *testing.T) {
+	f := &fakeRenderer{t: t, refuse: func(action string) (int, string) {
+		return TransitionNotAvailable, "Transition not available"
+	}}
+	r := testRenderer(t, f)
+	err := r.SetURI(context.Background(), "http://x/film", "")
+	var fault *Fault
+	if !errors.As(err, &fault) || fault.Code != 701 || fault.Action != "SetAVTransportURI" {
+		t.Fatalf("got %v, want a 701 fault for SetAVTransportURI", err)
+	}
+	if want := "dlna: Sitting Room refused SetAVTransportURI: 701 Transition not available"; err.Error() != want {
+		t.Errorf("message %q, want %q", err.Error(), want)
+	}
+	if !Refused(err, TransitionNotAvailable) || Refused(err, 714) {
+		t.Error("Refused does not read the code")
+	}
+	if Refused(errors.New("dlna: timed out"), TransitionNotAvailable) {
+		t.Error("silence read as a refusal")
+	}
+}
+
+// The measured case: a set sitting where the one action it offers is Stop
+// refuses a new file with 701 until it is stopped, and then takes it.
+func TestASetThatCannotTakeAFileFromWhereItIsIsStoppedFirst(t *testing.T) {
+	stopped := false
+	f := &fakeRenderer{t: t}
+	f.refuse = func(action string) (int, string) {
+		switch action {
+		case "Stop":
+			stopped = true
+		case "SetAVTransportURI":
+			if !stopped {
+				return TransitionNotAvailable, "Transition not available"
+			}
+		}
+		return 0, ""
+	}
+	r := testRenderer(t, f)
+	didStop, err := r.SetURIFromAnyState(context.Background(), "http://x/film", "")
+	if err != nil || !didStop {
+		t.Fatalf("got stopped=%v err=%v, want the file taken after a stop", didStop, err)
+	}
+	if got, want := strings.Join(f.actions, ","), "SetAVTransportURI,Stop,SetAVTransportURI"; got != want {
+		t.Errorf("asked %s, want %s", got, want)
+	}
+}
+
+// Every other answer is left exactly as it was: a set that takes the file is
+// not stopped, and one that refuses the file itself is not stopped either —
+// stopping it would end whatever it was playing for a refusal no stop cures.
+func TestOnlyATransitionRefusalStopsTheSet(t *testing.T) {
+	f := &fakeRenderer{t: t}
+	r := testRenderer(t, f)
+	if didStop, err := r.SetURIFromAnyState(context.Background(), "http://x/film", ""); err != nil || didStop {
+		t.Fatalf("a set that took the file: stopped=%v err=%v", didStop, err)
+	}
+	if len(f.actions) != 1 {
+		t.Errorf("asked %v, want one SetAVTransportURI", f.actions)
+	}
+
+	f = &fakeRenderer{t: t, refuse: func(action string) (int, string) {
+		if action == "SetAVTransportURI" {
+			return 714, "Illegal MIME-type"
+		}
+		return 0, ""
+	}}
+	r = testRenderer(t, f)
+	didStop, err := r.SetURIFromAnyState(context.Background(), "http://x/film", "")
+	if didStop || !Refused(err, 714) {
+		t.Fatalf("a refused file: stopped=%v err=%v, want the 714 as it came", didStop, err)
+	}
+	if len(f.actions) != 1 {
+		t.Errorf("asked %v, want no Stop for a refusal a Stop does not cure", f.actions)
+	}
+}
+
+// A set that goes on refusing after the stop is asked a bounded number of
+// times, and the answer is still its refusal; one that will not even stop
+// says both.
+func TestASetStuckPastAStopIsGivenUpOn(t *testing.T) {
+	defer func(d time.Duration, n int) { stopSettle, stopRetries = d, n }(stopSettle, stopRetries)
+	stopSettle, stopRetries = time.Millisecond, 3
+
+	f := &fakeRenderer{t: t, refuse: func(action string) (int, string) {
+		if action == "SetAVTransportURI" {
+			return TransitionNotAvailable, "Transition not available"
+		}
+		return 0, ""
+	}}
+	r := testRenderer(t, f)
+	didStop, err := r.SetURIFromAnyState(context.Background(), "http://x/film", "")
+	if !didStop || !Refused(err, TransitionNotAvailable) {
+		t.Fatalf("stopped=%v err=%v, want the refusal after a stop", didStop, err)
+	}
+	// The first ask, the stop, then the ask after it and three more.
+	if got := strings.Count(strings.Join(f.actions, ","), "SetAVTransportURI"); got != 1+1+3 {
+		t.Errorf("asked for the file %d times (%v), want 5", got, f.actions)
+	}
+
+	f = &fakeRenderer{t: t, refuse: func(action string) (int, string) {
+		if action == "SetAVTransportURI" {
+			return TransitionNotAvailable, "Transition not available"
+		}
+		return 501, "Action failed"
+	}}
+	r = testRenderer(t, f)
+	didStop, err = r.SetURIFromAnyState(context.Background(), "http://x/film", "")
+	if didStop || !Refused(err, TransitionNotAvailable) || !strings.Contains(err.Error(), "would not stop") {
+		t.Fatalf("a set that will not stop: stopped=%v err=%v", didStop, err)
+	}
+	if got, want := strings.Join(f.actions, ","), "SetAVTransportURI,Stop"; got != want {
+		t.Errorf("asked %s, want %s: a set that will not stop is not asked again", got, want)
 	}
 }

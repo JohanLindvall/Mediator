@@ -996,6 +996,15 @@ failed to see can still be paused, seeked and handed the next track. One that
 really is off fails the command instead, which is what the viewer is told
 about anyway.
 
+**A television busy where it is is stopped first.** A set's player can be
+left somewhere it takes no new file from — measured, one handed a file it
+could not open sat for minutes in a state whose only available action is
+Stop — and there a cast is refused ("Transition not available") and used to
+work only on the second press, after the page had stopped the set. The
+server does what the set asks now: on that refusal it stops the set and
+hands it the file again. A set still refusing after that is reported as busy
+straight away, since its own remote is what reaches it.
+
 **Two people can reach for the same television**, and nothing here stops
 them: the set answers whoever spoke to it last, and somebody with the remote
 in their hand is assumed throughout. What this server does about it is make
@@ -1267,7 +1276,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET/PUT/DELETE /api/state/{id}`, `GET /api/state` | Playback positions, filtered by face and paths like everything else |
 | `GET /api/renderers`                      | The DLNA renderers on the network (`?fresh=1` searches again) |
 | `GET /api/renderers/{rid}`                | Where that set has got to: transport state, position, duration |
-| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one sidecar subtitle (`sub=off` for none) and one soundtrack; 409 where another request has taken that set meanwhile — the newest press drives it and the older one stops talking to it |
+| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one sidecar subtitle (`sub=off` for none) and one soundtrack; 409 where another request has taken that set meanwhile — the newest press drives it and the older one stops talking to it. A set that refuses a new file from where it is (UPnP 701) is stopped and asked again |
 | `POST /api/renderers/{rid}/next/{id}?audio=` | Queue what follows on the set itself, so a track boundary costs no silence; 501 where the renderer will not |
 | `POST /api/renderers/{rid}/control`       | `{action: play\|pause\|stop\|seek\|volume, seconds, volume}` |
 | `GET /api/events`                         | Server-sent library change events        |

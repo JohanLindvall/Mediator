@@ -3465,7 +3465,30 @@ set that has gone away should be given up on in seconds, and no more than
   while the film was already on screen. Reporting failure then also lost the
   seek that follows, so the film started from the beginning. `showing` asks
   the set what it is holding instead of believing the silence, and the seek
-  goes ahead.
+  goes ahead. **That is for silence only**: a refusal is an answer
+  (`dlna.Fault`, the set's own UPnP code and words), and six seconds of asking
+  a set that has said no whether it took the file after all was six seconds
+  of spinner before the same "did not accept the file".
+  **A set busy where it is is stopped, and handed the file again**
+  (`dlna.SetURIFromAnyState`). A transport is a state machine and may refuse a
+  new file from a state it cannot leave that way — UPnP's 701, "Transition
+  not available". Measured on a television: a cast was refused with 701 and
+  worked on the second press, only because the page's clean-up after the
+  failure (`endCast`) had sent a Stop; and later the same evening, handed a
+  file it could not open, the set sat for minutes in a state of its maker's
+  own (`LG_TRANSITIONING`) whose `GetCurrentTransportActions` offered one
+  action, Stop — the Play sent after the file hung for its whole eight
+  seconds, and the page's Stop behind it for five more. So that one refusal
+  is answered by doing what the set asks: stop, and ask again, at once and
+  then `stopSettle` apart `stopRetries` more times, since a set on its way to
+  stopped can refuse once more on the way. Nothing else stops a set: a set
+  that takes the file is not touched, and one refusing the file itself (714,
+  a type it will not play) keeps playing whatever it was — a Stop cures
+  nothing there. One that goes on refusing after the stop is stuck where a
+  Stop does not reach, and is reported as **busy** at once, its own remote
+  being what reaches it. Reactive rather than a Stop before every cast: a set
+  that takes a new file while playing another is left to do so, and the cost
+  where it does not is one quick refusal.
   **The queue is this side's business.** A renderer knows nothing of what
   follows what it was given, so the bar hands it the next track *in advance*
   (`SetNextAVTransportURI`, optional in the specification): the set opens it

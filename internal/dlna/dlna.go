@@ -288,6 +288,12 @@ type xmlRoot struct {
 	Device xmlDevice `xml:"device"`
 }
 
+// Describe is describe for a location learnt some other way than a search:
+// a test standing a set up on a port of its own, which no multicast finds.
+func Describe(ctx context.Context, location string) (*Renderer, error) {
+	return describe(ctx, location)
+}
+
 // describe fetches a device description and turns it into a Renderer, or
 // nothing where the device has no transport to drive.
 func describe(ctx context.Context, loc string) (*Renderer, error) {
