@@ -27,8 +27,8 @@ const (
 )
 
 const (
-	// watchFloorSec is how far in it has to have got to count as begun.
-	watchFloorSec = 5.0
+	// WatchFloorSec is how far in it has to have got to count as begun.
+	WatchFloorSec = 5.0
 	// WatchedFraction is how much of a file counts as all of it. Credits
 	// run, players stop short, and nobody wants a film they finished last
 	// night sitting in "in progress" for the sake of forty seconds.
@@ -44,7 +44,7 @@ type Watch struct {
 
 // State reduces a saved position to what the listing asks about.
 func (w Watch) State() WatchState {
-	if w.Len <= 0 || w.Pos < watchFloorSec {
+	if w.Len <= 0 || w.Pos < WatchFloorSec {
 		return WatchNone
 	}
 	if w.Pos/w.Len > WatchedFraction {

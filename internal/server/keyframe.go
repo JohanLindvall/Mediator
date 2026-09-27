@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -85,7 +86,7 @@ func firstPTS(out string, t float64) (float64, bool) {
 		if err != nil {
 			continue
 		}
-		if v < 0 || v > t {
+		if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 || v > t {
 			return 0, false
 		}
 		return v, true
@@ -103,10 +104,7 @@ func (s *Server) handleKeyframe(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	if t < 0 || t > 1e7 {
-		t = 0
-	}
+	t := mediaSeconds(r.URL.Query().Get("t"))
 	start := t
 	if !it.Archived() {
 		start = streamStart(r.Context(), s.thumbs.FFmpegPath(), it.Path, t)

@@ -429,3 +429,7 @@ export interface CastControl {
 }
 
 export const SPRITE: SpriteLayout = {"frames":10,"cols":5,"rows":2,"frameWidth":320,"minDurationMs":30000};
+
+export const START_FLOOR_S: number = 5;
+
+export const WATCHED_FRACTION: number = 0.96;

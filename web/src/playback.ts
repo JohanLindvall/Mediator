@@ -4,9 +4,12 @@
  * Two predicates, and both decide which route a viewer takes rather than how
  * something looks: get either wrong and the symptom is not a wrong answer but
  * a file that will not play. Both have been wrong in exactly that way, which
- * is why they live here — no imports, nothing from the DOM at the top level —
+ * is why they live here — nothing from the DOM at the top level —
  * so they can be tested against real agent strings and real file names.
  */
+
+import { START_FLOOR_S, WATCHED_FRACTION } from './types.gen.ts';
+export { START_FLOOR_S, WATCHED_FRACTION };
 
 /**
  * Whether a user agent's engine plays HLS from a plain `<video src>`.
@@ -287,17 +290,6 @@ export function hlsClock(header: string | null | undefined): 'film' | 'session' 
 export function playButtonIcon(playing: boolean): 'pause' | 'play' {
   return playing ? 'pause' : 'play';
 }
-
-/**
- * The two thresholds the grid, the player and the server all read a saved
- * position by. They are the library's own (`watchFloorSec` and
- * `WatchedFraction` in watched.go): under five seconds in is not a start,
- * and past 96% is finished. One pair on this side too, because the grid's
- * checkmark and the player's offer to resume used to disagree by a percent —
- * a film at 96.5% wore the tick on its tile and still resumed from there.
- */
-export const START_FLOOR_S = 5;
-export const WATCHED_FRACTION = 0.96;
 
 /** What a saved position says has happened to the file, as the grid marks it. */
 export type WatchState = 'none' | 'started' | 'done';

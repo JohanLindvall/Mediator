@@ -473,10 +473,7 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "conversion unavailable (no ffmpeg)", http.StatusNotImplemented)
 		return
 	}
-	t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	if t < 0 || t > 1e7 {
-		t = 0
-	}
+	t := mediaSeconds(r.URL.Query().Get("t"))
 	copyVideo := r.URL.Query().Get("mode") == "audio"
 	// A rung on the bitrate ladder is a re-encode whatever the mode asked
 	// for; see effectiveCopy.

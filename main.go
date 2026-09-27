@@ -1,7 +1,7 @@
-// Command media serves a web-based browser for video, image and music
+// Command mediator serves a web-based browser for video, image and music
 // collections. Usage:
 //
-//	media [flags] DIR [DIR...]
+//	mediator [flags] DIR [DIR...]
 //
 // Each DIR is scanned recursively and watched for changes.
 package main
@@ -287,21 +287,19 @@ func run(cfg config, log *slog.Logger) error {
 	// meanwhile went with them. It is registered here, as early as both loops
 	// exist, so that every return below it is covered.
 	//
-	// How thorough that last write is differs between the two, and only one
-	// half is in these files. The state store looks again for what landed
-	// during its final commit (flushFinal); the index mirror's PersistLoop
-	// flushes exactly once on cancellation, so an index change recorded
-	// during *that* commit is still dropped — the same fault, one file along
-	// in internal/library.
+	// Cancel producers and give analysis its bounded drain before asking the
+	// stores for their last commits. Both stores retry pending work for up to
+	// three rounds, so writes arriving during a commit are included.
 	defer func() {
-		stopStores()
-		<-stateDone
-		<-persistDone
+		stop() // error returns must cancel producers before closing their stores
 		select {
 		case <-analysisDone:
 		case <-time.After(analysisDrain):
 			log.Info("the analysis was still reading at shutdown; its last vector may not have been stored")
 		}
+		stopStores()
+		<-stateDone
+		<-persistDone
 	}()
 	// What has been watched is part of what the listing filters on, so the
 	// library is given the positions the store just restored.
@@ -550,6 +548,7 @@ func run(cfg config, log *slog.Logger) error {
 				// same rule the initial scan follows.
 				pruneAll()
 				scanGate.Unlock()
+				lib.EnrichMeta(ctx, busy)
 			}()
 			return lib.Roots(), nil
 		}, db != nil)
@@ -645,6 +644,11 @@ func run(cfg config, log *slog.Logger) error {
 		// enough to spend the whole budget, every time. Said at all because
 		// it is the one line that explains why an exit took five seconds.
 		log.Info("shut down with connections still open", "err", err)
+		// Shutdown leaves active connections open on timeout. Close them so
+		// their contexts are cancelled before the stores flush and close.
+		if err := httpSrv.Close(); err != nil {
+			log.Warn("closing HTTP connections", "err", err)
+		}
 	}
 	// The handlers have finished, or have had their five seconds: only now
 	// are the stores told to write their last, in the deferred drain above,

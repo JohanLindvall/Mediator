@@ -73,6 +73,15 @@ func (l *Library) Albums() []*Album {
 	return l.albums.get(l.GroupVersion(), l.buildAlbums)
 }
 
+// Directory is the release's directory, including the parent of folded
+// disc folders. Playlists and archived releases have no directory to export.
+func (a *Album) Directory() string {
+	if a.Source != "dir" || strings.ContainsRune(a.where, '\x00') {
+		return ""
+	}
+	return a.where
+}
+
 // AlbumByID resolves one album plus its tracks in playback order.
 func (l *Library) AlbumByID(id string) (*Album, []Item, bool) {
 	albums := l.Albums()

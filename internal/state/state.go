@@ -62,6 +62,7 @@ type Store struct {
 	log *slog.Logger
 
 	mu        sync.Mutex
+	flushMu   sync.Mutex // commits must follow the order their snapshots were taken
 	positions map[string]Position
 	dirty     map[string]struct{} // ids written since the last flush
 	removed   map[string]struct{} // ids deleted since the last flush
@@ -195,7 +196,25 @@ func (s *Store) Like(id string, like int) int {
 // Likes returns the verdict on every item that has one.
 func (s *Store) Likes() map[string]int { return s.collect(func(p Position) int { return p.Like }) }
 
-// Delete removes a saved position.
+// ClearPosition marks an item unwatched while preserving plays and its rating.
+func (s *Store) ClearPosition(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.positions[id]
+	if !ok {
+		return
+	}
+	if p.Plays == 0 && p.Like == 0 {
+		s.drop(id)
+		return
+	}
+	p.Time, p.Duration, p.Updated = 0, 0, 0
+	s.positions[id] = p
+	s.dirty[id] = struct{}{}
+	delete(s.removed, id)
+}
+
+// Delete removes all owner data for an item.
 func (s *Store) Delete(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -288,6 +307,8 @@ func (s *Store) pending() bool {
 // Flush writes everything that changed since the last call, in one
 // transaction.
 func (s *Store) Flush() {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	if s.db == nil {
 		return
 	}
@@ -338,7 +359,9 @@ func (s *Store) restore(put map[string][]byte, remove []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id := range put {
-		s.dirty[id] = struct{}{}
+		if _, live := s.positions[id]; live {
+			s.dirty[id] = struct{}{}
+		}
 	}
 	for _, id := range remove {
 		if _, newer := s.dirty[id]; newer {

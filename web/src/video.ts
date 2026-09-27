@@ -47,6 +47,7 @@ import { canFeed, FedSource } from './mse';
 import { playingVideo } from './nowplaying';
 import { SpectrumPanel, spectrumTakesOutput } from './visualizer';
 import { holdScroll, releaseScroll } from './scrollhold';
+import { modalFocus, nativeControlKey } from './modal';
 import { clamp, esc, formatDuration } from './format';
 import { icons } from './icons';
 import { findKind, type ItemSource } from './sources';
@@ -201,6 +202,7 @@ function poll(ms: number, tick: () => void, now = false): () => void {
 
 class VideoOverlay {
   private root: HTMLElement;
+  private releaseFocus: () => void = () => {};
   private video: HTMLVideoElement;
   private seekEl: HTMLElement;
   private seekFill: HTMLElement;
@@ -1914,8 +1916,9 @@ class VideoOverlay {
     this.syncCastControls();
 
     document.getElementById('overlays')!.appendChild(this.root);
-    document.body.classList.add('no-scroll', 'viewing');
+    document.body.classList.add('viewing');
     holdScroll();
+    this.releaseFocus = modalFocus(this.root, 'Video player');
     // The keys belong to what is in front, which is now this. Prev and next
     // are deliberately not taken: a film is not a track list, and a key that
     // skipped to another film would be a surprise nobody asked for.
@@ -2899,7 +2902,7 @@ class VideoOverlay {
   };
 
   private onKey = (ev: KeyboardEvent): void => {
-    if (this.closed) return;
+    if (this.closed || nativeControlKey(ev)) return;
     switch (ev.key) {
       case 'Escape':
         // Whatever is on top is the thing Escape closes: the key help, then
@@ -3240,7 +3243,8 @@ class VideoOverlay {
     // opens the spectrum on film after film would use them all up.
     this.spectrum.viz.dispose();
     this.root.classList.remove('open');
-    document.body.classList.remove('no-scroll', 'viewing');
+    this.releaseFocus();
+    document.body.classList.remove('viewing');
     releaseScroll();
     this.releaseKeys();
     playingVideo(null);

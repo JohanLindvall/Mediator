@@ -91,9 +91,10 @@ Go binary with the TypeScript frontend embedded.
   anything else keeps it; a root of the library is never removed. A film
   inside a rar set or on a disc goes as the set or the disc. What is
   confirmed is exactly what goes: a file that changed since it was shown is
-  left alone, and a folder that gained something keeps it. Only the whole
-  library can delete — not a face restricted to some media, not a caller
-  confined to part of the disk, and not a server started with `-lock`.
+  left alone. Folder confirmations include sidecars and empty directories;
+  a replacement file or a new arrival invalidates that folder’s plan.
+  Only the whole library can delete — not a face restricted to some media,
+  not a caller confined to part of the disk, and not a server started with `-lock`.
 - **The frame under the pointer on the seek bar** — hovering the player's
   seek bar, or dragging along it with a finger, shows the frame at that exact
   moment, to the millisecond, with the time under it. The server takes that
@@ -464,7 +465,12 @@ Go binary with the TypeScript frontend embedded.
 - **Download a release** — an album's sheet offers the whole thing as one
   zip: the audio, the sleeve art, the notes — a release is a directory, not
   a track list. A playlist has no directory of its own, so for one of those
-  it is the entries it names.
+  it is the entries it names. Multi-disc releases include the parent folder’s
+  artwork and preserve the disc folders. A view restricted by content or
+  path receives only its permitted tracks. An interrupted download is left
+  incomplete, so it cannot silently appear to be a complete release. Hidden
+  files and directories and symlinks are omitted. Releases exceeding 5,000
+  files or three levels of files are refused before the download starts.
 - **Add to queue** — the sheet can also put a release after everything
   already queued: in order, or shuffled among themselves when the bar is
   shuffling, and never mixed in among what was already waiting. With
@@ -696,7 +702,8 @@ Go binary with the TypeScript frontend embedded.
   both counted like the rest and filtered server-side, so they page and sort
   like any other listing. The same rule draws the progress bar and the
   checkmark on the tiles: five seconds in is a start, and past 96% is
-  watched, which is also where the player stops offering to resume.
+  watched, which is also where the player stops offering to resume. Marking
+  an item unwatched clears its resume point while preserving likes and play history.
 - **Search / filter / sort** — the filter chips count what you are looking
   at, not what the library holds: type a word and each chip says how many
   videos, images, tracks, albums and artists answer to it, and inside one
@@ -730,8 +737,9 @@ Go binary with the TypeScript frontend embedded.
   lists their releases by year, newest first unless the order has been
   turned round. UI state lives in the URL hash. A change of view goes onto the history, so Back returns from a
   drill-down. The grid can be worked from a keyboard: Tab to a tile, Enter or
-  Space to open it. Sizes are shown in thousands, as a file manager shows
-  them.
+  Space to open it. Dialogs keep focus inside them and return it to their
+  opener. Nested dialogs keep the listing’s scroll locked until the last one
+  closes. Sizes are shown in thousands, as a file manager shows them.
 - **Thumbnails** — generated on demand and cached in a single-file blob
   database ([bbolt](https://go.etcd.io/bbolt), `<data>/media.db` by default;
   relocate with `-db PATH` or skip caching with `-db off`): images
@@ -834,7 +842,10 @@ HTTP Basic authentication it is refused before the request reaches this
 server, and the television sits on a spinner while the access log stays
 empty.
 
-So the page builds its media URLs with a token in them:
+The page and exported playlists use signed media URLs. The page refreshes
+its credentials before expiry and when it becomes visible again; exported
+playlists retain the token’s expiry and must be exported again after it passes.
+The URLs take this form:
 
 ```
 /api/signed/<token>/stream/<id>   instead of  /api/stream/<id>
@@ -1008,8 +1019,10 @@ television in the house.
 ## One library, several faces
 
 A face can also be restricted to **part** of the library with
-`X-Allowed-Paths`, naming absolute directories separated by commas (or
-newlines, for a path with a comma in it). The request then sees only what
+`X-Allowed-Paths`, naming absolute directories separated by commas. Use CSV
+quoting for a literal comma, such as `"/srv/music, live",/srv/archive`, or
+repeat the header with one literal path in each field. Embedded newlines
+are not valid HTTP header values. The request then sees only what
 lives under them — in listings, in counts, in the albums, artists and genres,
 and when asking for anything by id — and such a caller is refused the
 preferences outright, since the list of scanned directories names the roots
@@ -1080,8 +1093,8 @@ Multiple libraries: mount them and list them —
 
 The image answers Docker's health check from `/api/info`, which is served
 the moment the listener is bound, before any scan. It includes `ffmpeg` for
-video thumbnails. Watching relies on inotify, spoken directly on Linux;
-for very large trees raise `fs.inotify.max_user_watches` on the host.
+video thumbnails, conversions and media analysis. Watching relies on inotify,
+spoken directly on Linux; for very large trees raise `fs.inotify.max_user_watches` on the host.
 
 ## Troubleshooting
 
@@ -1116,8 +1129,8 @@ write their last and the database close. So a position saved by a request
 answered during the drain is kept, where it used to be acknowledged to the
 browser and then dropped: both stores flushed and returned the instant the
 signal arrived, before the server had so much as been asked to stop.
-After them the analysis gets two seconds to notice it has been cancelled —
-`the analysis was still reading at shutdown` says it did not, which costs
+Before the final store commits, the analysis gets two seconds to notice it
+has been cancelled — `the analysis was still reading at shutdown` says it did not, which costs
 one track its vector and nothing else, since it is simply read again next
 run. It is a bound rather than a wait because the pass sits behind the
 first walk, which cannot be interrupted: waited for outright, a signal
@@ -1164,16 +1177,25 @@ All build/check targets run inside Docker as well:
 
 ```sh
 make generate   # regenerate web/src/types.gen.ts from the Go API types
-make test       # frontend tests + go vet + go test ./...
+make test       # frontend tests/build + go vet + go test -race ./...
 make vet        # go vet only
-cd web && npm test      # just the frontend's own tests (needs Node)
-cd web && npm run dev   # Vite dev server on :5173, proxies /api to :8080 (needs Node)
+cd web && npm test      # just the frontend tests (Node 24 or newer; run npm ci first)
+cd web && npm run dev   # Vite on :5173, proxies /api to :8080 (Node 24 or newer)
 ```
 
 The TypeScript API model (`web/src/types.gen.ts`) is **generated** from the Go
 types via `cmd/gen-ts` — the Go structs are the single source of truth for the
 wire format. Image builds regenerate it from scratch every time; the checked-in
-copy only serves the `npm run dev` flow.
+copy only serves the `npm run dev` flow. Shared playback thresholds are
+also generated from Go, keeping the grid, resume prompt and server filters
+in agreement.
+
+The Docker test stage includes ffmpeg and ffprobe, so media integration tests
+run alongside the unit tests. With Go and those tools installed locally,
+`go test -coverprofile=/tmp/mediator-coverage.out ./...` measures backend coverage; run
+coverage and race detection separately because combining both adds substantial
+cost to audio fingerprint tests. `npm test` covers parsing, playback decisions,
+media-buffer cancellation, API helpers and asynchronous listing updates.
 
 ### Layout
 
@@ -1248,7 +1270,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | Header             | Values                          | Effect                                                       |
 | ------------------ | ------------------------------- | ------------------------------------------------------------ |
 | `X-Media-Content`  | `music`, `videos`, `images` — comma-separated for more than one | Restricts everything this request is shown to those classes: listings, counts, search, the grouped views, and anything asked for by id (404 otherwise). Absent or unrecognised means the whole library. Set it in a reverse proxy, not in the page — see [One library, several faces](#one-library-several-faces). |
-| `X-Allowed-Paths` | absolute directories, comma or newline separated | Restricts the request to what lives under them — listings, counts, collections and every by-id request alike. Absent or empty is the whole library. Composes with `X-Media-Content`: a request carrying both sees the intersection. Set by the proxy, never by the page, for the same reason as the header above. |
+| `X-Allowed-Paths` | absolute directories, CSV quoted or one per repeated header | Restricts the request to what lives under them — listings, counts, collections and every by-id request alike. Absent or empty is the whole library. Composes with `X-Media-Content`: a request carrying both sees the intersection. Set by the proxy, never by the page, for the same reason as the header above. |
 | `X-Media-Internal` | a token the server mints for itself | Marks the server's own loopback reads — ffmpeg fetching an archived file's bytes through `/api/stream` to make a thumbnail or read its codecs. It keeps those from registering as playback, which would make the thumbnailer throttle against its own reading. Not something a caller sets: it grants nothing, and a request carrying someone else's guess at it is treated as any other request. |
 
 Notes: media is only ever served by indexed ID, so playlists cannot reach

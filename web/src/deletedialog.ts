@@ -18,6 +18,8 @@ import { deleteDoneText, deleteSummary } from './deleting';
 import { esc } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
+import { modalFocus } from './modal';
+import { holdScroll, releaseScroll } from './scrollhold';
 
 /**
  * Ask the server what deleting this would remove, show it, and delete it if
@@ -60,21 +62,24 @@ export async function deleteWithConfirmation(req: DeleteRequest): Promise<Delete
   const cancelBtn = root.querySelector<HTMLButtonElement>('[data-cancel]')!;
   const deleteBtn = root.querySelector<HTMLButtonElement>('[data-delete]')!;
   const errorEl = root.querySelector<HTMLElement>('.confirm-error')!;
-  const before = document.activeElement as HTMLElement | null;
-  cancelBtn.focus();
+  const releaseFocus = modalFocus(root.querySelector<HTMLElement>('.confirm')!, 'Delete permanently?', cancelBtn);
+  holdScroll();
 
   return new Promise((resolve) => {
     let busy = false;
     const finish = (result: DeleteResult | null): void => {
       window.removeEventListener('keydown', onKey, true);
       root.remove();
-      before?.focus?.();
+      releaseFocus();
+      releaseScroll();
       resolve(result);
     };
     const onKey = (ev: KeyboardEvent): void => {
       // Everything stops here while the question is up; only Tab and the
       // buttons' own Enter and Space move on, and they need no help.
-      ev.stopImmediatePropagation();
+      // Tab reaches the shared focus trap on document; other keys must not
+      // reach the player underneath this confirmation.
+      if (ev.key !== 'Tab') ev.stopImmediatePropagation();
       if (ev.key === 'Escape' && !busy) {
         ev.preventDefault();
         finish(null);

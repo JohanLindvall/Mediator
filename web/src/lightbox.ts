@@ -4,6 +4,7 @@
  */
 import { streamUrl, type Item } from './api';
 import { holdScroll, releaseScroll } from './scrollhold';
+import { modalFocus, nativeControlKey } from './modal';
 import { esc, formatBytes, formatDateFull } from './format';
 import { icons } from './icons';
 import { shareItem } from './links';
@@ -17,6 +18,7 @@ export function openLightbox(src: ItemSource, index: number): void {
 
 class Lightbox {
   private root: HTMLElement;
+  private releaseFocus: () => void = () => {};
   private img: HTMLImageElement;
   private caption: HTMLElement;
   private meta: HTMLElement;
@@ -92,8 +94,9 @@ class Lightbox {
     this.slideCur = this.root.querySelector('[data-cur]') as HTMLImageElement;
 
     document.getElementById('overlays')!.appendChild(this.root);
-    document.body.classList.add('no-scroll', 'viewing');
+    document.body.classList.add('viewing');
     holdScroll();
+    this.releaseFocus = modalFocus(this.root, 'Image viewer');
 
     this.fsBtn = this.root.querySelector('[data-fs]') as HTMLButtonElement;
     this.root.querySelector('[data-close]')!.addEventListener('click', () => this.close());
@@ -188,6 +191,7 @@ class Lightbox {
   };
 
   private onKey = (ev: KeyboardEvent): void => {
+    if (nativeControlKey(ev)) return;
     switch (ev.key) {
       case 'Escape':
         if (document.fullscreenElement) break; // the browser leaves fullscreen first
@@ -283,7 +287,8 @@ class Lightbox {
     document.removeEventListener('fullscreenchange', this.onFsChange);
     window.removeEventListener('resize', this.onResize);
     if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
-    document.body.classList.remove('no-scroll', 'viewing');
+    this.releaseFocus();
+    document.body.classList.remove('viewing');
     releaseScroll();
     this.root.classList.remove('open');
     window.setTimeout(() => this.root.remove(), 200);

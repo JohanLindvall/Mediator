@@ -61,9 +61,9 @@ type DeletePlan struct {
 	Title string
 	// Files are removed first, each only while it is still the file planned.
 	Files []PlannedFile
-	// Folders are removed whole afterwards, deepest first, each only while
-	// what is left in it is still nothing but furniture.
+	// Folders are removed only while their complete snapshots still match.
 	Folders []string
+	trees   map[string][]plannedEntry
 	// Items are the indexed things that go.
 	Items []string
 	// Others are the names of those not asked for that go with a container
@@ -80,6 +80,7 @@ type PlannedFile struct {
 	Size     int64
 	MTime    int64
 	InFolder bool
+	info     fs.FileInfo
 }
 
 // DeleteOutcome is what a deletion did.
@@ -164,25 +165,32 @@ func (l *Library) PlanDelete(req DeleteRequest) (DeletePlan, error) {
 	}
 	slices.SortFunc(folders, func(a, b string) int { return len(b) - len(a) })
 	p.plan.Folders = folders
-	// Every planned file, with the identity it has now: the ones inside a
-	// folder that goes whole go with it and are counted with it, and they are
-	// still listed, since whether the folder may go is asked again when it
-	// is removed and the answer depends on knowing them.
+	p.plan.trees = make(map[string][]plannedEntry, len(folders))
+	for _, dir := range folders {
+		entries, err := p.snapshotTree(dir)
+		if err != nil {
+			return DeletePlan{}, err
+		}
+		p.plan.trees[dir] = entries
+		for _, entry := range entries {
+			if entry.info.Mode().IsRegular() {
+				p.plan.Files = append(p.plan.Files, plannedFile(filepath.Join(dir, entry.name), entry.info, true))
+				p.plan.Bytes += entry.info.Size()
+			}
+		}
+	}
 	for path := range p.files {
+		if insideAny(path, gone) {
+			continue // already included in its folder's snapshot
+		}
 		fi, err := os.Lstat(path)
 		if err != nil || !fi.Mode().IsRegular() {
 			continue
 		}
-		in := insideAny(path, gone)
-		p.plan.Files = append(p.plan.Files, PlannedFile{Path: path, Size: fi.Size(), MTime: fi.ModTime().UnixMilli(), InFolder: in})
-		if !in {
-			p.plan.Bytes += fi.Size()
-		}
+		p.plan.Files = append(p.plan.Files, plannedFile(path, fi, false))
+		p.plan.Bytes += fi.Size()
 	}
 	slices.SortFunc(p.plan.Files, func(a, b PlannedFile) int { return strings.Compare(a.Path, b.Path) })
-	for _, dir := range folders {
-		p.plan.Bytes += treeSize(dir)
-	}
 	for id := range p.items {
 		p.plan.Items = append(p.plan.Items, id)
 	}
@@ -403,12 +411,12 @@ func (l *Library) folderGoes(dir string, files, items, gone map[string]bool) boo
 			ok = false
 			return filepath.SkipAll
 		}
-		if path == dir {
-			return nil
-		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			ok = false // a link could point anywhere at all
 			return filepath.SkipAll
+		}
+		if path == dir {
+			return nil
 		}
 		if d.IsDir() {
 			if gone[path] {
@@ -502,96 +510,6 @@ func sampleDir(dir string) bool {
 		return true
 	}
 	return false
-}
-
-// DeleteNow carries out a plan: the files that are still the files planned,
-// then the folders that still hold nothing but furniture, and the index
-// told of each, which tells the clients.
-func (l *Library) DeleteNow(p DeletePlan) DeleteOutcome {
-	var out DeleteOutcome
-	files := map[string]bool{}
-	for _, f := range p.Files {
-		files[f.Path] = true
-	}
-	items := map[string]bool{}
-	for _, id := range p.Items {
-		items[id] = true
-	}
-	folders := map[string]bool{}
-	for _, dir := range p.Folders {
-		folders[dir] = true
-	}
-	// Every planned file looked at again first: one that changed since it
-	// was shown stays, and a folder it is in stays with it.
-	kept := map[string]bool{}
-	for _, f := range p.Files {
-		fi, err := os.Lstat(f.Path)
-		if err != nil {
-			continue // gone already: what was asked for is done
-		}
-		if !fi.Mode().IsRegular() || fi.Size() != f.Size || fi.ModTime().UnixMilli() != f.MTime {
-			out.Kept = append(out.Kept, KeptPath{f.Path, "changed since it was shown"})
-			for dir := range folders {
-				if pathUnder(f.Path, dir) {
-					kept[dir] = true
-				}
-			}
-			delete(files, f.Path)
-			continue
-		}
-	}
-	var removed []string
-	for _, f := range p.Files {
-		if f.InFolder || !files[f.Path] {
-			continue
-		}
-		if err := os.Remove(f.Path); err != nil {
-			if !os.IsNotExist(err) {
-				out.Kept = append(out.Kept, KeptPath{f.Path, err.Error()})
-			}
-			continue
-		}
-		out.Files++
-		out.Bytes += f.Size
-		removed = append(removed, f.Path)
-	}
-	gone := map[string]bool{}
-	for _, dir := range p.Folders {
-		// Looked at again: a folder that gained something since it was
-		// shown keeps it, and itself.
-		if kept[dir] || !l.folderGoes(dir, files, items, withoutKey(gone, dir)) {
-			out.Kept = append(out.Kept, KeptPath{dir, "holds something that was not shown"})
-			continue
-		}
-		size := treeSize(dir)
-		if err := os.RemoveAll(dir); err != nil {
-			out.Kept = append(out.Kept, KeptPath{dir, err.Error()})
-			continue
-		}
-		gone[dir] = true
-		out.Folders++
-		out.Bytes += size
-		removed = append(removed, dir)
-	}
-	for _, path := range removed {
-		l.Remove(path)
-	}
-	return out
-}
-
-// treeSize is what the files under a folder hold.
-func treeSize(dir string) int64 {
-	var n int64
-	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if fi, err := d.Info(); err == nil && fi.Mode().IsRegular() {
-			n += fi.Size()
-		}
-		return nil
-	})
-	return n
 }
 
 // insideAny says whether path lies inside one of the folders, not being one.

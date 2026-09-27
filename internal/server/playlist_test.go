@@ -45,7 +45,7 @@ func TestBuildM3U(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := buildM3U([]library.Item{c.item}, "http://host:8080")
+			got := buildM3U([]library.Item{c.item}, "http://host:8080", "")
 			if got != "#EXTM3U\n"+c.want {
 				t.Fatalf("body = %q", got)
 			}
@@ -86,7 +86,7 @@ func TestPlaylistEndpoint(t *testing.T) {
 	}
 	// The kind filter applied, the hidden item stayed out, and the entry is
 	// reachable from outside the page that asked for it.
-	if !strings.HasPrefix(lines[2], ts.URL+"/api/stream/") {
+	if !strings.HasPrefix(lines[2], ts.URL+"/api/signed/") {
 		t.Fatalf("entry %q is not an absolute stream URL under %s", lines[2], ts.URL)
 	}
 	if strings.Contains(string(body), hidden) {
@@ -94,6 +94,14 @@ func TestPlaylistEndpoint(t *testing.T) {
 	}
 	if !strings.Contains(lines[1], "one.mkv") {
 		t.Fatalf("entry title = %q", lines[1])
+	}
+	stream, err := http.Get(lines[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("exported signed URL was refused: %d", stream.StatusCode)
 	}
 }
 

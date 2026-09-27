@@ -165,13 +165,15 @@ cold start would hold the process open for the length of that walk — a
 minute and a half on a large library — with nothing on screen to say why.
 Past the bound, the pass's own check of the context and bolt's refusal to
 write to a closed database are what cover it, and what is lost is a logged
-line rather than a vector: the track is read again on the next run. How thorough that last write is still
-differs between the two stores: the state store looks again for what landed
-during its final commit (`flushFinal`, bounded by `finalFlushRounds` — two
-rounds settle what it is for and the third is slack, and the bound is what
-stops a database refusing every write from holding the shutdown open), where
-`PersistLoop` flushes exactly once on cancellation, so an index change
-recorded during *that* commit is dropped the same way. Items whose content lives inside another file — a rar
+line rather than a vector: the track is read again on the next run.
+Both stores serialize their snapshot-and-commit operations and inspect
+pending work after each final commit. They drain for at most three rounds
+(`finalFlushRounds` in state, `finalPersistFlushRounds` in library), catching
+writes that arrive during a commit without hanging shutdown on a failing
+database. Failed metadata writes are restored only when a newer result is
+not already pending. Producers are cancelled first, analysis gets its bounded
+drain, and then the stores perform their final commits.
+Items whose content lives inside another file — a rar
 member, a DVD title — are deliberately not persisted: their content is byte
 offsets into volumes or into an image, and stale offsets would serve garbage,
 so the scan re-derives them.
@@ -3990,9 +3992,9 @@ from another library is exactly what it looks like.
 
 **A caller can also be restricted to part of the library**
 (`X-Allowed-Paths`, `internal/library/paths.go`). The header names
-directories, separated by commas — or newlines, for a path with a comma in
-it — and the request then sees only what lives under them: not in a listing,
-not in a count, not by asking for one thing by id, and not through the
+directories, using CSV quoting for commas or one literal path per repeated
+header field — and the request then sees only what lives under them: not in
+a listing, not in a count, not by asking for one thing by id, and not through the
 collections. Absent or empty is the whole library, exactly as an absent
 content header is every class.
 
@@ -5647,17 +5649,22 @@ Serving details worth knowing before "fixing" them:
   constructor using parameter properties, which strip-only type removal
   refuses.
 - **Deleting from the disk is two requests, and the split is the safety**
-  (`library/delete.go`, `server/delete.go`; `deleting.ts`, `deletedialog.ts`,
-  tested). `POST /api/delete/plan` works out exactly what would go and
+  (`library/delete.go`, `library/delete_exec.go`, `server/delete.go`;
+  `deleting.ts`, `deletedialog.ts`, tested). `POST /api/delete/plan` works out exactly what would go and
   changes nothing; the owner is shown that — every folder that goes whole,
   every file that goes on its own, counts, size, and whatever else shares a
   container with it — and `POST /api/delete` with the plan's token removes
   exactly that. The plan is kept ten minutes and taken once, so a
   confirmation left open overnight deletes nothing on the strength of a
   disk that has moved on. Execution looks again at everything: a planned
-  file whose size or time changed since it was shown stays, and so does any
-  folder it is in; a folder that gained something since stays whole
-  (`DeleteNow` re-runs `folderGoes`).
+  file whose identity, mode, size or full modification time changed stays.
+  Folder plans snapshot every entry, including sidecars and empty directories;
+  `checkDeleteTree` rejects additions, removals and replacements before deletion.
+  Execution pins directory handles with `os.Root` and removes only individually
+  confirmed entries with `Remove`, never `RemoveAll`. Concurrent arrivals are
+  not recursively erased. A change during execution can leave a partial
+  deletion, which is reported and reconciled with the index. Roots are checked
+  again at execution time. `delete_snapshot_test.go` covers these invariants.
   **What goes is what the thing is made of.** A file and its own subtitle
   sidecars (`Subtitles`) — **its own**, which is not the same thing as the
   ones that answer to its name: a subtitle belongs to a video when its name
@@ -5980,3 +5987,35 @@ carried none.
 
 `tag.ReadFrom` (dhowden/tag) can panic on corrupt files; all call sites wrap
 it behind `recover` (`enrich.go`) — preserve that when adding tag reads.
+
+## Review invariants
+
+- Every listing order ends with the item ID as a tie-breaker, including files
+  with identical display paths under different roots. Clamp pagination before
+  adding the limit so an oversized offset produces an empty page, never a panic.
+  Exact-file removal uses the path index without walking the whole library.
+- Clearing resume state preserves likes and play history (`ClearPosition`).
+  Restricted state responses omit unknown IDs as well as disallowed items.
+- `LibrarySource` and `CollectionSource` cancel superseded requests and ignore
+  their results. Page zero must refetch even when the previous total was zero.
+  Failed loads clear pending placeholders; repeated redraws have a five-second
+  retry backoff. Tests exercise the sources themselves with deferred responses.
+- `FedSource` cancels and releases its response reader on all exits. SourceBuffer
+  errors reject pending appends; stopping during an append settles its waiter
+  without reporting a playback failure. MP4 box and codec parsing reject short
+  or overflowing records, and initialization buffering is bounded.
+- `modal.ts` owns dialog focus and native-control key handling; `scrollhold.ts`
+  owns the shared scroll lock. Overlay callers acquire and release each once.
+- Playlist exports carry signed URLs. Album ZIPs use the real release directory
+  for multi-disc albums; restricted views get permitted tracks only. ZIP entry
+  names remain unique even when an existing name resembles a generated suffix.
+  Hidden directories are skipped. Walk errors and entry/depth limits fail the
+  request before streaming; copy errors abort it instead of closing a partial ZIP.
+- Watched thresholds come from `watched.go` through `cmd/gen-ts`, alongside the
+  API types. Keep the generated file current with `make generate`.
+- Malformed subtitle format lines must not panic. Validate all ASS column
+  indices and honor the Events section; normalize SRT timestamps to WebVTT.
+  Archive seek errors preserve the old position and reject integer overflow.
+- `make test` runs frontend tests/build, vet and Go race tests with ffmpeg present.
+  Host coverage can run separately; combining race and coverage instrumentation
+  makes the audio fingerprint tests substantially slower.

@@ -63,7 +63,8 @@ func ToVTT(name string, data []byte) ([]byte, error) {
 	text = strings.ReplaceAll(text, "\r", "\n")
 	switch strings.ToLower(filepath.Ext(name)) {
 	case ".vtt":
-		if !strings.HasPrefix(strings.TrimLeft(text, "\ufeff \t\n"), "WEBVTT") {
+		text = strings.TrimLeft(text, "\ufeff \t\n")
+		if !strings.HasPrefix(text, "WEBVTT") {
 			text = "WEBVTT\n\n" + text
 		}
 		return []byte(text), nil
@@ -183,7 +184,10 @@ func srtToVTT(text string) string {
 			if i := strings.Index(line, "X1:"); i >= 0 {
 				line = line[:i]
 			}
-			line = srtTime.ReplaceAllString(strings.TrimSpace(line), "$1:$2:$3.$4")
+			line = srtTime.ReplaceAllStringFunc(strings.TrimSpace(line), func(stamp string) string {
+				converted, _ := assTime(stamp)
+				return converted
+			})
 		}
 		b.WriteString(line)
 		b.WriteByte('\n')
@@ -197,10 +201,19 @@ func assToVTT(text string) string {
 	var b strings.Builder
 	b.WriteString("WEBVTT\n\n")
 	startCol, endCol, textCol, cols := 1, 2, 9, 10
+	inEvents := true // also accept a bare list of dialogue lines
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToLower(trimmed), "format:") && textCol == 9 {
+		if strings.HasPrefix(trimmed, "[") {
+			inEvents = strings.EqualFold(trimmed, "[Events]")
+			continue
+		}
+		if !inEvents {
+			continue
+		}
+		if strings.HasPrefix(strings.ToLower(trimmed), "format:") {
 			fields := strings.Split(trimmed[len("format:"):], ",")
+			startCol, endCol, textCol = -1, -1, -1
 			for i, f := range fields {
 				switch strings.ToLower(strings.TrimSpace(f)) {
 				case "start":
@@ -219,7 +232,7 @@ func assToVTT(text string) string {
 		}
 		// Text is the last field and may itself contain commas.
 		fields := strings.SplitN(strings.TrimSpace(trimmed[len("dialogue:"):]), ",", cols)
-		if len(fields) <= textCol || textCol >= cols {
+		if startCol < 0 || endCol < 0 || textCol < 0 || len(fields) != cols {
 			continue
 		}
 		start, ok1 := assTime(fields[startCol])

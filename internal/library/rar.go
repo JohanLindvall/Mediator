@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -328,7 +329,9 @@ func parseRar4(f *os.File, path string, add func(string, int64, storedSeg, bool)
 func rarVint(f io.ReaderAt, off int64) (val int64, n int, err error) {
 	var b [10]byte
 	m, _ := f.ReadAt(b[:], off)
-	for i := 0; i < m; i++ {
+	// Sizes and offsets are signed int64 throughout the reader. A tenth
+	// byte cannot fit and must not wrap into a plausible smaller value.
+	for i := 0; i < min(m, 9); i++ {
 		val |= int64(b[i]&0x7f) << (7 * i)
 		if b[i]&0x80 == 0 {
 			return val, i + 1, nil
@@ -472,6 +475,9 @@ func hasRar5ExtraCrypt(hdr []byte, extraOff, extraSize int64) bool {
 type sliceReaderAt []byte
 
 func (s sliceReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, fmt.Errorf("negative offset")
+	}
 	if off >= int64(len(s)) {
 		return 0, io.EOF
 	}
@@ -617,6 +623,9 @@ func (r *storedReader) touch(i int) {
 func (r *storedReader) Read(p []byte) (int, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return 0, os.ErrClosed
+	}
 	if r.pos >= r.e.size {
 		return 0, io.EOF
 	}
@@ -631,17 +640,23 @@ func (r *storedReader) Read(p []byte) (int, error) {
 func (r *storedReader) Seek(offset int64, whence int) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.closed {
+		return 0, os.ErrClosed
+	}
+	var base int64
 	switch whence {
 	case io.SeekStart:
-		r.pos = offset
 	case io.SeekCurrent:
-		r.pos += offset
+		base = r.pos
 	case io.SeekEnd:
-		r.pos = r.e.size + offset
+		base = r.e.size
+	default:
+		return 0, fmt.Errorf("invalid whence %d", whence)
 	}
-	if r.pos < 0 {
-		return 0, fmt.Errorf("negative position")
+	if offset < -base || offset > math.MaxInt64-base {
+		return 0, fmt.Errorf("seek position out of range")
 	}
+	r.pos = base + offset
 	return r.pos, nil
 }
 

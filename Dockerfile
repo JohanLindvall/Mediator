@@ -28,9 +28,7 @@ RUN npm ci --no-audit --no-fund
 COPY web/ ./
 COPY --from=gen /types.gen.ts src/types.gen.ts
 # The frontend's own tests run here, with node's test runner and no framework:
-# they cover the two predicates that decide which playback route a viewer
-# takes, and a wrong answer there is a file that will not play rather than
-# something that merely looks wrong.
+# they cover playback routing, media buffering, listing state and API helpers.
 RUN npm test
 RUN npm run build
 
@@ -57,7 +55,9 @@ FROM vet AS test
 # The race detector needs cgo, which needs a C toolchain in this stage only.
 # The suite passes -race today; keeping it on is what stops an unlocked field
 # from surviving until a user hits it.
-RUN apk add --no-cache gcc musl-dev
+# Include the runtime's media tools so integration tests exercise conversions
+# and analysis rather than skipping them because ffmpeg is absent.
+RUN apk add --no-cache gcc musl-dev ffmpeg
 RUN CGO_ENABLED=1 go test -race ./...
 
 # --- BuildKit --output targets: `make build` / `make generate` ----------------
@@ -68,7 +68,7 @@ FROM scratch AS types
 COPY --from=gen /types.gen.ts /web/src/types.gen.ts
 
 # --- runtime -------------------------------------------------------------------
-# ffmpeg is optional: without it everything works except video thumbnails.
+# ffmpeg supplies conversions, video thumbnails and media analysis.
 FROM alpine:3.22
 # intel-media-driver is what lets conversions run on the graphics hardware
 # rather than the processor, which is the difference between a 4K phone clip

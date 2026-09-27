@@ -45,6 +45,9 @@ func TestParsePaths(t *testing.T) {
 	}
 	// A path with a comma in it can be given on its own line.
 	f := ParsePaths("/srv/a,b\n/srv/c")
+	if !f.Allows("/srv/a,b/x") || f.Allows("/srv/a/x") {
+		t.Error("commas inside a newline-separated path must remain part of the path")
+	}
 	if !f.Allows("/srv/c/x") {
 		t.Error("newline-separated paths are read")
 	}

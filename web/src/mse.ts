@@ -35,6 +35,7 @@ export const FEED_BEHIND_S = 60;
 /** The four-character type and the bounds of one box. */
 interface Box {
   type: string;
+  offset: number; // start of the header, which may be 8 or 16 bytes
   start: number; // where the payload begins
   end: number; // one past the box
 }
@@ -56,9 +57,9 @@ function boxes(b: Uint8Array, pos: number, end: number): Box[] {
     } else if (size === 0) {
       size = end - pos;
     }
-    if (size < 8 || pos + size > end) break;
+    if (!Number.isSafeInteger(size) || size < payload - pos || pos + size > end) break;
     const type = String.fromCharCode(b[pos + 4]!, b[pos + 5]!, b[pos + 6]!, b[pos + 7]!);
-    out.push({ type, start: payload, end: pos + size });
+    out.push({ type, offset: pos, start: payload, end: pos + size });
     pos += size;
   }
   return out;
@@ -77,7 +78,7 @@ function child(b: Uint8Array, pos: number, end: number, type: string): Box | nul
  */
 export function initSegmentEnd(b: Uint8Array): number {
   for (const x of boxes(b, 0, b.length)) {
-    if (x.type === 'moof') return x.start - 8;
+    if (x.type === 'moof') return x.offset;
   }
   return -1;
 }
@@ -105,7 +106,7 @@ export function codecStringOf(init: Uint8Array): string | null {
       if (entry.type === 'avc1' || entry.type === 'avc3') {
         // A visual sample entry is 78 bytes of fields before its children.
         const avcC = child(init, entry.start + 78, entry.end, 'avcC');
-        if (!avcC) return null;
+        if (!avcC || avcC.end - avcC.start < 4) return null;
         const p = init[avcC.start + 1]!;
         const c = init[avcC.start + 2]!;
         const l = init[avcC.start + 3]!;
@@ -247,7 +248,7 @@ export class FedSource {
           // The body ended: the conversion has reached the end of the film.
           await this.settled();
           if (!this.stopped && this.ms.readyState === 'open') this.ms.endOfStream();
-          this.o.onEnd?.();
+          if (!this.stopped) this.o.onEnd?.();
         }
         return;
       } catch (e) {
@@ -267,7 +268,7 @@ export class FedSource {
         await this.settled();
         this.sb!.timestampOffset = at.offset;
       } catch (e) {
-        this.o.onError(String(e));
+        if (!this.stopped) this.o.onError(String(e));
         return;
       }
       this.o.onResume?.(at.film);
@@ -284,6 +285,7 @@ export class FedSource {
     const res = await fetch(url, { signal: this.abort.signal });
     if (!res.ok || !res.body) {
       this.status = res.status;
+      await res.body?.cancel().catch(() => {});
       throw new Error(res.statusText || `status ${res.status}`);
     }
     if (this.o.duration !== undefined && this.o.duration > 0) {
@@ -295,30 +297,41 @@ export class FedSource {
     }
     const reader = res.body.getReader();
     let pending: Uint8Array<ArrayBuffer> = new Uint8Array(0);
-    for (;;) {
-      if (this.stopped) return false;
-      await this.throttle();
-      const { value, done } = await reader.read();
-      if (done) return true;
-      if (!value) continue;
-      if (!this.sb) {
-        // The buffer cannot be made until the codec string is known, and
-        // the codec string is inside the initialisation segment, which
-        // may take more than one chunk to arrive whole.
-        pending = concat(pending, value);
-        const end = initSegmentEnd(pending);
-        if (end < 0) continue;
-        const mime = codecStringOf(pending.subarray(0, end));
-        if (!mime || !MediaSource.isTypeSupported(mime)) {
-          throw new Error(`unsupported stream ${mime ?? ''}`);
+    try {
+      for (;;) {
+        if (this.stopped) return false;
+        await this.throttle();
+        const { value, done } = await reader.read();
+        if (done) {
+          if (!this.sb) throw new Error('conversion ended before media arrived');
+          return true;
         }
-        this.sb = this.ms.addSourceBuffer(mime);
-        this.sb.mode = 'segments';
-        await this.append(pending);
-        pending = new Uint8Array(0);
-        continue;
+        if (!value) continue;
+        if (!this.sb) {
+          // The buffer cannot be made until the codec string is known, and
+          // the codec string is inside the initialisation segment, which
+          // may take more than one chunk to arrive whole.
+          pending = concat(pending, value);
+          if (pending.length > 4 * 1024 * 1024) throw new Error('conversion initialization is too large');
+          const end = initSegmentEnd(pending);
+          if (end < 0) continue;
+          const mime = codecStringOf(pending.subarray(0, end));
+          if (!mime || !MediaSource.isTypeSupported(mime)) {
+            throw new Error(`unsupported stream ${mime ?? ''}`);
+          }
+          this.sb = this.ms.addSourceBuffer(mime);
+          this.sb.mode = 'segments';
+          await this.append(pending);
+          pending = new Uint8Array(0);
+          continue;
+        }
+        await this.append(value);
       }
-      await this.append(value);
+    } finally {
+      // A buffer error is not a fetch error. Explicitly stop its response
+      // before reconnecting, or the abandoned converter keeps sending data.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   }
 
@@ -357,10 +370,23 @@ export class FedSource {
   /** Resolve once the buffer is not in the middle of an update. */
   private settled(): Promise<void> {
     const sb = this.sb;
+    if (this.stopped) return Promise.reject(new DOMException('Stopped', 'AbortError'));
     if (!sb || !sb.updating) return Promise.resolve();
-    return new Promise((resolve) =>
-      sb.addEventListener('updateend', () => resolve(), { once: true }),
-    );
+    return new Promise((resolve, reject) => {
+      const done = (): void => { clean(); resolve(); };
+      const failed = (): void => { clean(); reject(new Error('media buffer rejected the conversion')); };
+      const aborted = (): void => { clean(); reject(new DOMException('Stopped', 'AbortError')); };
+      const clean = (): void => {
+        sb.removeEventListener('updateend', done);
+        sb.removeEventListener('error', failed);
+        sb.removeEventListener('abort', aborted);
+        this.abort.signal.removeEventListener('abort', aborted);
+      };
+      sb.addEventListener('updateend', done, { once: true });
+      sb.addEventListener('error', failed, { once: true });
+      sb.addEventListener('abort', aborted, { once: true });
+      this.abort.signal.addEventListener('abort', aborted, { once: true });
+    });
   }
 
   /**

@@ -422,7 +422,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	// Seeking is asked for after playback starts: a set that has not opened
 	// the file yet has nothing to seek in, and answers the request with a
 	// fault rather than with the position.
-	if t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64); t > 0 {
+	if t := mediaSeconds(r.URL.Query().Get("t")); t > 0 {
 		if err := d.Seek(ctx, time.Duration(t*float64(time.Second))); err != nil {
 			if s.castTaken(ctx, w, r, d, it) {
 				return
@@ -767,9 +767,11 @@ func castSoundKind(it library.Item, accepts func(string) bool) (remuxKind, bool)
 	if !noReceiverAudio[strings.ToLower(it.ACodec)] {
 		return remuxCopy, false
 	}
-	for _, name := range dtsSinks {
-		if accepts(name) {
-			return remuxCopy, false // it says it can; take it at its word
+	if codec := strings.ToLower(it.ACodec); codec == "dts" || codec == "dca" {
+		for _, name := range dtsSinks {
+			if accepts(name) {
+				return remuxCopy, false
+			}
 		}
 	}
 	// The picture is copied through and only the sound is re-encoded, so the

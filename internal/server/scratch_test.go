@@ -25,6 +25,14 @@ func TestParseSize(t *testing.T) {
 		{"0", 0, false},
 		{"lots", 0, true},
 		{"-1G", 0, true},
+		{"NaN", 0, true},
+		{"Inf", 0, true},
+		{"999999999999999999999G", 0, true},
+		{"8GG", 0, true},
+		{"8GiBiB", 0, true},
+		{"8iB", 0, true},
+		{"0.1", 0, true},
+		{"0.0001K", 0, true},
 	} {
 		got, err := ParseSize(c.in)
 		if c.bad {

@@ -15,19 +15,19 @@ import {
   type Genre,
   type Item,
   type Series,
-} from './api';
+} from './api.ts';
 
 export const PAGE_SIZE = 200;
 
 // The item source and the walk of a kind live in query.ts, where the test
 // runner can reach them; re-exported so the viewers keep one import.
-export { findKind } from './query';
+export { findKind } from './query.ts';
 export type { ItemSource } from './query';
 
 // The query's shape and the hold-over decision live in query.ts, where the
 // test runner can reach them; re-exported so callers keep one import.
 export type { QueryState } from './query';
-import { drawCount, listFilters, sameSubject, type QueryState } from './query';
+import { drawCount, listFilters, sameSubject, type QueryState } from './query.ts';
 
 /**
  * How many pages stay cached per query. Scrolling an enormous library end
@@ -49,7 +49,21 @@ export class LibrarySource {
    * fetching is not fetched again for a viewer stepping into it. */
   private inflight = new Map<number, Promise<void>>();
   private gen = 0;
+  private abort = new AbortController();
+  private failedUntil = new Map<number, number>();
+  private readonly fetch: typeof listMedia;
   private query: QueryState = { kind: '', q: '', sort: 'mtime', desc: true };
+
+  constructor(fetch: typeof listMedia = listMedia) {
+    this.fetch = fetch;
+  }
+
+  private nextGeneration(): void {
+    this.gen++;
+    this.abort.abort();
+    this.abort = new AbortController();
+    this.failedUntil.clear();
+  }
 
   /** -1 while the first page of a query is loading. */
   total = -1;
@@ -75,7 +89,7 @@ export class LibrarySource {
   setQuery(q: QueryState): void {
     const before = this.query;
     this.query = { ...q };
-    this.gen++;
+    this.nextGeneration();
     // A query that matched nothing has no rows to hold on to, and its total
     // of zero would refuse the very fetch meant to replace it.
     if (this.total === 0) this.total = -1;
@@ -110,7 +124,7 @@ export class LibrarySource {
    * items under a search's chips until the answer landed.
    */
   reset(): void {
-    this.gen++;
+    this.nextGeneration();
     this.pages.clear();
     this.stale.clear();
     this.inflight.clear();
@@ -125,7 +139,7 @@ export class LibrarySource {
    * most slightly outdated for a moment.
    */
   invalidate(): void {
-    this.gen++;
+    this.nextGeneration();
     this.holdOver();
     this.fetchPage(0);
   }
@@ -164,7 +178,7 @@ export class LibrarySource {
   }
 
   get(i: number): Item | undefined {
-    if (i < 0) return undefined;
+    if (i < 0 || (this.total >= 0 && i >= this.total)) return undefined;
     const p = Math.floor(i / PAGE_SIZE);
     return (this.pages.get(p) ?? this.stale.get(p))?.[i % PAGE_SIZE];
   }
@@ -188,8 +202,9 @@ export class LibrarySource {
     if (i < 0 || (this.total >= 0 && i >= this.total)) return undefined;
     const have = this.get(i);
     if (have) return have;
+    const gen = this.gen;
     await this.fetchPage(Math.floor(i / PAGE_SIZE));
-    return this.get(i);
+    return gen === this.gen ? this.get(i) : undefined;
   }
 
   private params() {
@@ -201,18 +216,27 @@ export class LibrarySource {
     if (this.pages.has(p)) return Promise.resolve();
     const going = this.inflight.get(p);
     if (going) return going;
-    if (this.total >= 0 && p * PAGE_SIZE >= this.total) return Promise.resolve();
+    // Page zero discovers the new total, including an empty library growing.
+    if (p > 0 && this.total >= 0 && p * PAGE_SIZE >= this.total) return Promise.resolve();
+    if ((this.failedUntil.get(p) ?? 0) > Date.now()) return Promise.resolve();
     const gen = this.gen;
-    const run = listMedia({ ...this.params(), offset: p * PAGE_SIZE, limit: PAGE_SIZE })
+    const run = this.fetch({ ...this.params(), offset: p * PAGE_SIZE, limit: PAGE_SIZE }, this.abort.signal)
       .then((res) => {
         if (gen !== this.gen) return;
         this.absorb(p, res.items, res.total, res.counts, res.version, res.matching ?? null);
       })
       .catch((err: Error) => {
-        if (gen === this.gen) this.onError(err);
+        if (gen !== this.gen) return;
+        // A redraw asks for its missing pages again. Bound failed requests
+        // so notifying the grid cannot turn an outage into a request loop.
+        this.failedUntil.set(p, Date.now() + 5000);
+        this.onError(err);
       })
       .finally(() => {
-        if (this.inflight.get(p) === run) this.inflight.delete(p);
+        if (this.inflight.get(p) === run) {
+          this.inflight.delete(p);
+          this.onUpdate(); // a failed first load must stop showing skeletons
+        }
       });
     this.inflight.set(p, run);
     return run;
@@ -266,6 +290,9 @@ export class CollectionSource<T> {
   items: T[] | null = null;
   matching: Counts | null = null;
   private gen = 0;
+  private abort = new AbortController();
+  private readonly fetch: (q: QueryState, signal?: AbortSignal) => Promise<{ items: T[]; matching?: Counts }>;
+  private readonly subjectOf: (q: QueryState) => string;
   private subject = '';
   /** Whether an answer is on its way; see count. */
   private loading = false;
@@ -287,11 +314,17 @@ export class CollectionSource<T> {
    * deliberately not part of a subject.
    */
   constructor(
-    private readonly fetch: (q: QueryState) => Promise<{ items: T[]; matching?: Counts }>,
-    private readonly subjectOf: (q: QueryState) => string = () => '',
-  ) {}
+    fetch: (q: QueryState, signal?: AbortSignal) => Promise<{ items: T[]; matching?: Counts }>,
+    subjectOf: (q: QueryState) => string = () => '',
+  ) {
+    this.fetch = fetch;
+    this.subjectOf = subjectOf;
+  }
 
   load(q: QueryState): void {
+    const gen = ++this.gen;
+    this.abort.abort();
+    this.abort = new AbortController();
     this.loading = true;
     this.searched = q.q;
     const subject = this.subjectOf(q);
@@ -307,8 +340,8 @@ export class CollectionSource<T> {
     // state reset() leaves): count() reads `loading`, and without this the
     // grid holds 0 rows and the arrival skeletons never appear.
     this.onUpdate();
-    const gen = ++this.gen;
-    this.fetch(q)
+    if (gen !== this.gen) return;
+    this.fetch(q, this.abort.signal)
       .then((res) => {
         if (gen !== this.gen) return;
         this.loading = false;
@@ -338,6 +371,7 @@ export class CollectionSource<T> {
    */
   reset(): void {
     this.gen++;
+    this.abort.abort();
     this.loading = false; // nothing is on its way until something asks again
     this.searched = null;
     this.clear();
@@ -363,7 +397,7 @@ export class CollectionSource<T> {
 export class AlbumsSource extends CollectionSource<Album> {
   constructor() {
     super(
-      (q) =>
+      (q, signal) =>
         listAlbums({
           q: q.q || undefined,
           artist: q.artist || undefined,
@@ -372,8 +406,8 @@ export class AlbumsSource extends CollectionSource<Album> {
           audiobooks: q.audiobooks,
           sort: q.sort,
           order: q.desc ? 'desc' : 'asc',
-        }).then((res) => ({ items: res.albums, matching: res.matching })),
-      (q) => `${q.artist ?? ''}|${q.genre ?? ''}|${q.near ?? ''}|${q.audiobooks ? 'books' : ''}`,
+        }, signal).then((res) => ({ items: res.albums, matching: res.matching })),
+      (q) => JSON.stringify([q.artist ?? '', q.genre ?? '', q.near ?? '', !!q.audiobooks]),
     );
   }
 }
@@ -384,8 +418,8 @@ export class AlbumsSource extends CollectionSource<Album> {
  */
 export class SeriesSource extends CollectionSource<Series> {
   constructor() {
-    super((q) =>
-      listSeries({ q: q.q || undefined, sort: q.sort, order: q.desc ? 'desc' : 'asc' }).then(
+    super((q, signal) =>
+      listSeries({ q: q.q || undefined, sort: q.sort, order: q.desc ? 'desc' : 'asc' }, signal).then(
         (res) => ({ items: res.series, matching: res.matching }),
       ),
     );
@@ -401,13 +435,13 @@ export class SeriesSource extends CollectionSource<Series> {
 export class ArtistsSource extends CollectionSource<Artist> {
   constructor() {
     super(
-      (q) =>
+      (q, signal) =>
         listArtists({
           q: q.q || undefined,
           near: q.near || undefined,
           sort: q.sort,
           order: q.desc ? 'desc' : 'asc',
-        }).then((res) => ({ items: res.artists, matching: res.matching })),
+        }, signal).then((res) => ({ items: res.artists, matching: res.matching })),
       (q) => q.near ?? '',
     );
   }
@@ -415,8 +449,8 @@ export class ArtistsSource extends CollectionSource<Artist> {
 
 export class GenresSource extends CollectionSource<Genre> {
   constructor() {
-    super((q) =>
-      listGenres({ q: q.q || undefined, sort: q.sort, order: q.desc ? 'desc' : 'asc' }).then(
+    super((q, signal) =>
+      listGenres({ q: q.q || undefined, sort: q.sort, order: q.desc ? 'desc' : 'asc' }, signal).then(
         (res) => ({ items: res.genres, matching: res.matching }),
       ),
     );

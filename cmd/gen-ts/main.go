@@ -83,6 +83,8 @@ var constValues = []struct {
 	val  any
 }{
 	{"SPRITE", "SpriteLayout", server.Sprite},
+	{"START_FLOOR_S", "number", library.WatchFloorSec},
+	{"WATCHED_FRACTION", "number", library.WatchedFraction},
 }
 
 func main() {

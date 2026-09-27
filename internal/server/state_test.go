@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +26,66 @@ func request(t *testing.T, method, url, body string) *http.Response {
 		t.Fatal(err)
 	}
 	return res
+}
+
+func TestMarkUnwatchedPreservesOwnerData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "one.mkv")
+	if err := os.WriteFile(path, []byte("video"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, s, lib := serverUnderTest(t, dir)
+	id := library.PathID(path)
+	s.st.Set(id, 50, 100)
+	s.st.Play(id)
+	s.st.Like(id, 1)
+	lib.SetPlays(id, 1)
+	lib.SetLike(id, 1)
+	lib.SetWatch(id, library.Watch{Pos: 50, Len: 100})
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/state/"+id, nil))
+	if w.Code != http.StatusNoContent {
+		t.Fatal(w.Code)
+	}
+	p, _ := s.st.Get(id)
+	if p.Time != 0 || p.Duration != 0 || p.Updated != 0 || p.Plays != 1 || p.Like != 1 {
+		t.Fatalf("marking unwatched changed unrelated owner data: %+v", p)
+	}
+	if got := lib.List(library.Query{Watch: "started"}); got.Total != 0 {
+		t.Fatal("the library still considers the item started")
+	}
+}
+
+func TestRestrictedPositionsOmitUnknownItems(t *testing.T) {
+	_, s, _ := serverUnderTest(t, t.TempDir())
+	s.st.Set("missing", 20, 100)
+	for _, header := range []string{ContentHeader, PathsHeader} {
+		value := "music"
+		if header == PathsHeader {
+			value = t.TempDir()
+		}
+		r := httptest.NewRequest(http.MethodGet, "/api/state", nil)
+		r.Header.Set(header, value)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		var result PositionsResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Positions) != 0 {
+			t.Fatalf("%s leaked unknown items: %+v", header, result.Positions)
+		}
+		r = httptest.NewRequest(http.MethodDelete, "/api/state/missing", nil)
+		r.Header.Set(header, value)
+		w = httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s deleted an unknown position: %d", header, w.Code)
+		}
+	}
+	if _, ok := s.st.Get("missing"); !ok {
+		t.Fatal("restricted request erased the position")
+	}
 }
 
 // The client's "mark unwatched" is a DELETE and nothing more, so the position

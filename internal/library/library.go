@@ -424,6 +424,7 @@ type Library struct {
 	// cold enrichment pass to a few hundred items a second.
 	metaPendMu  sync.Mutex
 	metaPending map[string]blob.Meta
+	persistMu   sync.Mutex // orders snapshots and commits, without holding mu during I/O
 
 	// One pending enrichment per watcher-touched file (enrichAfterQuiet).
 	// A file being written emits a stream of Write events, and spawning a
@@ -829,7 +830,8 @@ func (l *Library) removePath(path string) int {
 	n := 0
 	if it, ok := l.byPath[path]; ok {
 		l.dropItem(it)
-		n++
+		// Indexed paths are files; they cannot also contain indexed children.
+		return 1
 	}
 	for p, it := range l.byPath {
 		if strings.HasPrefix(p, dirPrefix) || strings.HasPrefix(p, rarPrefix) {
@@ -879,9 +881,7 @@ func (l *Library) setMeta(id string, m tagMeta, durationMs int64) {
 	if durationMs > 0 && !it.declaresDuration() {
 		it.Duration = durationMs
 	}
-	if m != (tagMeta{}) {
-		it.lower = itemSearchText(it)
-	}
+	it.lower = itemSearchText(it)
 	l.markDirty(id)
 }
 
@@ -1340,8 +1340,8 @@ func (l *Library) List(q Query) Result {
 	version = res.version
 
 	total := len(res.items)
-	end := min(q.Offset+q.Limit, total)
 	start := min(q.Offset, total)
+	end := start + min(q.Limit, total-start)
 	page := make([]Item, end-start)
 	// One set of snapshots for the page — the counts, the verdicts, the
 	// resemblances, the release verdicts — rather than seven locks per item.
@@ -1536,6 +1536,15 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 			}
 			return strings.Compare(a.it.Rel, b.it.Rel)
 		}
+	}
+	// Identical names and metadata can occur under different roots. The ID
+	// makes every order total, independent of map iteration and cache rebuilds.
+	primaryOrder := order
+	order = func(a, b sortEntry) int {
+		if c := primaryOrder(a, b); c != 0 {
+			return c
+		}
+		return strings.Compare(a.it.ID, b.it.ID)
 	}
 	if q.Desc {
 		inner := order

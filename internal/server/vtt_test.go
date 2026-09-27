@@ -75,6 +75,33 @@ Comment: 0,0:00:07.00,0:00:08.00,Default,,0,0,0,,ignored
 	}
 }
 
+func TestASSMalformedFormatDoesNotPanic(t *testing.T) {
+	for _, input := range []string{
+		"Format: Text, Start, End\nDialogue: incomplete",
+		"Format: Text\nDialogue: missing timestamps",
+		"Format: Start, End\nDialogue: 0:00:01.00,0:00:02.00",
+	} {
+		if got := assToVTT(input); got != "WEBVTT\n\n" {
+			t.Fatalf("malformed dialogue produced %q", got)
+		}
+	}
+	input := "[V4+ Styles]\nFormat: Name, Fontname, Text\n[Events]\nFormat: Start, End, Text\nDialogue: 0:00:01.00,0:00:02.00,Hello, world"
+	if got := assToVTT(input); !strings.Contains(got, "00:00:01.000 --> 00:00:02.000\nHello, world") {
+		t.Fatalf("style format interfered with dialogue: %q", got)
+	}
+}
+
+func TestSubtitleTimestampsAndHeaderNormalized(t *testing.T) {
+	got, _ := ToVTT("short.srt", []byte("1\n0:00:01,5 --> 0:00:02,25\nHello\n"))
+	if !strings.Contains(string(got), "00:00:01.500 --> 00:00:02.250") {
+		t.Fatalf("invalid WebVTT timestamps: %q", got)
+	}
+	got, _ = ToVTT("leading.vtt", []byte("\n  WEBVTT\n\n00:01.000 --> 00:02.000\nHello\n"))
+	if !strings.HasPrefix(string(got), "WEBVTT\n") {
+		t.Fatalf("header is not first: %q", got)
+	}
+}
+
 func TestDecodeTextCharsets(t *testing.T) {
 	// Latin-1 "Grüß" — invalid UTF-8, must not become replacement chars.
 	latin1 := []byte{'G', 'r', 0xFC, 0xDF}

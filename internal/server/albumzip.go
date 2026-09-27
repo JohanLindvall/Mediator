@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -31,14 +32,15 @@ import (
 
 const (
 	// zipMaxEntries bounds one archive. A release directory holds tens of
-	// files; anything wanting thousands is not a release and the request is
-	// answered with what fits rather than walking a whole tree.
+	// files; an oversized request is refused before any archive is sent.
 	zipMaxEntries = 5000
 	// zipMaxDepth bounds the walk below the release directory. Artwork and
 	// scans live one or two levels down; nothing legitimate is deeper, and a
 	// bounded walk cannot be led somewhere unexpected by a nested tree.
 	zipMaxDepth = 3
 )
+
+var errZipLimit = errors.New("release exceeds the ZIP entry or directory depth limit")
 
 // handleAlbumZip streams the album as a zip download.
 //
@@ -54,10 +56,16 @@ func (s *Server) handleAlbumZip(w http.ResponseWriter, r *http.Request) {
 	}
 	// A confined caller gets the tracks it may see and nothing beside them:
 	// the whole directory is more than it was allowed.
-	name, files, err := s.zipContents(album, tracks, pathsOf(r).Restricted())
+	name, files, err := s.zipContents(album, tracks, pathsOf(r).Restricted() || !contentOf(r).unrestricted())
 	if err != nil {
 		s.log.Warn("album zip", "album", album.Name, "err", err)
-		http.Error(w, "nothing to download", http.StatusNotFound)
+		status, message := http.StatusInternalServerError, "could not read the release"
+		if errors.Is(err, fs.ErrNotExist) {
+			status, message = http.StatusNotFound, "nothing to download"
+		} else if errors.Is(err, errZipLimit) {
+			status, message = http.StatusRequestEntityTooLarge, errZipLimit.Error()
+		}
+		http.Error(w, message, status)
 		return
 	}
 	if len(files) == 0 {
@@ -75,19 +83,21 @@ func (s *Server) handleAlbumZip(w http.ResponseWriter, r *http.Request) {
 	// and buffering a release in memory to find it out is not worth a
 	// progress bar.
 	w.Header().Set("Content-Disposition",
-		fmt.Sprintf("attachment; filename=%q", name+".zip"))
+		mime.FormatMediaType("attachment", map[string]string{"filename": name + ".zip"}))
 
 	zw := zip.NewWriter(w)
 	for _, f := range files {
 		if r.Context().Err() != nil {
-			break // the client left; stop reading the disk for it
+			return
 		}
 		if err := writeZipEntry(zw, f); err != nil {
 			// The response is already in flight, so there is no status left
 			// to change: log it and stop. A truncated archive announces
 			// itself when it is opened.
 			s.log.Warn("album zip entry", "path", f.name, "err", err)
-			break
+			// Closing the ZIP here would make a valid archive that silently
+			// omitted the rest of the release. Abort the incomplete response.
+			panic(http.ErrAbortHandler)
 		}
 	}
 	if err := zw.Close(); err != nil && r.Context().Err() == nil {
@@ -110,7 +120,11 @@ type zipFile struct {
 // its directory zipped the volumes instead of the music.
 func (s *Server) zipContents(album *library.Album, tracks []library.Item, tracksOnly bool) (string, []zipFile, error) {
 	if album.Source == "dir" && !tracksOnly && !(len(tracks) > 0 && tracks[0].Archived()) {
-		if dir := albumDir(tracks); dir != "" {
+		dir := album.Directory()
+		if dir == "" {
+			dir = albumDir(tracks)
+		}
+		if dir != "" {
 			// The paths that reach here came from the index and so are under
 			// the roots already; this keeps that true if anything ever hands
 			// over one that was not.
@@ -123,17 +137,22 @@ func (s *Server) zipContents(album *library.Album, tracks []library.Item, tracks
 	}
 	// A playlist, or a directory that could not be determined: take the
 	// tracks the index resolved, which is the only set guaranteed to be ours.
-	files := make([]zipFile, 0, len(tracks))
+	if len(tracks) > zipMaxEntries {
+		return "", nil, errZipLimit
+	}
+	files := make([]zipFile, 0, min(len(tracks), zipMaxEntries))
 	seen := map[string]int{}
+	next := map[string]int{}
 	for _, it := range tracks {
-		name := it.Name
+		name := safeName(it.Name)
 		// Two directories can contribute the same file name to one playlist;
 		// a zip may hold duplicate names but no one wants to unpack them.
-		if n := seen[name]; n > 0 {
-			ext := filepath.Ext(name)
-			name = fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(name, ext), n+1, ext)
+		base, ext := name, filepath.Ext(name)
+		for n := max(2, next[base]); seen[name] > 0; n++ {
+			name = fmt.Sprintf("%s (%d)%s", strings.TrimSuffix(base, ext), n, ext)
+			next[base] = n + 1
 		}
-		seen[it.Name]++
+		seen[name]++
 		files = append(files, zipFile{path: it.Path, name: name, item: it})
 	}
 	return safeName(album.Name), files, nil
@@ -165,16 +184,22 @@ func dirEntries(dir string) ([]zipFile, error) {
 	var files []zipFile
 	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // an unreadable corner is skipped, not fatal
+			return err
 		}
 		rel, rerr := filepath.Rel(dir, p)
 		if rerr != nil {
-			return nil
+			return rerr
 		}
 		depth := len(strings.Split(filepath.ToSlash(rel), "/"))
+		if rel != "." && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
 			if rel != "." && depth >= zipMaxDepth {
-				return filepath.SkipDir
+				return errZipLimit
 			}
 			return nil
 		}
@@ -182,7 +207,7 @@ func dirEntries(dir string) ([]zipFile, error) {
 			return nil
 		}
 		if len(files) >= zipMaxEntries {
-			return filepath.SkipAll
+			return errZipLimit
 		}
 		files = append(files, zipFile{path: p, name: filepath.ToSlash(rel)})
 		return nil

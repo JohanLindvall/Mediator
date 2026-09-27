@@ -16,8 +16,10 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -99,6 +101,8 @@ func (s *Scratch) Excess() int64 {
 	return total - s.limit
 }
 
+var sizePattern = regexp.MustCompile(`(?i)^([0-9]+(?:\.[0-9]+)?)([kmgt]?)(b|ib)?$`)
+
 // ParseSize reads a size written the way an operator writes one: a number,
 // optionally followed by K, M, G or T, which are binary multiples because
 // that is what a disk of media is measured in. An empty string, or "off",
@@ -108,29 +112,25 @@ func ParseSize(s string) (int64, error) {
 	if s == "" || strings.EqualFold(s, "off") || s == "0" {
 		return 0, nil
 	}
+	parts := sizePattern.FindStringSubmatch(s)
+	if parts == nil || parts[2] == "" && strings.EqualFold(parts[3], "ib") {
+		return 0, fmt.Errorf("%q is not a size", s)
+	}
 	mult := int64(1)
-	// "8G" and "8GiB" and "8GB" all mean the same thing here; anything past
-	// the letter is a unit spelt out, and spelling is not information.
-	trimmed := strings.TrimRight(s, "bBiI")
-	if trimmed == "" {
-		return 0, fmt.Errorf("%q is not a size", s)
-	}
-	switch last := trimmed[len(trimmed)-1]; last {
-	case 'k', 'K':
+	switch strings.ToLower(parts[2]) {
+	case "k":
 		mult = 1 << 10
-	case 'm', 'M':
+	case "m":
 		mult = 1 << 20
-	case 'g', 'G':
+	case "g":
 		mult = 1 << 30
-	case 't', 'T':
+	case "t":
 		mult = 1 << 40
-	default:
-		trimmed += " " // keep the number whole below
 	}
-	num := strings.TrimSpace(strings.TrimRight(trimmed, "kKmMgGtT "))
-	n, err := strconv.ParseFloat(num, 64)
-	if err != nil || n < 0 {
+	n, err := strconv.ParseFloat(parts[1], 64)
+	bytes := n * float64(mult)
+	if err != nil || math.IsNaN(bytes) || math.IsInf(bytes, 0) || bytes < 0 || bytes >= float64(math.MaxInt64) || n > 0 && bytes < 1 {
 		return 0, fmt.Errorf("%q is not a size", s)
 	}
-	return int64(n * float64(mult)), nil
+	return int64(bytes), nil
 }

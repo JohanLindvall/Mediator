@@ -121,7 +121,7 @@ func (s *Server) handleHLSChild(w http.ResponseWriter, r *http.Request, sess *hl
 		// its bare segment names already resolve to the right place.
 		var body []byte
 		if sess.table != nil {
-			t, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
+			t := mediaSeconds(r.URL.Query().Get("t"))
 			body = sess.table.playlist("", max(t, 0))
 		} else {
 			raw, err := os.ReadFile(filepath.Join(sess.dir, "index.m3u8"))

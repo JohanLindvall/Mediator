@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { FEED_RESUMES, codecStringOf, initSegmentEnd, resumeAt } from './mse.ts';
+import { FEED_RESUMES, FedSource, codecStringOf, initSegmentEnd, resumeAt } from './mse.ts';
 
 function box(type: string, ...payload: Uint8Array[]): Uint8Array {
   const len = payload.reduce((n, p) => n + p.length, 0);
@@ -94,6 +94,19 @@ test('mse: the initialisation segment ends where the first fragment begins', () 
   new DataView(big.buffer).setBigUint64(8, BigInt(big.length));
   const withBig = new Uint8Array([...ftyp, ...moov, ...big, ...moof]);
   assert.equal(initSegmentEnd(withBig), ftyp.length + moov.length + big.length);
+  const wideMoof = new Uint8Array(24);
+  new DataView(wideMoof.buffer).setUint32(0, 1);
+  wideMoof.set(new TextEncoder().encode('moof'), 4);
+  new DataView(wideMoof.buffer).setBigUint64(8, 24n);
+  assert.equal(initSegmentEnd(new Uint8Array([...ftyp, ...moov, ...wideMoof])), ftyp.length + moov.length);
+});
+
+test('mse: truncated codec records are rejected without throwing', () => {
+  for (let size = 0; size < 4; size++) {
+    const record = box('avc1', bytes(78), box('avcC', bytes(size)));
+    const init = new Uint8Array([...ftyp, ...box('moov', trak(stsd(record)))]);
+    assert.equal(codecStringOf(init), null);
+  }
 });
 
 test('mse: a broken feed is picked up where its buffer ends', () => {
@@ -113,4 +126,70 @@ test('mse: a broken feed is picked up where its buffer ends', () => {
   // be asked for ever.
   assert.equal(resumeAt(540, 75, FEED_RESUMES), null);
   assert.equal(resumeAt(540, 75, FEED_RESUMES - 1)?.film, 615);
+});
+
+test('mse: failed or stopped appends cancel their response', async (t) => {
+  for (const action of ['error', 'stop'] as const) {
+    await t.test(action, { timeout: 2000 }, async (t) => {
+      const appended = Promise.withResolvers<void>();
+      const cancelled = Promise.withResolvers<void>();
+      const reported = Promise.withResolvers<string>();
+      let ends = 0;
+      let errors = 0;
+      class Buffer extends EventTarget {
+        updating = false;
+        buffered = { length: 0 };
+        appendBuffer(): void {
+          this.updating = true;
+          appended.resolve();
+        }
+      }
+      const buffer = new Buffer();
+      class Source extends EventTarget {
+        static isTypeSupported(): boolean { return true; }
+        readyState = 'open';
+        addSourceBuffer(): Buffer { return buffer; }
+        endOfStream(): void { this.readyState = 'ended'; }
+      }
+      const original = Object.getOwnPropertyDescriptor(globalThis, 'MediaSource');
+      Object.defineProperty(globalThis, 'MediaSource', { configurable: true, value: Source });
+      t.after(() => {
+        if (original) Object.defineProperty(globalThis, 'MediaSource', original);
+        else Reflect.deleteProperty(globalThis, 'MediaSource');
+      });
+      let source: Source;
+      t.mock.method(URL, 'createObjectURL', (ms: Source) => { source = ms; return 'blob:fixture'; });
+      const revoked = t.mock.method(URL, 'revokeObjectURL', () => {});
+      const init = new Uint8Array([...ftyp, ...box('moov', trak(stsd(avc1(100, 0, 42)))), ...box('moof', bytes(16))]);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(init); },
+        cancel() { cancelled.resolve(); },
+      });
+      t.mock.method(globalThis, 'fetch', async () => new Response(body));
+      const feed = new FedSource('/conversion', {
+        onError(why) { errors++; reported.resolve(why); },
+        onEnd() { ends++; },
+      });
+      t.after(() => feed.stop());
+      feed.attach({ currentTime: 0 } as HTMLMediaElement);
+      source!.dispatchEvent(new Event('sourceopen'));
+      await appended.promise;
+      if (action === 'error') {
+        buffer.updating = false;
+        buffer.dispatchEvent(new Event('error'));
+        buffer.dispatchEvent(new Event('updateend'));
+        assert.match(await reported.promise, /media buffer rejected/);
+      } else {
+        feed.stop();
+        feed.stop();
+        assert.equal(revoked.mock.callCount(), 1);
+      }
+      await cancelled.promise;
+      // Let pump's finally and run's catch finish after cancellation.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assert.equal(body.locked, false);
+      assert.equal(errors, action === 'error' ? 1 : 0);
+      assert.equal(ends, 0);
+    });
+  }
 });

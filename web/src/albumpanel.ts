@@ -4,6 +4,7 @@
 import { albumZipUrl, canDelete, getAlbum, thumbUrl, type AlbumDetailResponse, type Item } from './api';
 import { deleteWithConfirmation } from './deletedialog';
 import { holdScroll, releaseScroll } from './scrollhold';
+import { modalFocus } from './modal';
 import { esc, formatBytes, formatDuration, hoverLines, mediaShape, releaseShape, trackTitle } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
@@ -59,6 +60,7 @@ class AlbumPanel {
   private root: HTMLElement;
   private tracks: Item[] = [];
   private closed = false;
+  private releaseFocus: () => void;
   /**
    * The album this sheet shows, and — the same string, deliberately — the
    * token any queue it starts is tagged with. Ids are already unique per
@@ -75,8 +77,8 @@ class AlbumPanel {
     this.root.className = 'overlay sheet-overlay';
     this.root.innerHTML = `<div class="sheet"><div class="sheet-loading"><div class="spinner"></div></div></div>`;
     document.getElementById('overlays')!.appendChild(this.root);
-    document.body.classList.add('no-scroll');
     holdScroll();
+    this.releaseFocus = modalFocus(this.root, 'Release');
     this.root.addEventListener('click', (ev) => {
       if (ev.target === this.root) {
         this.close();
@@ -434,7 +436,7 @@ class AlbumPanel {
     if (active === this) active = null;
     document.removeEventListener('keydown', this.onKey, true);
     this.unwatch();
-    document.body.classList.remove('no-scroll');
+    this.releaseFocus();
     releaseScroll();
     this.root.classList.remove('open');
     window.setTimeout(() => this.root.remove(), 220);

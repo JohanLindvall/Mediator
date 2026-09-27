@@ -47,6 +47,19 @@ func TestParseContentHeader(t *testing.T) {
 	}
 }
 
+func TestAllowedPathsWithLiteralCommas(t *testing.T) {
+	for _, headers := range [][]string{{`"/srv/a,b",/srv/c`}, {"/srv/a,b", "/srv/c"}} {
+		req := httptest.NewRequest(http.MethodGet, "/api/library", nil)
+		for _, value := range headers {
+			req.Header.Add(PathsHeader, value)
+		}
+		filter := pathsOf(req)
+		if !filter.Allows("/srv/a,b/track.mp3") || !filter.Allows("/srv/c/track.mp3") || filter.Allows("/srv/a/track.mp3") {
+			t.Fatalf("wrong scope for %v: %+v", headers, filter)
+		}
+	}
+}
+
 func TestContentMasksTotals(t *testing.T) {
 	all := library.Counts{Video: 5, Image: 3, Audio: 7, Playlist: 1, Albums: 2, Artists: 1, Total: 16}
 

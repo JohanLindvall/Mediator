@@ -7,6 +7,7 @@ import {
   getPositions,
   contentKnown,
   loadInfo,
+  infoRefreshDelay,
   serverAbout,
   shownContent,
   subscribeEvents,
@@ -970,10 +971,13 @@ const grid = new VirtualGrid<Item | Album | Artist | Genre | Series | Season>(
  */
 const LONG_PRESS_MS = 550;
 let cardMenu: HTMLElement | null = null;
+let cardMenuOpener: HTMLElement | null = null;
 
 function closeCardMenu(): void {
   cardMenu?.remove();
   cardMenu = null;
+  if (cardMenuOpener?.isConnected) cardMenuOpener.focus({ preventScroll: true });
+  cardMenuOpener = null;
 }
 
 /** Open the menu for the card a cell shows, at a point; says whether it did. */
@@ -1001,6 +1005,7 @@ function openCardMenu(cell: HTMLElement, x: number, y: number): boolean {
   });
   item.focus();
   cardMenu = menu;
+  cardMenuOpener = cell;
   return true;
 }
 
@@ -1924,10 +1929,34 @@ subscribeEvents(
       if (Date.now() - lastGroupReload > 2000) reloadGroupedView();
     }, 300);
   },
-  (connected) => connEl.classList.toggle('offline', !connected),
+  (connected) => {
+    connEl.classList.toggle('offline', !connected);
+    if (connected && booted) void refreshInfo();
+  },
 );
 
 // ---- boot --------------------------------------------------------------
+
+let infoTimer = 0;
+let infoPending: Promise<void> | null = null;
+
+function refreshInfo(): Promise<void> {
+  if (infoPending) return infoPending;
+  window.clearTimeout(infoTimer);
+  let delay = 60_000;
+  infoPending = loadInfo()
+    .then(() => { delay = infoRefreshDelay(serverAbout()?.streamExpires); })
+    .catch(() => {}) // retry; a temporary outage must not prevent booting
+    .finally(() => {
+      infoPending = null;
+      infoTimer = window.setTimeout(() => void refreshInfo(), delay);
+    });
+  return infoPending;
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void refreshInfo();
+});
 
 // The first listing waits on /api/info, because the answer goes into every
 // thumbnail URL. Asking a moment too early would build the URLs the browser
@@ -1935,12 +1964,7 @@ subscribeEvents(
 // the epoch exists to break. It is one small request against a server that is
 // about to serve a page of images.
 void (async () => {
-  try {
-    await loadInfo();
-  } catch {
-    // No epoch: thumbnails still load, they are just versioned by mtime
-    // alone, as they were before. Not a reason to refuse to start.
-  }
+  await refreshInfo();
 
   // The preferences are for a caller who can see the whole library. One
   // confined to part of it is refused by the server; leaving the button out

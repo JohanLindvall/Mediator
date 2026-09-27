@@ -91,16 +91,9 @@ func (l *Library) UnderRoots(path string) bool {
 
 // markDirty notes that an item needs writing. Caller must hold l.mu.
 //
-// It takes the id out of the removals for the same reason markRemoved takes
-// it out of the dirty set: one id must never sit in both, because a flush
-// hands bolt the puts and the deletions in one transaction and the deletion
-// is applied last. A file dropped and indexed again inside one two-second
-// tick — a rename away and back, a reconciliation that ran while a disk was
-// slow, a torrent client replacing a file in place — therefore had its fresh
-// record written and then deleted, and both maps were cleared, so nothing
-// ever wrote it again: the mirror was missing a file that is in the library
-// until something changed it on disk, and a warm start inside that window
-// served a library without it.
+// Dirty and removed sets record the latest intent and must stay disjoint.
+// SaveItems applies removals before puts as a second guard against a file
+// disappearing and returning during a flush.
 func (l *Library) markDirty(id string) {
 	if l.dirty != nil {
 		delete(l.removed, id)
@@ -137,7 +130,7 @@ func (l *Library) PersistLoop(ctx context.Context, db *blob.DB) {
 	for {
 		select {
 		case <-ctx.Done():
-			l.flush(db) // keep whatever the last scan learned
+			l.flushFinal(db)
 			return
 		case <-t.C:
 			l.flush(db)
@@ -145,14 +138,50 @@ func (l *Library) PersistLoop(ctx context.Context, db *blob.DB) {
 	}
 }
 
+type indexWriter interface {
+	PutMetas(map[string]blob.Meta) error
+	SaveItems([]blob.Item, []string) error
+}
+
+const finalPersistFlushRounds = 3
+
+// Catch writes made during the final commit, but do not hang shutdown on a
+// database that keeps refusing writes.
+func (l *Library) flushFinal(db indexWriter) {
+	for range finalPersistFlushRounds {
+		l.flush(db)
+		l.metaPendMu.Lock()
+		pending := len(l.metaPending) > 0
+		l.metaPendMu.Unlock()
+		l.mu.RLock()
+		pending = pending || len(l.dirty) > 0 || len(l.removed) > 0
+		l.mu.RUnlock()
+		if !pending {
+			return
+		}
+	}
+}
+
 // flush writes pending index changes and enrichment results to the database.
-func (l *Library) flush(db *blob.DB) {
+func (l *Library) flush(db indexWriter) {
+	l.persistMu.Lock()
+	defer l.persistMu.Unlock()
 	l.metaPendMu.Lock()
 	metas := l.metaPending
 	l.metaPending = nil
 	l.metaPendMu.Unlock()
 	if err := db.PutMetas(metas); err != nil {
 		l.log.Warn("could not write metadata cache", "err", err)
+		l.metaPendMu.Lock()
+		if l.metaPending == nil {
+			l.metaPending = make(map[string]blob.Meta, len(metas))
+		}
+		for id, m := range metas {
+			if _, newer := l.metaPending[id]; !newer {
+				l.metaPending[id] = m
+			}
+		}
+		l.metaPendMu.Unlock()
 	}
 
 	l.mu.Lock()
@@ -180,14 +209,8 @@ func (l *Library) flush(db *blob.DB) {
 	remove := make([]string, 0, len(l.removed))
 	for id := range l.removed {
 		if _, live := l.items[id]; live {
-			// It went and came back: the index holds it again, and the put
-			// above carries its record. bolt applies this transaction's
-			// deletions after its puts, so passing both would write the
-			// record and delete it in the same breath — and both maps are
-			// cleared here, so nothing would ever write it again. markDirty
-			// keeps the two sets apart; this is the belt, at the one point
-			// where the harm is done, and it also covers an id the error
-			// path below put back after the file returned.
+			// A stale removal must not erase a file that returned while a
+			// prior commit was in flight. markDirty normally removes it first.
 			continue
 		}
 		remove = append(remove, id)
@@ -203,7 +226,9 @@ func (l *Library) flush(db *blob.DB) {
 		// changed once more, which a deleted file never does.
 		l.mu.Lock()
 		for _, it := range put {
-			l.dirty[it.ID] = struct{}{}
+			if _, live := l.items[it.ID]; live {
+				l.markDirty(it.ID)
+			}
 		}
 		for _, id := range remove {
 			if _, live := l.items[id]; live {

@@ -12,6 +12,7 @@ import { holdScroll, releaseScroll } from './scrollhold';
 import { esc, formatDateFull } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
+import { modalFocus } from './modal';
 
 export function openPrefs(): void {
   new Prefs();
@@ -23,6 +24,8 @@ class Prefs {
   private persisted = true;
   private editable = true;
   private busy = false;
+  private closed = false;
+  private releaseFocus: () => void;
 
   constructor() {
     this.root = document.createElement('div');
@@ -44,8 +47,8 @@ class Prefs {
         <div class="about" data-about></div>
       </div>`;
     document.getElementById('overlays')!.appendChild(this.root);
-    document.body.classList.add('no-scroll');
     holdScroll();
+    this.releaseFocus = modalFocus(this.root, 'Preferences', this.root.querySelector<HTMLElement>('[data-close]')!);
 
     this.root.querySelector('[data-close]')!.addEventListener('click', () => this.close());
     this.root.addEventListener('click', (ev) => {
@@ -202,8 +205,10 @@ class Prefs {
   }
 
   private close(): void {
+    if (this.closed) return;
+    this.closed = true;
     document.removeEventListener('keydown', this.onKey, true);
-    document.body.classList.remove('no-scroll');
+    this.releaseFocus();
     releaseScroll();
     this.root.classList.remove('open');
     window.setTimeout(() => this.root.remove(), 200);

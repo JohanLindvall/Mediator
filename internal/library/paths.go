@@ -1,6 +1,7 @@
 package library
 
 import (
+	"encoding/csv"
 	"os"
 	"path/filepath"
 	"slices"
@@ -38,15 +39,26 @@ type PathFilter struct {
 	key string
 }
 
-// ParsePaths reads a header value: paths separated by commas, or by newlines
-// for the caller who has one with a comma in it.
+// ParsePaths reads comma-separated paths (CSV quoting permits literal commas),
+// or one path per line when repeated HTTP headers have been joined.
 //
 // Anything relative is dropped rather than resolved. A relative path here
 // would be resolved against this process's working directory, which is not
 // something the person writing the proxy configuration can see, and quietly
 // allowing the wrong directory is the one failure this must not have.
 func ParsePaths(h string) PathFilter {
-	fields := strings.FieldsFunc(h, func(r rune) bool { return r == ',' || r == '\n' })
+	var fields []string
+	if strings.Contains(h, "\n") {
+		fields = strings.Split(h, "\n")
+	} else {
+		r := csv.NewReader(strings.NewReader(h))
+		r.TrimLeadingSpace = true
+		var err error
+		fields, err = r.Read()
+		if err != nil {
+			fields = strings.Split(h, ",") // retain unquoted-path compatibility
+		}
+	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {

@@ -1,6 +1,7 @@
 .git
 data
 media
+mediator
 web/node_modules
 web/dist
 web/src/types.gen.ts

@@ -409,7 +409,8 @@ func (s *Server) handlePlaylist(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "audio/x-mpegurl; charset=utf-8")
 	w.Header().Set("Content-Disposition", `attachment; filename="playlist.m3u"`)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = io.WriteString(w, buildM3U(items, requestBase(r)))
+	token, _, _ := s.sign.mint(time.Now())
+	_, _ = io.WriteString(w, buildM3U(items, requestBase(r), token))
 }
 
 // requestBase reconstructs the origin the client reached us on, so the
@@ -436,7 +437,11 @@ func requestBase(r *http.Request) string {
 // length is unknown, and the title runs to the end of the line — so anything
 // in a tag that would start a new one is flattened first, or a stray line
 // would be read back as another entry.
-func buildM3U(items []library.Item, base string) string {
+func buildM3U(items []library.Item, base, token string) string {
+	streamBase := base + "/api/stream/"
+	if token != "" {
+		streamBase = base + "/api/signed/" + url.PathEscape(token) + "/stream/"
+	}
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
 	for _, it := range items {
@@ -444,8 +449,8 @@ func buildM3U(items []library.Item, base string) string {
 		if it.Duration > 0 {
 			secs = int(it.Duration / 1000)
 		}
-		fmt.Fprintf(&b, "#EXTINF:%d,%s\n%s/api/stream/%s\n",
-			secs, m3uTitle(it), base, url.PathEscape(it.ID))
+		fmt.Fprintf(&b, "#EXTINF:%d,%s\n%s%s\n",
+			secs, m3uTitle(it), streamBase, url.PathEscape(it.ID))
 	}
 	return b.String()
 }
@@ -874,7 +879,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	if r.URL.Query().Get("dl") == "1" {
 		w.Header().Set("Content-Disposition",
-			fmt.Sprintf("attachment; filename=%q", it.Name))
+			mime.FormatMediaType("attachment", map[string]string{"filename": it.Name}))
 		// A DVD title's clock restarts at every join, which a player takes
 		// for a file five minutes long that cannot be seeked. Straighten it
 		// on the way out — the file is the same length and every range
@@ -1128,10 +1133,7 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "transcoding unavailable (no ffmpeg)", http.StatusNotImplemented)
 		return
 	}
-	start, _ := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
-	if start < 0 || start > 1e7 {
-		start = 0
-	}
+	start := mediaSeconds(r.URL.Query().Get("t"))
 	// What is being converted has to be known before it can be decided where
 	// to convert it: the rule is pixels a second, and a film nobody has
 	// opened this run has no size or rate on it. This is the probe that runs
@@ -1386,7 +1388,7 @@ func (s *Server) handleSubFile(w http.ResponseWriter, r *http.Request) {
 	}
 	// ?shift= rebases the cues onto a transcoded stream, whose clock starts at
 	// the keyframe it was opened at rather than at the start of the film.
-	if shift, err := strconv.ParseFloat(r.URL.Query().Get("shift"), 64); err == nil && shift > 0 {
+	if shift := mediaSeconds(r.URL.Query().Get("shift")); shift > 0 {
 		vtt = shiftVTT(vtt, shift)
 	}
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
@@ -1531,10 +1533,9 @@ func (s *Server) handleStateAll(w http.ResponseWriter, r *http.Request) {
 	if !c.unrestricted() || paths.Restricted() {
 		for id := range all {
 			it, ok := s.lib.Get(id)
-			// A position can outlive its file; one for a file the library
-			// no longer holds says nothing about anything this caller is
-			// kept from, and the client prunes it itself.
-			if ok && (!c.allows(it.Kind) || !paths.AllowsItem(it)) {
+			// An unknown item has no verifiable scope. Its owner state must
+			// not be exposed to a caller restricted to part of the library.
+			if !ok || !c.allows(it.Kind) || !paths.AllowsItem(it) {
 				delete(all, id)
 			}
 		}
@@ -1624,7 +1625,7 @@ func (s *Server) handleStateDelete(w http.ResponseWriter, r *http.Request) {
 	// knows is not an error (state_test pins that). An item the library does
 	// know is resolved like every other by-id route, so a restricted face
 	// cannot clear positions for things it is not shown.
-	if _, known := s.lib.Get(id); known {
+	if _, known := s.lib.Get(id); known || !contentOf(r).unrestricted() || pathsOf(r).Restricted() {
 		if _, ok := s.item(r, id); !ok {
 			http.NotFound(w, r)
 			return
@@ -1635,7 +1636,7 @@ func (s *Server) handleStateDelete(w http.ResponseWriter, r *http.Request) {
 	// position for.
 	func() {
 		defer s.owning(id)()
-		s.st.Delete(id)
+		s.st.ClearPosition(id)
 		s.lib.SetWatch(id, library.Watch{})
 	}()
 	w.WriteHeader(http.StatusNoContent)

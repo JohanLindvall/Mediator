@@ -2,6 +2,7 @@ package dlna
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -34,12 +35,12 @@ func ParseTime(s string) time.Duration {
 	var total float64
 	for _, p := range parts {
 		v, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
-		if err != nil {
+		if err != nil || v < 0 || math.IsNaN(v) || math.IsInf(v, 0) {
 			return 0
 		}
 		total = total*60 + v
 	}
-	if total < 0 {
+	if total >= float64(math.MaxInt64)/float64(time.Second) {
 		return 0
 	}
 	return time.Duration(total * float64(time.Second))

@@ -1,11 +1,8 @@
 /**
  * What a listing query is, and when two of them are about the same things.
  *
- * Lifted out of sources.ts so it can be tested: sources.ts itself cannot be
- * imported by the type-stripping test runner (its classes use parameter
- * properties), and whether rows are held over during a query change is
- * behaviour worth pinning — a wrong answer here is either a flashing screen
- * or the wrong listing under the chips.
+ * Shared predicates keep filtering, navigation and async sources in agreement.
+ * A wrong answer can flash the screen or show the wrong listing under its chips.
  */
 
 import type { Item, Kind } from './types.gen';

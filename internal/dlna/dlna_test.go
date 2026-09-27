@@ -45,6 +45,10 @@ func TestParseTime(t *testing.T) {
 		{"NOT_IMPLEMENTED", 0},
 		{"", 0},
 		{"nonsense", 0},
+		{"00:NaN:00", 0},
+		{"00:00:Inf", 0},
+		{"1e100:00:00", 0},
+		{"00:01:-1", 0},
 	} {
 		if got := ParseTime(c.in); got != c.want {
 			t.Errorf("ParseTime(%q) = %v, want %v", c.in, got, c.want)

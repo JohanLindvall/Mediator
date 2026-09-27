@@ -175,8 +175,8 @@ func (s *Server) item(r *http.Request, id string) (library.Item, bool) {
 }
 
 // PathsHeader restricts a request to the parts of the library that live
-// under the directories it names, separated by commas (or newlines, for a
-// path with a comma in it). Absent or empty means the whole library.
+// under the directories it names, using CSV quoting for literal commas or
+// one path per repeated header field. Absent or empty means the whole library.
 //
 // The same posture as the content header above and set the same way — by
 // whatever sits in front, never by the page — and for the same reason: a
@@ -190,5 +190,5 @@ const PathsHeader = "X-Allowed-Paths"
 
 // pathsOf reads the restriction a request arrived with.
 func pathsOf(r *http.Request) library.PathFilter {
-	return library.ParsePaths(r.Header.Get(PathsHeader))
+	return library.ParsePaths(strings.Join(r.Header.Values(PathsHeader), "\n"))
 }

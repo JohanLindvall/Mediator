@@ -2,7 +2,7 @@
  * Client for the backend JSON API.
  * The data model is generated from the Go types — see types.gen.ts.
  */
-import { nativeHLS, hlsClock } from './playback';
+import { nativeHLS, hlsClock } from './playback.ts';
 import type {
   AlbumDetailResponse,
   TracksResponse,
@@ -34,23 +34,23 @@ import type {
   DeleteRequest,
   DeletePlanResponse,
   DeleteResult } from './types.gen';
-import { SPRITE, Quality } from './types.gen';
-import { reportFault } from './report';
+import { SPRITE, type Quality } from './types.gen.ts';
+import { reportFault } from './report.ts';
 
 import type { QueueSource } from './content';
 
-export * from './types.gen';
+export * from './types.gen.ts';
 
-async function getJSON<T>(url: string): Promise<T> {
+async function getJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
   // Both ways this can fail are worth the server knowing about, and neither
   // reaches it otherwise: a refusal it answered but the page could not use,
   // and a request that never arrived at all — which is the interesting one,
   // since the server's log has no line for a request it never saw.
   let res: Response;
   try {
-    res = await fetch(url);
+    res = await fetch(url, { signal });
   } catch (e) {
-    reportFault({ what: 'network', detail: String(e), route: apiRoute(url) });
+    if (!signal?.aborted) reportFault({ what: 'network', detail: String(e), route: apiRoute(url) });
     throw e;
   }
   if (!res.ok) {
@@ -128,11 +128,11 @@ function listParams(q: ListFilters): URLSearchParams {
   return p;
 }
 
-export function listMedia(q: ListQueryParams): Promise<Result> {
+export function listMedia(q: ListQueryParams, signal?: AbortSignal): Promise<Result> {
   const p = listParams(q);
   p.set('offset', String(q.offset ?? 0));
   p.set('limit', String(q.limit ?? 200));
-  return getJSON<Result>(`/api/library?${p}`);
+  return getJSON<Result>(`/api/library?${p}`, signal);
 }
 
 /**
@@ -167,24 +167,26 @@ function groupedQuery(q: GroupedQuery): URLSearchParams {
   return p;
 }
 
-export function listAlbums(q: GroupedQuery): Promise<AlbumsResponse> {
-  return getJSON<AlbumsResponse>(`/api/albums?${groupedQuery(q)}`);
+export function listAlbums(q: GroupedQuery, signal?: AbortSignal): Promise<AlbumsResponse> {
+  return getJSON<AlbumsResponse>(`/api/albums?${groupedQuery(q)}`, signal);
 }
 
-export function listArtists(q: GroupedQuery): Promise<ArtistsResponse> {
-  return getJSON<ArtistsResponse>(`/api/artists?${groupedQuery(q)}`);
+export function listArtists(q: GroupedQuery, signal?: AbortSignal): Promise<ArtistsResponse> {
+  return getJSON<ArtistsResponse>(`/api/artists?${groupedQuery(q)}`, signal);
 }
 
 export function listSeries(
   q: Pick<ListQueryParams, 'q' | 'sort' | 'order'>,
+  signal?: AbortSignal,
 ): Promise<SeriesResponse> {
-  return getJSON<SeriesResponse>(`/api/series?${groupedQuery(q)}`);
+  return getJSON<SeriesResponse>(`/api/series?${groupedQuery(q)}`, signal);
 }
 
 export function listGenres(
   q: Pick<ListQueryParams, 'q' | 'sort' | 'order'>,
+  signal?: AbortSignal,
 ): Promise<GenresResponse> {
-  return getJSON<GenresResponse>(`/api/genres?${groupedQuery(q)}`);
+  return getJSON<GenresResponse>(`/api/genres?${groupedQuery(q)}`, signal);
 }
 
 /**
@@ -407,6 +409,13 @@ export function spriteUrl(id: string, v = 0, hover = false): string {
  * loads off the connections playback needs.
  */
 let thumbEpoch = '';
+
+/** Refresh before expiry and at least hourly, so a long-lived tab also
+ * recovers its signing key after a server restart with persistence off. */
+export function infoRefreshDelay(expires?: number, now = Date.now()): number {
+  const remaining = Number.isFinite(expires) ? expires! * 1000 - now - 5 * 60_000 : 0;
+  return Math.min(60 * 60_000, Math.max(60_000, remaining));
+}
 
 function epochParam(): string {
   return thumbEpoch ? `e=${encodeURIComponent(thumbEpoch)}` : '';

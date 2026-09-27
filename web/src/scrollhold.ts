@@ -1,7 +1,7 @@
 /**
  * Keep the listing's place while something is open over it.
  *
- * The grid scrolls inside `#scroller`, and every overlay sets `no-scroll` on
+ * The grid scrolls inside `#scroller`, and the first overlay sets `no-scroll` on
  * the body, which turns that element to `overflow: hidden` for as long as it
  * is up. The browser is supposed to give the offset back afterwards, and on
  * a desktop it does — but on iOS the native fullscreen player is a different
@@ -23,6 +23,7 @@ function scroller(): HTMLElement | null {
 }
 
 export function holdScroll(): void {
+  document.body.classList.add('no-scroll');
   depth++;
   if (depth > 1) return;
   held = scroller()?.scrollTop ?? null;
@@ -32,6 +33,7 @@ export function releaseScroll(): void {
   if (depth === 0) return;
   depth--;
   if (depth > 0) return;
+  document.body.classList.remove('no-scroll');
   const el = scroller();
   const top = held;
   held = null;
