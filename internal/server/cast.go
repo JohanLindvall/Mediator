@@ -61,6 +61,9 @@ const (
 	// How many times a set is asked whether it took the file, when it did
 	// not answer that it had. One a second.
 	confirmTries = 6
+	// What a viewer is told about a file a probe found is not media, in the
+	// words the player uses for the same verdict.
+	damagedFile = "This file is damaged or incomplete"
 )
 
 // casting holds what has been found on the network. It is a cache and not a
@@ -367,6 +370,16 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 	// resolved without the probe would count a shorter list and hand the set
 	// the wrong subtitle, or none.
 	it = s.probed(ctx, it)
+	// A file the probe found is not media — cut short, its index never
+	// written — is not handed to a set, which cannot play it any more than
+	// the browser can and does not say so: measured, a television given one
+	// fetched its first few megabytes, sat for minutes in a state whose one
+	// action is Stop, hung the Play that followed, and refused the next cast
+	// until it was stopped.
+	if it.Unreadable {
+		http.Error(w, damagedFile, http.StatusUnprocessableEntity)
+		return
+	}
 
 	src, mimeType, note, err := s.castSourceNoted(ctx, d, it, r.URL.Query().Get("audio"))
 	if err != nil {
@@ -516,8 +529,14 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Probed for the same reason handleCast probes: what is queued next has
-	// the same soundtracks and captions to resolve as what is playing.
+	// the same soundtracks and captions to resolve as what is playing — and
+	// a set queued a file that is not media moves on into it at the boundary
+	// and sits there, exactly as one handed it directly does.
 	it = s.probed(r.Context(), it)
+	if it.Unreadable {
+		http.Error(w, damagedFile, http.StatusUnprocessableEntity)
+		return
+	}
 	src, mimeType, note, err := s.castSourceNoted(r.Context(), d, it, r.URL.Query().Get("audio"))
 	if err != nil {
 		castSourceError(w, err)

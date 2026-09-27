@@ -3489,6 +3489,16 @@ set that has gone away should be given up on in seconds, and no more than
   being what reaches it. Reactive rather than a Stop before every cast: a set
   that takes a new file while playing another is left to do so, and the cost
   where it does not is one quick refusal.
+  **A file the probe found is not media is never handed to a set**
+  (`Item.Unreadable`, refused 422 at both doors, `/play` and `/next`, in the
+  player's own words). The set cannot play it any more than the browser can,
+  and it does not say so: that is exactly how the television above came to
+  be stuck — the player had rolled on into such a file by itself at the end
+  of the one before. The roll-on now passes over one (`damaged` in
+  `query.ts`, tested, applied by `findKind` wherever the player goes on *by
+  itself*: a file ending here or on the set, "Next episode", and playing a
+  season from its card); a swipe still lands on it, that being the viewer
+  asking for that file.
   **The queue is this side's business.** A renderer knows nothing of what
   follows what it was given, so the bar hands it the next track *in advance*
   (`SetNextAVTransportURI`, optional in the specification): the set opens it

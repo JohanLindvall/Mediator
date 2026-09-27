@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  damaged,
   findKind,
   listFilters,
   countKey,
@@ -184,6 +185,23 @@ test('findKind steps past the other kinds and stops at the ends', async () => {
   // An unknown total (nothing has arrived) walks until the source says undefined.
   const open: ItemSource = { ...src, total: () => -1 };
   assert.deepEqual((await findKind(open, 3, 1, 'video'))?.index, 4);
+});
+
+test('going on by itself passes over a file known to be damaged, and a swipe does not', async () => {
+  const films = [{ unreadable: true }, {}, { unreadable: true }, { unreadable: true }];
+  const src: ItemSource = {
+    item: (i) =>
+      Promise.resolve(
+        i >= 0 && i < films.length
+          ? ({ id: `v${i}`, kind: 'video', name: `${i}`, path: '', size: 0, mtime: 0, ...films[i] } as never)
+          : undefined,
+      ),
+    total: () => films.length,
+  };
+  assert.equal((await findKind(src, 0, 1, 'video', damaged))?.index, 1, 'the first one that plays');
+  assert.equal(await findKind(src, 2, 1, 'video', damaged), null, 'nothing after it plays: the end, not a damaged file');
+  assert.equal((await findKind(src, 0, 1, 'video'))?.index, 0, 'a swipe lands where it is pointed');
+  assert.ok(damaged({ unreadable: true } as never) && !damaged({} as never));
 });
 
 test('every view names the source that fills it', () => {

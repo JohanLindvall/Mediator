@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -223,6 +225,39 @@ func TestAnIndexAtTheBackIsWorthTheCopy(t *testing.T) {
 	it.MoovLate = true
 	if !remuxable(it) {
 		t.Error("an MP4 whose index sits behind its data was refused the copy that moves it")
+	}
+}
+
+// A file the probe found is not media is not handed to a set, for play or
+// queued next. Measured, a television given one fetched its first megabytes,
+// sat for minutes in a state whose one action is Stop, hung the Play that
+// followed and refused the next cast until it was stopped — and the player
+// had rolled on into that file by itself at the end of the one before.
+func TestADamagedFileIsNotHandedToASet(t *testing.T) {
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("the verdict is ffprobe's")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(path, []byte("not really a film"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ts, srv, _ := serverUnderTest(t, dir)
+	// A set offering no services: anything said to it fails, so a 422 is
+	// an answer given before anything was.
+	set := &dlna.Renderer{ID: "tv-1", Name: "Set One"}
+	srv.cast.discover = func(context.Context, time.Duration) []*dlna.Renderer { return []*dlna.Renderer{set} }
+
+	for _, route := range []string{"play", "next"} {
+		res, err := http.Post(ts.URL+"/api/renderers/tv-1/"+route+"/"+library.PathID(path), "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnprocessableEntity || strings.TrimSpace(string(body)) != damagedFile {
+			t.Errorf("%s: %d %q, want 422 %q", route, res.StatusCode, body, damagedFile)
+		}
 	}
 }
 

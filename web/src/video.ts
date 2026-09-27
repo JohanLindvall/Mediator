@@ -50,7 +50,7 @@ import { holdScroll, releaseScroll } from './scrollhold';
 import { modalFocus, nativeControlKey } from './modal';
 import { clamp, esc, formatDuration } from './format';
 import { icons } from './icons';
-import { findKind, type ItemSource } from './sources';
+import { damaged, findKind, type ItemSource } from './sources';
 import {
   mediaErrorText,
   framesReported,
@@ -2438,11 +2438,15 @@ class VideoOverlay {
     if (!moved && !this.closed) this.close();
   }
 
-  private async step(dir: 1 | -1, o: { pastCredits?: boolean } = {}): Promise<boolean> {
+  private async step(dir: 1 | -1, o: { pastCredits?: boolean; onward?: boolean } = {}): Promise<boolean> {
     const src = this.opts.nav?.src;
     if (!src) return false;
     const gen = ++this.stepGen;
-    const found = await findKind(src, this.navIndex + dir, dir, 'video');
+    // Going on by itself — the file ended, here or on the set, or its
+    // credits were skipped — passes over a file already known to be damaged
+    // (`damaged`); a swipe lands wherever it is pointed.
+    const onward = o.onward || o.pastCredits;
+    const found = await findKind(src, this.navIndex + dir, dir, 'video', onward ? damaged : undefined);
     // A second swipe while the first was still searching wins.
     if (!found || this.closed || gen !== this.stepGen) return false;
     let at: number | undefined;
@@ -2513,7 +2517,7 @@ class VideoOverlay {
 
   /** The film ended on the set: the next episode, or nothing more to do. */
   private async rollOnSet(): Promise<void> {
-    const moved = await this.step(1);
+    const moved = await this.step(1, { onward: true });
     if (!moved && this.tv && !this.closed) {
       this.endCast(false);
       this.flash(icons.restart);
@@ -2896,7 +2900,7 @@ class VideoOverlay {
     this.showControls();
     // A finished file rolls on to the next video by itself. If it was the
     // last one the player stays put, where the flash offers a replay.
-    void this.step(1).then((moved) => {
+    void this.step(1, { onward: true }).then((moved) => {
       if (!moved && !this.closed) this.flash(icons.restart);
     });
   };

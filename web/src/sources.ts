@@ -21,7 +21,7 @@ export const PAGE_SIZE = 200;
 
 // The item source and the walk of a kind live in query.ts, where the test
 // runner can reach them; re-exported so the viewers keep one import.
-export { findKind } from './query.ts';
+export { damaged, findKind } from './query.ts';
 export type { ItemSource } from './query';
 
 // The query's shape and the hold-over decision live in query.ts, where the

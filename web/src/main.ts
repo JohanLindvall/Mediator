@@ -36,6 +36,7 @@ import { openAlbumPanel, reloadAlbumPanel, type AlbumPanelOpts } from './albumpa
 import { openVideo, type VideoOpts } from './video';
 import {
   AlbumsSource,
+  damaged,
   findKind,
   ArtistsSource,
   GenresSource,
@@ -933,7 +934,9 @@ async function playSeason(season: number): Promise<void> {
     season,
   });
   const src: ItemSource = { item: (i) => episodes.item(i), total: () => episodes.total };
-  const first = await findKind(src, 0, 1, 'video');
+  // Playing a season is going on to the next thing to watch from its start,
+  // so a first episode already known to be damaged is passed over (damaged).
+  const first = await findKind(src, 0, 1, 'video', damaged);
   if (!first) {
     showToast('No episodes to play');
     return;

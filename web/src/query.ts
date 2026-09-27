@@ -177,21 +177,36 @@ export interface ItemSource {
  * A viewer steps between items of its own kind — a swipe in the picture
  * viewer lands on a picture, and one in the player on something playable —
  * so whatever is filed in between is passed over rather than opened in a
- * viewer that cannot show it.
+ * viewer that cannot show it. `skip` passes over more: see `damaged`.
  */
 export async function findKind(
   src: ItemSource,
   from: number,
   dir: 1 | -1,
   kind: Kind,
+  skip?: (it: Item) => boolean,
 ): Promise<{ item: Item; index: number } | null> {
   const total = src.total();
   for (let i = from; i >= 0 && (total < 0 || i < total); i += dir) {
     const it = await src.item(i);
     if (!it) return null;
-    if (it.kind === kind) return { item: it, index: i };
+    if (it.kind === kind && !skip?.(it)) return { item: it, index: i };
   }
   return null;
+}
+
+/**
+ * Whether a probe has already found this file is not media — cut short, its
+ * index never written.
+ *
+ * Going on *by itself* passes over such a file: the one that ended rolls on
+ * to the next thing to watch, and this is not one. Landed on here it says so
+ * and stops; on a television it was handed to the set, which fetched its
+ * first megabytes and sat on it, refusing the next cast until it was
+ * stopped. A swipe still lands on it, being the viewer asking for that file.
+ */
+export function damaged(it: Item): boolean {
+  return it.unreadable === true;
 }
 
 /** Which source fills the grid: one name per source, not per view. */
