@@ -1080,8 +1080,15 @@ listing instead of an empty screen.
 
 ## Docker
 
+A published image is built by GitHub Actions on every push to main
+(`.github/workflows/docker.yml`) — after the Go tests, with the race detector
+and ffmpeg present, and the frontend's type check and tests have passed — as
+`ghcr.io/johanlindvall/mediator:latest`, plus `:sha-<commit>` for each commit
+and the version for a `vX.Y.Z` tag. It is built for amd64, the runtime
+carrying the Intel driver that hardware conversion needs. Or build it here:
+
 ```sh
-docker build -t mediator .
+docker build -t mediator .     # or: docker pull ghcr.io/johanlindvall/mediator:latest
 docker run --rm -p 8080:8080 \
   -v /path/to/your/media:/library:ro \
   -v mediator-data:/data \

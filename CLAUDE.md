@@ -24,6 +24,15 @@ make vet              # go vet only
 ./mediator -open DIR                            # free loopback port + open a browser
 ```
 
+CI is `.github/workflows/docker.yml`: every push and pull request builds the
+`test` stage (so `make test`, run by GitHub), and a push to main then
+publishes the runtime image to `ghcr.io/johanlindvall/mediator` as `:latest`
+and `:sha-<commit>` (a `vX.Y.Z` tag adds the version), stamped with the same
+`git describe --tags --always` a local build uses. amd64 only, deliberately:
+the runtime installs `intel-media-driver`, which exists for x86 alone. It
+follows the owner's other repositories' publishing workflow — provenance,
+SBOM, an attestation, the GitHub Actions layer cache.
+
 Optional flows that DO need a local toolchain (never required to build):
 
 ```sh

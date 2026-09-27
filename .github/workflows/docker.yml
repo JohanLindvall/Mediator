@@ -1,0 +1,135 @@
+# Build, test and publish the Docker image.
+#
+# Every push and pull request builds the Dockerfile's test stage: go vet and
+# the race-enabled Go tests with ffmpeg present, and on the way there the
+# frontend's type check and tests, which the web stage runs. Nothing reaches
+# the registry that did not pass them — publishing waits on that job.
+#
+# A push to main publishes the runtime image to GHCR as :latest and as
+# :sha-<commit>; a vX.Y.Z tag publishes that version too. The image is stamped
+# with the version a local `make docker` stamps (`git describe --tags
+# --always`), so the about box reads the same wherever the binary came from.
+#
+# amd64 only: the runtime stage installs intel-media-driver, which exists for
+# x86 alone, and the machine this serves is x86.
+name: docker
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  # A pull request's newer push supersedes its older one; main keeps every
+  # run, so each commit that lands is published in order.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Test (go vet, go test -race, the frontend's tsc and tests)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: test
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish:
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # For the build provenance attestation.
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # git describe wants the history and any tags.
+          fetch-depth: 0
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Work out the version and the image's name
+        id: version
+        run: |
+          set -euo pipefail
+          # GHCR refuses uppercase in an image name, and the owner's login has it.
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          {
+            echo "version=$(git describe --tags --always)"
+            echo "built=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "image=ghcr.io/${owner}/mediator"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/metadata-action@v6
+        id: meta
+        with:
+          images: ${{ steps.version.outputs.image }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=Mediator
+            org.opencontainers.image.description=A self-contained web media browser: video, pictures and music, served from the disks it indexes
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILT=${{ steps.version.outputs.built }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Attest what was built
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ steps.version.outputs.image }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Report
+        run: |
+          set -euo pipefail
+          {
+            echo "### Published ${{ steps.version.outputs.version }}"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+            echo "digest: ${{ steps.push.outputs.digest }}"
+          } >> "$GITHUB_STEP_SUMMARY"
