@@ -462,6 +462,23 @@ class VideoOverlay {
       : this.rotation
         ? `rotate(${this.rotation}deg)${zoom}`
         : zoom.trim();
+    this.turnPoster(this.rotation);
+  }
+
+  /**
+   * Turn the poster as the picture it stands in for is turned. It is that
+   * picture for a moment on every open and for the whole of a film playing
+   * on a television, and a still left as the file has it showed a film the
+   * owner had turned upright lying on its side — the frame the seek bar
+   * previews had the same fault. Placed by its centre, as the element is.
+   */
+  private turnPoster(deg: number): void {
+    const p = this.poster;
+    const odd = deg % 180 !== 0;
+    p.classList.toggle('rotated', odd);
+    p.style.width = odd ? `${this.root.clientHeight}px` : '';
+    p.style.height = odd ? `${this.root.clientWidth}px` : '';
+    p.style.transform = odd ? `translate(-50%, -50%) rotate(${deg}deg)` : deg ? `rotate(${deg}deg)` : '';
   }
 
   /**
@@ -2383,8 +2400,13 @@ class VideoOverlay {
     this.prep.hidden = true;
   }
 
-  /** Show the item's thumbnail over the picture until the video renders. */
+  /**
+   * Show the item's thumbnail over the picture until the video renders —
+   * turned as that item is, which during a swipe is the neighbour arriving
+   * rather than the film being left.
+   */
   private showPoster(item: Item): void {
+    this.turnPoster(((item.rotation ?? 0) % 4) * 90);
     this.poster.src = previewUrl(item.id, item.mtime);
     this.root.classList.add('posted');
   }
@@ -2784,11 +2806,12 @@ class VideoOverlay {
     this.previewFrame.style.width = `${g.boxW}px`;
     this.previewFrame.style.height = `${g.boxH}px`;
     // The frame comes as the file has it; a film the player has turned is
-    // turned here the same way, inside a box already the turned shape.
+    // turned here the same way, inside a box already the turned shape —
+    // placed by its centre and turned about it, as the picture itself is.
     const odd = turns % 2 !== 0;
     this.previewImg.style.width = `${odd ? g.boxH : g.boxW}px`;
     this.previewImg.style.height = `${odd ? g.boxW : g.boxH}px`;
-    this.previewImg.style.transform = this.rotation ? `rotate(${this.rotation}deg)` : '';
+    this.previewImg.style.transform = `translate(-50%, -50%)${this.rotation ? ` rotate(${this.rotation}deg)` : ''}`;
     this.previewEl.hidden = false;
   }
 

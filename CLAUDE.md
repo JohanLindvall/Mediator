@@ -2808,7 +2808,11 @@ Frontend (`web/src`, no framework, no runtime deps):
   different things. The **poster** (`.vo-poster`) is the incoming item's
   thumbnail held over the picture from `load()` until `loadeddata`, so every
   switch is covered — a drag, the roll-on at the end of a file, the first
-  open. The **slides** (`.vo-slides`, `.lb-slides`) are what a drag moves:
+  open. It is **turned as the item is** (`turnPoster`, from the item's own
+  rotation, which during a swipe is the neighbour's): a thumbnail is the file
+  as it is stored, and a film the owner had turned upright otherwise lay on
+  its side for a moment on every open, and for the whole of its playing on a
+  television, where the poster is the picture. The **slides** (`.vo-slides`, `.lb-slides`) are what a drag moves:
   the frame being left, captured off the video into a canvas, with the
   neighbours' thumbnails a screen away on either side. On release the layer
   runs the rest of the way, the poster goes up showing the very picture the
@@ -5805,7 +5809,13 @@ Serving details worth knowing before "fixing" them:
   bounded by a quarter of the player's height between 120 and 240, turned
   with the film the player has turned, and asked for at the screen's density
   capped at two, rounded up to 32 so nearby sizes share their frames. The
-  element's own shape is used where it has one, else the library's.
+  element's own shape is used where it has one, else the library's. The
+  frame is **placed by its centre** and turned about it, as the player's own
+  turned picture is (`applyRotation`): a quarter-turned image keeps its
+  unturned layout box, taller than the box it sits in, and a box that clips
+  holds what overflows it to its start edge rather than centring it — which
+  is how a turned film's preview came out as a black band above half a
+  picture.
   Hover is for pointers that hover; a finger gets the preview only while it
   drags. A DVD title is read by position (`library.SeekByte`), its clock not
   being continuous, so its frame is where the reading enters — near the

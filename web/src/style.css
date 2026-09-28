@@ -844,6 +844,13 @@ body.viewing #app {
   left: 50%;
   top: 50%;
 }
+/* The poster of a quarter-turned film is placed by its centre too, its
+   size set to the overlay's swapped axes as the element's is. */
+.video-overlay .vo-poster.rotated {
+  inset: auto;
+  left: 50%;
+  top: 50%;
+}
 .lb-stage img {
   transition: opacity 0.18s, transform 0.15s;
 }
@@ -1192,9 +1199,14 @@ body.viewing #app {
 .seek-preview[hidden] {
   display: none;
 }
+/* The frame is placed by its centre, as the player's own turned picture is
+   (applyRotation): a quarter-turned image keeps its unturned layout box,
+   taller than this one, and centred by a grid it was held to the top
+   instead — a box that clips will not let what it holds overflow its start
+   edge — so, turned about its own centre, it left a black band above and
+   lost its bottom. */
 .seek-preview-frame {
-  display: grid;
-  place-items: center;
+  position: relative;
   overflow: hidden;
   background: #000;
   border: 1px solid rgba(255, 255, 255, 0.28);
@@ -1202,8 +1214,10 @@ body.viewing #app {
   box-shadow: 0 6px 22px rgba(0, 0, 0, 0.65);
 }
 .seek-preview-frame img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   display: block;
-  flex: none;
   object-fit: contain;
   transition: opacity 0.12s;
 }
