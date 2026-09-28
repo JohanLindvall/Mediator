@@ -11,7 +11,7 @@
  * of it, and it has been wrong — a performer's releases opened by name for as
  * long as the fallback was simply the first row of the table below.
  */
-import type { ViewMode } from './content';
+import { listsTracks, type ViewMode } from './content.ts';
 
 /** The narrowing a view stands in, which changes what it lists. */
 export interface Narrowing {
@@ -23,7 +23,11 @@ export interface Narrowing {
   near?: string;
 }
 
-export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[string, string]> {
+export function sortOptions(
+  mode: ViewMode,
+  where: Narrowing = {},
+  content: string[] | null = null,
+): Array<[string, string]> {
   // What sounds like one thing is listed nearest first, and nothing else
   // would be an order worth the name.
   if (where.near && (mode === 'albums' || mode === 'artists')) return [['similarity', 'Similarity']];
@@ -97,28 +101,23 @@ export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[strin
         ['pixels', 'Resolution'],
         ['bitrate', 'Bitrate'],
       ];
-    case 'audio':
+    default: {
+      const opts: Array<[string, string]> = [
+        ['mtime', 'Modified'],
+        ['name', 'Name'],
+        ['popular', 'Popular'],
+        ['size', 'Size'],
+        ['added', 'Added'],
+        ['duration', 'Length'],
+      ];
       // One fact only music has: how fast it goes, as the analysis read it
-      // from the sound. A track with none — not read yet, no steady pulse —
-      // comes after every one that has, whichever way the order runs.
-      return [
-        ['mtime', 'Modified'],
-        ['name', 'Name'],
-        ['popular', 'Popular'],
-        ['size', 'Size'],
-        ['added', 'Added'],
-        ['duration', 'Length'],
-        ['tempo', 'Tempo'],
-      ];
-    default:
-      return [
-        ['mtime', 'Modified'],
-        ['name', 'Name'],
-        ['popular', 'Popular'],
-        ['size', 'Size'],
-        ['added', 'Added'],
-        ['duration', 'Length'],
-      ];
+      // from the sound — offered wherever the listing is tracks and nothing
+      // else (listsTracks), which on a face of music alone is All and
+      // Popular, there being no music chip there. A track with none comes
+      // after every one that has, whichever way the order runs.
+      if (listsTracks(mode, content)) opts.push(['tempo', 'Tempo']);
+      return opts;
+    }
   }
 }
 

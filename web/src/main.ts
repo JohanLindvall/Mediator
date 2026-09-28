@@ -1385,7 +1385,7 @@ function showArtist(name: string): void {
 
 /** Refill the sort select for the current view, keeping the key if it fits. */
 function renderSortOptions(): void {
-  const opts = sortOptions(state.mode, state);
+  const opts = sortOptions(state.mode, state, shownContent());
   // A key that does not survive the change of view falls back to the one
   // that view opens on, rather than being sent to a server that would
   // quietly ignore it.
@@ -1842,7 +1842,9 @@ function readHash(): void {
   // key from one of them means nothing in another. renderSortOptions falls
   // back for anything that does not fit.
   const s = p.get('s') ?? '';
-  state.sort = sortOptions(state.mode, state).some(([v]) => v === s) ? s : openingSort(state.mode, state);
+  state.sort = sortOptions(state.mode, state, shownContent()).some(([v]) => v === s)
+    ? s
+    : openingSort(state.mode, state);
   // And the direction the same way: an address that names one keeps it,
   // and one that does not opens the view the way the view opens — a link to
   // a season lands on its first episode, not its last.

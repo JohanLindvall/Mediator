@@ -1137,7 +1137,14 @@ Change propagation is the core loop:
   the lowest priority. The stamper and the tempo order read one published
   map (`publishTempos`, replaced wholesale like the release verdicts), so a
   tile and the order it sits in cannot disagree; a track with none sorts
-  last whichever way the order runs. Shown as a whole number
+  last whichever way the order runs. **The order is offered wherever a
+  listing is tracks and nothing else** (`listsTracks` in `content.ts`, the
+  rule the queue-all button asks too): the music chip, and on a face of
+  music alone All and Popular — offered on the chip alone at first, it was
+  missing from the one face with no music chip on it, All being its tracks.
+  `sortOptions` takes the face for that, and both places that check a key
+  against the options pass it; boot reads the address only once `/api/info`
+  has said what the face shows. Shown as a whole number
   (`tempoLabel`): on the tile in the corner it leaves free (the duration has
   the other bottom corner), in the sheet beside each length (a column of one
   width, gone under 480px), in the bar beside the performer — who gives way

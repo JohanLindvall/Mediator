@@ -518,9 +518,10 @@ Go binary with the TypeScript frontend embedded.
   release's sound. Four things are read off it:
   - **How fast it goes.** Each track's tempo, in beats a minute: on its tile
     beside the length, in a release's sheet beside each track's length, in
-    the music bar beside the performer, and on hover — and the music listing
-    can be ordered by it (*Tempo*), a track with none coming last whichever
-    way the order runs. It is read from the sound rather than the tags:
+    the music bar beside the performer, and on hover — and a listing of
+    tracks can be ordered by it (*Tempo*): the Music chip's, and on a face
+    that shows only music, All and Popular. A track with none comes last
+    whichever way the order runs. It is read from the sound rather than the tags:
     across the library measured, 587 of 28,767 files carried a BPM tag at
     all, 447 of those said nought and 46 said 320, a bitrate in the wrong
     field. Read against the tags that were plausible it agreed within one

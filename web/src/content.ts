@@ -81,7 +81,32 @@ export function modeShown(mode: ViewMode, content: string[] | null): boolean {
  * chips are unchanged.
  */
 export function defaultMode(content: string[] | null): ViewMode {
-  return content?.length === 1 && content[0] === 'music' ? 'artists' : 'all';
+  return musicFace(content) ? 'artists' : 'all';
+}
+
+/** Whether a face shows music and nothing else. */
+function musicFace(content: string[] | null): boolean {
+  return content?.length === 1 && content[0] === 'music';
+}
+
+/**
+ * Whether a view's items are tracks and nothing else: the music chip's, and
+ * on a face that shows nothing but music the listings that elsewhere mix
+ * kinds — All and Popular — which are where such a face lists its tracks,
+ * there being no music chip on it to repeat All. What a track has and a
+ * film does not (a tempo, a queue) is offered wherever this says so, and
+ * one rule is what keeps the sort menu and the queue button agreeing.
+ */
+export function listsTracks(mode: ViewMode, content: string[] | null): boolean {
+  switch (mode) {
+    case 'audio':
+      return true;
+    case 'all':
+    case 'popular':
+      return musicFace(content);
+    default:
+      return false;
+  }
 }
 
 /** The view to open when the one asked for is not on offer here. */
@@ -110,10 +135,9 @@ export function queueSource(mode: ViewMode, content: string[] | null): QueueSour
     case 'audiobooks':
       return mode;
     case 'audio':
-      return 'items';
     case 'all':
     case 'popular':
-      return content?.length === 1 && content[0] === 'music' ? 'items' : null;
+      return listsTracks(mode, content) ? 'items' : null;
     default:
       return null;
   }
