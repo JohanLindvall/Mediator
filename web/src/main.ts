@@ -56,6 +56,7 @@ import {
   hoverLines,
   mediaShape,
   releaseShape,
+  tempoLabel,
 } from './format';
 import { watchState } from './playback';
 import {
@@ -270,10 +271,14 @@ function overlaysHtml(item: Item): string {
     ? `<span class="plays" title="${item.like > 0 ? 'Liked' : 'Disliked'}">${item.like > 0 ? icons.thumbUp : icons.thumbDown}</span>`
     : '';
   const spoken = item.spoken ? `<span class="plays" title="Spoken word">${icons.book}</span>` : '';
+  // The tempo, in the corner a track's tile leaves free: the duration has
+  // the other bottom corner, the marks and the format the top two. Absent
+  // rather than guessed where the analysis has not read one.
+  const tempo = item.kind === 'audio' && item.bpm ? `<span class="tempo">${tempoLabel(item.bpm)}</span>` : '';
   // The marks share one row at the top-left, styled like the duration pill;
   // the watched tick keeps that corner and the row starts after it (CSS).
   const marks = plays || like || spoken ? `<div class="marks">${plays}${like}${spoken}</div>` : '';
-  return progressHtml(item) + dur + marks;
+  return progressHtml(item) + dur + tempo + marks;
 }
 
 /**

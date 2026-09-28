@@ -239,6 +239,30 @@ func extractFeatures(pcm []float32) []float32 {
 // cut from different minutes of a track is not read as a beat or as a swell
 // — it is nothing the track did.
 func extractFeaturesFrom(windows [][]float32) []float32 {
+	vec, _ := describeWindows(windows)
+	return vec
+}
+
+// tempoTopDB is how far under the loudest band a band may fall before its
+// changes stop counting as onsets for the tempo, in log power (80 dB). An
+// encoder leaves the bands it has nothing to spend on flickering between
+// nothing and faint noise, frame by frame — and in logarithms that flicker
+// is as large as a drum hit and as regular as the encoder's frames. Measured
+// on sustained chords made into MP3s, it read as a tempo of 141 to 145 at a
+// clarity over the bar, which is the encoder's frame rate beating against
+// the hop. The vector's own onsets keep no such floor, being what column 50
+// has always been read from.
+var tempoTopDB = 8 * math.Ln10
+
+// describeWindows is extractFeaturesFrom with each window's onset envelope
+// beside the vector, for the tempo a track is shown with (bpmOf). The
+// vector's own onsets are the ones column 50 has always been read from —
+// sounding frames only, run together across the windows — and they are
+// left exactly so, since a vector written before this has to stay
+// comparable with one written after. The envelopes keep time instead: a
+// value for every frame, nought where nothing sounded, so a beat's period
+// is measured in frames that really are a hop apart.
+func describeWindows(windows [][]float32) ([]float32, [][]float64) {
 	featSetup()
 	bins := featFrame/2 + 1
 	buf := make([]complex128, featFrame)
@@ -257,6 +281,8 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 	// minutes-long pause and tipped music toward the spoken verdict.
 	silent, soundSpan := 0, 0
 	var onsets []float64
+	var beats [][]float64 // per window, a frame apiece: what bpmOf reads
+	prevTop := 0.0        // the loudest band of the frame before, in log power
 	prevMel := make([]float64, featMels)
 	mel := make([]float64, featMels)
 	logMel := make([]float64, featMels)
@@ -266,6 +292,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 			continue
 		}
 		var envelope []float64
+		var beat []float64
 		hasPrev := false // an onset is a change since the frame before, within one window
 		winFirst, winLast, winFrames, winSilent := -1, -1, 0, 0
 		for start := 0; start+featFrame <= len(pcm); start += featHop {
@@ -283,6 +310,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 			rms := math.Sqrt(sq / featFrame)
 			db := 20 * math.Log10(rms+1e-9)
 			envelope = append(envelope, rms)
+			beat = append(beat, 0) // this frame's onset, filled in where one is read
 			if db < featSilence {
 				if winFirst >= 0 {
 					winSilent++ // provisionally; this window's trailing run is taken back below
@@ -379,19 +407,33 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 				mfcc[i].add(acc)
 			}
 			// Onsets: how much louder each band got since the last frame.
+			frameTop := math.Inf(-1)
+			for b := range featMels {
+				frameTop = math.Max(frameTop, logMel[b])
+			}
 			if hasPrev {
-				var flux float64
+				var flux, tempoFlux float64
+				// The tempo's onsets floor every band tempoTopDB under the
+				// louder of the two frames' loudest (see there).
+				floor := math.Max(frameTop, prevTop) - tempoTopDB
 				for b := range featMels {
-					if d := logMel[b] - math.Log(prevMel[b]+1e-10); d > 0 {
+					prevLog := math.Log(prevMel[b] + 1e-10)
+					if d := logMel[b] - prevLog; d > 0 {
 						flux += d
+					}
+					if d := math.Max(logMel[b], floor) - math.Max(prevLog, floor); d > 0 {
+						tempoFlux += d
 					}
 				}
 				onsets = append(onsets, flux)
+				beat[len(beat)-1] = tempoFlux
 			}
 			copy(prevMel, mel)
+			prevTop = frameTop
 			hasPrev = true
 		}
 		envelopes = append(envelopes, envelope)
+		beats = append(beats, beat)
 		if winLast >= 0 {
 			// The silence after this window's last sound is a window edge,
 			// not a pause between sentences, so it is taken back here — per
@@ -402,7 +444,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 		}
 	}
 	if loud.n == 0 {
-		return nil
+		return nil, nil
 	}
 
 	out := make([]float32, featureDims)
@@ -436,7 +478,7 @@ func extractFeaturesFrom(windows [][]float32) []float32 {
 			out[i] = 0
 		}
 	}
-	return out
+	return out, beats
 }
 
 // loudRange is how far the loud frames stand above the quiet ones: the

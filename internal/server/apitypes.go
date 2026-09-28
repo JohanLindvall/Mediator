@@ -28,7 +28,8 @@ type ListQueryParams struct {
 	Series string `json:"series,omitempty"`
 	Season string `json:"season,omitempty"` // with Series: one season of that show
 	// Sort is the view's own key. Items: "name" | "mtime" | "size" | "added" |
-	// "duration" | "popular" | "pixels" | "bitrate" | "episode" | "random";
+	// "duration" | "popular" | "pixels" | "bitrate" | "tempo" | "episode" |
+	// "random";
 	// the grouped views take theirs (year, artist, genre, tracks, albums,
 	// episodes, seasons …) and "similarity" where near is set.
 	Sort  string `json:"sort,omitempty"`

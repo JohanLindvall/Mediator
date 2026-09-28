@@ -256,6 +256,7 @@ func run(cfg config, log *slog.Logger) error {
 		// id and checked against the item's stamp only when the analysis
 		// asks.
 		lib.LoadFeatures(db)
+		lib.LoadTempos(db)
 		if n := lib.LoadSkips(db); n > 0 {
 			log.Info("credits restored", "episodes", n)
 		}

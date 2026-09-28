@@ -45,6 +45,7 @@ var (
 	featBucket  = []byte("features")
 	skipBucket  = []byte("skips")
 	printBucket = []byte("prints")
+	tempoBucket = []byte("tempos")
 )
 
 // epochKey names the value that identifies this store to clients. See Epoch.
@@ -96,7 +97,7 @@ func Open(path string) (*DB, error) {
 	err = db.Update(func(tx *bolt.Tx) error {
 		for _, b := range [][]byte{
 			thumbBucket, metaBucket, itemBucket, flagBucket, posBucket, infoBucket, cropBucket,
-			linkBucket, featBucket, skipBucket, printBucket,
+			linkBucket, featBucket, skipBucket, printBucket, tempoBucket,
 		} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
@@ -711,7 +712,7 @@ func putJSON(b *bolt.Bucket, id string, v any) error {
 func (s *DB) Prune(live map[string]struct{}) (int, error) {
 	n := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, featBucket, skipBucket, printBucket} {
+		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, featBucket, skipBucket, printBucket, tempoBucket} {
 			b := tx.Bucket(name)
 			var stale [][]byte
 			err := b.ForEach(func(k, _ []byte) error {
@@ -769,6 +770,39 @@ func (s *DB) EachFeatures(fn func(id string, mtime, size int64, version int, vec
 				vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(body[4+4*i:]))
 			}
 			fn(string(k), mtime, size, version, vec)
+			return nil
+		})
+	})
+}
+
+// PutTempo stores the tempo a track is shown with and how clearly its onsets
+// repeat at it, stamped with the file it was read from and the recipe, as a
+// vector is. It is kept apart from the vector deliberately: the vectors of
+// the whole library stay comparable only while their recipe does not move,
+// and this one has to be free to.
+func (s *DB) PutTempo(id string, mtime, size int64, version int, bpm, clarity float32) error {
+	body := make([]byte, 12)
+	binary.BigEndian.PutUint32(body, uint32(version))
+	binary.LittleEndian.PutUint32(body[4:], math.Float32bits(bpm))
+	binary.LittleEndian.PutUint32(body[8:], math.Float32bits(clarity))
+	v := stamp(mtime, size, body)
+	return s.db.Batch(func(tx *bolt.Tx) error {
+		return tx.Bucket(tempoBucket).Put([]byte(id), v)
+	})
+}
+
+// EachTempo walks every stored tempo.
+func (s *DB) EachTempo(fn func(id string, mtime, size int64, version int, bpm, clarity float32)) {
+	_ = s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(tempoBucket).ForEach(func(k, v []byte) error {
+			if len(v) < thumbHeaderLen+12 {
+				return nil
+			}
+			body := v[thumbHeaderLen:]
+			fn(string(k), int64(binary.BigEndian.Uint64(v)), int64(binary.BigEndian.Uint64(v[8:])),
+				int(binary.BigEndian.Uint32(body)),
+				math.Float32frombits(binary.LittleEndian.Uint32(body[4:])),
+				math.Float32frombits(binary.LittleEndian.Uint32(body[8:])))
 			return nil
 		})
 	})

@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { codecName, hoverLines, mediaShape, releaseShape } from './format.ts';
+import { codecName, hoverLines, mediaShape, releaseShape, tempoLabel } from './format.ts';
 
 // The names a probe uses are the ones the rest of the app reasons with, and
 // none of them are the ones anybody writes.
@@ -105,4 +105,20 @@ test('a rate is counted in megabits once there are enough of them', () => {
   // Nothing to divide by, and nothing claimed.
   assert.equal(rate(0, 300_000), '');
   assert.equal(rate(5_000_000, 0), '');
+});
+
+// A track's tempo is part of what it is, and read the way every surface
+// shows it: a whole number of beats a minute, and nothing at all where the
+// analysis has not read one — never a nought.
+test('a track says its tempo, and says nothing where there is none', () => {
+  assert.equal(
+    mediaShape({ kind: 'audio', name: 'a track.mp3', size: 5_000_000, duration: 300_000, bpm: 127.8 }),
+    'MP3 · 133 kbps · 128 BPM',
+  );
+  assert.equal(mediaShape({ kind: 'audio', name: 'a track.mp3', bpm: 0 }), 'MP3');
+  assert.equal(tempoLabel(96.25), '96 BPM');
+  assert.equal(tempoLabel(0), '');
+  assert.equal(tempoLabel(undefined), '');
+  // A film has no tempo to show, whatever a field says.
+  assert.equal(mediaShape({ kind: 'video', vcodec: 'h264', bpm: 120 }), 'H.264');
 });

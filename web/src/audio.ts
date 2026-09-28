@@ -15,7 +15,7 @@ import type { RendererInfo } from './types.gen';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
 import { TrackCard } from './trackcard';
 import { playingAudio } from './nowplaying';
-import { clamp, esc, formatDuration, trackTitle } from './format';
+import { clamp, esc, formatDuration, tempoLabel, trackTitle } from './format';
 import { playButtonIcon } from './playback';
 import { recall, remember } from './remember';
 import { icons } from './icons';
@@ -262,6 +262,7 @@ export class AudioPlayer {
     cover: HTMLImageElement;
     title: HTMLElement;
     artist: HTMLElement;
+    bpm: HTMLElement;
     play: HTMLButtonElement;
     shuffle: HTMLButtonElement;
     repeat: HTMLButtonElement;
@@ -300,7 +301,10 @@ export class AudioPlayer {
         <div class="ab-cover-fallback">${icons.music}</div>
         <div class="ab-info">
           <div class="ab-title" data-title></div>
-          <div class="ab-artist" data-artist></div>
+          <div class="ab-sub">
+            <span class="ab-artist" data-artist></span>
+            <span class="ab-bpm" data-bpm></span>
+          </div>
         </div>
         <div class="ab-controls">
           <button class="icon-btn sm ab-shuffle" data-shuffle aria-label="Shuffle" aria-pressed="false">${icons.shuffle}</button>
@@ -353,6 +357,7 @@ export class AudioPlayer {
       cover: this.q<HTMLImageElement>('.ab-cover'),
       title: this.q('[data-title]'),
       artist: this.q('[data-artist]'),
+      bpm: this.q('[data-bpm]'),
       play: this.q<HTMLButtonElement>('[data-play]'),
       shuffle: this.q<HTMLButtonElement>('[data-shuffle]'),
       repeat: this.q<HTMLButtonElement>('[data-repeat]'),
@@ -1195,6 +1200,7 @@ export class AudioPlayer {
     playingAudio(title);
     this.els.title.title = item.path;
     this.els.artist.textContent = item.artist || item.performer || item.album || '';
+    this.els.bpm.textContent = tempoLabel(item.bpm);
     this.markLike(item.like ?? 0);
     void this.topUp();
     // The sleeve. Another release's never stands under this title: an <img>

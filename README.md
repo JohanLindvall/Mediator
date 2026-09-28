@@ -515,7 +515,22 @@ Go binary with the TypeScript frontend embedded.
   the clock ran out on is offered
   again an hour later rather than written off for the run, which would have
   left that track out of radio, out of the resemblances and out of its own
-  release's sound. Three things are read off it:
+  release's sound. Four things are read off it:
+  - **How fast it goes.** Each track's tempo, in beats a minute: on its tile
+    beside the length, in a release's sheet beside each track's length, in
+    the music bar beside the performer, and on hover — and the music listing
+    can be ordered by it (*Tempo*), a track with none coming last whichever
+    way the order runs. It is read from the sound rather than the tags:
+    across the library measured, 587 of 28,767 files carried a BPM tag at
+    all, 447 of those said nought and 46 said 320, a bitrate in the wrong
+    field. Read against the tags that were plausible it agreed within one
+    beat a minute on most, and like every tempo estimator it sometimes reads
+    half or double what a drummer would count. Nothing is shown where
+    nothing steady is struck — a sustained chord, a drone, a pulse too faint
+    to trust — nor for a reading. A library analysed before this reads each
+    track once more for its tempo, in the same background pass and at the
+    same second or so a track; its vectors and resemblances are left exactly
+    as they were meanwhile.
   - **Radio, and similar tracks.** The bar's radio button keeps the queue
     going with the tracks that sound most like the one playing, fetching a
     batch whenever fewer than a handful remain. It draws from a wider field
@@ -1241,7 +1256,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 
 | Endpoint                                  | Description                              |
 | ----------------------------------------- | ---------------------------------------- |
-| `GET /api/library?kind&q&sort&order&offset&limit` | Paged, filtered, sorted listing  |
+| `GET /api/library?kind&q&sort&order&offset&limit` | Paged, filtered, sorted listing; `sort=tempo` orders music by the tempo read from the sound (each track's `bpm`), those with none last  |
 | `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead. Each carries `path` (where the release is kept, as the listing names a file) and `formats` (what its tracks are, commonest first) |
 | `GET /api/artists?q&sort&order`           | Artists, grouped from album tags         |
 | `GET /api/genres?q&sort&order`            | Genres, grouped from album tags          |

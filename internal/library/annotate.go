@@ -219,6 +219,9 @@ type stamper struct {
 	// read once for the page rather than per item. The map is replaced
 	// wholesale by the build, so holding it is holding one build's answer.
 	performers map[string]string
+	// tempos is the analysis's last published word on each track's tempo,
+	// held the same way (publishTempos).
+	tempos map[string]tempoRec
 }
 
 func (l *Library) stamper() *stamper {
@@ -236,10 +239,10 @@ func (l *Library) stamper() *stamper {
 	likes, _ := l.likes.snapshot()
 	sv := l.scaledVectors()
 	l.featMu.RLock()
-	performers := l.performers
+	performers, tempos := l.performers, l.tempoView
 	l.featMu.RUnlock()
 	return &stamper{l: l, plays: plays, likes: likes, aff: l.affinities(),
-		spoken: l.spokenSet(sv), performers: performers}
+		spoken: l.spokenSet(sv), performers: performers, tempos: tempos}
 }
 
 // stamp puts the owner's facts on one copy, from the snapshots the stamper
@@ -254,6 +257,11 @@ func (s *stamper) stamp(it Item) Item {
 		it.Akin = s.l.akinName(s.aff.akin[it.ID])
 	}
 	it.Spoken = s.spoken(it.ID)
+	// A tempo is music's, and a reading has none worth the word: the pauses
+	// between sentences repeat as steadily as a slow beat.
+	if it.Kind == KindAudio && !it.Spoken {
+		it.BPM = s.tempos[it.ID].shown(&it)
+	}
 	// Only where the file names nobody: a track that carries its own
 	// performer has said something, and a release's word does not correct it.
 	if it.Artist == "" {

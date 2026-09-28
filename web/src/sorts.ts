@@ -97,6 +97,19 @@ export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[strin
         ['pixels', 'Resolution'],
         ['bitrate', 'Bitrate'],
       ];
+    case 'audio':
+      // One fact only music has: how fast it goes, as the analysis read it
+      // from the sound. A track with none — not read yet, no steady pulse —
+      // comes after every one that has, whichever way the order runs.
+      return [
+        ['mtime', 'Modified'],
+        ['name', 'Name'],
+        ['popular', 'Popular'],
+        ['size', 'Size'],
+        ['added', 'Added'],
+        ['duration', 'Length'],
+        ['tempo', 'Tempo'],
+      ];
     default:
       return [
         ['mtime', 'Modified'],

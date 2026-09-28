@@ -68,3 +68,13 @@ test('a season opens on its first episode, and everything else newest first', ()
     assert.equal(openingDesc(mode), true, `${mode} opened ascending`);
   }
 });
+
+// How fast it goes is music's own order: the music listing offers it, and a
+// view whose items have no tempo — a film, a picture, a mixed listing whose
+// films would all sort as nothing — does not.
+test('only the music listing is ordered by tempo', () => {
+  for (const mode of modes) {
+    const offered = sortOptions(mode).some(([v]) => v === 'tempo');
+    assert.equal(offered, mode === 'audio', mode);
+  }
+});

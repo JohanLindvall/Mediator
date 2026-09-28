@@ -236,6 +236,19 @@ export interface MediaShape {
   size?: number;
   duration?: number;
   name?: string;
+  bpm?: number;
+}
+
+/**
+ * A track's tempo as it is written everywhere it is shown — the tile, the
+ * release sheet, the music bar and the technical line alike — or nothing
+ * where there is none. A whole number: the server reads it to a quarter of a
+ * beat, and a tenth on a screen would claim a precision the octave does not
+ * have (see tempo.go: an estimate can be half or double what a drummer would
+ * count, and nothing after the point makes that less so).
+ */
+export function tempoLabel(bpm?: number): string {
+  return bpm && bpm > 0 ? `${Math.round(bpm)} BPM` : '';
 }
 
 /**
@@ -331,6 +344,7 @@ export function mediaShape(it: MediaShape): string {
     // release (releaseShape) saying one format the same way.
     parts.push(codecName(it.acodec) || codecName(extBadge(it.name ?? '')));
     parts.push(bitrate(it.size, it.duration));
+    parts.push(tempoLabel(it.bpm));
   }
   return parts.filter(Boolean).join(' · ');
 }

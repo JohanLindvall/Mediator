@@ -1084,6 +1084,67 @@ Change propagation is the core loop:
   nobody measured is sampled at fixed marks and, where those return
   nothing, read from the start. The FFT, the tone, noise, click
   train and speech-cue tests pin the arithmetic on synthetic signals.
+  **How fast a track goes is read beside the vector, and shown**
+  (`tempo.go`, `Item.BPM`, `sort=tempo`). Column 50 is a tempo already and the
+  wrong one to show: read at whole lags of an envelope 43 frames a second, it
+  can only say 117.5, 123.0, 129.2, 136.0, 143.6 — steps of five to ten beats
+  a minute exactly where music is. It is left exactly as it is, the whole
+  library's vectors being comparable only while their recipe holds, and the
+  shown tempo is read from the same decode (`describeWindows` hands back each
+  window's onset envelope beside the vector, keeping time where the vector's
+  onsets run the sounding frames together) by `bpmOf`: each window
+  correlated with itself, a candidate scored at its period and three
+  multiples under the prior toward 120, the candidates a quarter of a beat
+  apart and **the correlation read between frames** (`correlationAt`) — the
+  thing that ends the steps. **Tags were measured and are not read**: 587 of
+  28,767 files carry the frame, 447 saying nought and 46 saying 320, a
+  bitrate in the wrong field. Against the 86 plausible ones, 72 shown and 49
+  of those within 3% (47 within one beat), the rest the estimator's octave
+  (13) and one release's alternate versions; readings land on whole numbers
+  — music made on a grid — and sit most often exactly one above a tag,
+  which reads as tags rounded down. Reading the period off the peaks at its
+  multiples as well agreed to a fifth of a beat on every track and was taken
+  out; smoothing the envelope hid real tempos before it stopped a vibrato.
+  **Two floors, each measured on what it keeps out, each pinned by a test
+  that shows the tempo it prevents** (`TestAnEncodersFlickerIsNoTempo`). An
+  MP3 encoder leaves the bands it spends nothing on flickering between
+  nothing and faint noise frame by frame, which in logarithms is as large as
+  a drum hit and as regular as the encoder's frames: sustained chords read as
+  141 to 145 at a clarity over the bar. The tempo's onsets floor every band
+  `tempoTopDB` (80 dB) under the loudest (the vector's own onsets do not —
+  column 50 is read from them). What that leaves is a faint ripple, still
+  regular enough to pass a ratio — a drone read 112 at 0.74 — so the
+  strongest onsets must reach `bpmOnsetFloor` too: chords peaked at 3.4 and a
+  drone at 0.4 against 15 for the weakest real track shown, a dense loud
+  mix. What neither catches is a sound that really moves regularly with
+  nothing struck: a note under a strong vibrato reads as a slow multiple of
+  the vibrato. Clarity under `bpmClarity` (0.3) is not shown either — below
+  it 4 of 14 tagged readings agreed, above it 49 of 72 — and a reading has
+  no tempo (`stamp` skips a spoken track, the tempo order counts it as none).
+  About half the library is shown one (80 of 150 drawn at random).
+  **It is stored apart and read once**: `blob.PutTempo`, the `tempos`
+  bucket, stamped with the file and `tempoVersion`, pruned with the item,
+  restored at startup (`LoadTempos`). A track described before tempos existed
+  is read again for its tempo alone (`needsAnalysis`: a current, non-empty
+  vector and no current tempo — a silent track has none to find, a failed
+  decode is not retried) and **its vector is not written again**
+  (`analyzeOne` answers whether the vector was fresh): the same decode gives
+  the same numbers, and a batch of tempos publishes the tempos and the
+  version (`publishRead`) without moving the features generation, since the
+  resemblances rebuilt against that on the request path would be rebuilt
+  for nothing — the rule the analysis beat already keeps. What that backfill
+  costs is the first analysis again, a second or so of one core per track at
+  the lowest priority. The stamper and the tempo order read one published
+  map (`publishTempos`, replaced wholesale like the release verdicts), so a
+  tile and the order it sits in cannot disagree; a track with none sorts
+  last whichever way the order runs. Shown as a whole number
+  (`tempoLabel`): on the tile in the corner it leaves free (the duration has
+  the other bottom corner), in the sheet beside each length (a column of one
+  width, gone under 480px), in the bar beside the performer — who gives way
+  first — and in the technical line every hover carries. A beat drawn in
+  time with the music was considered and not done: nothing here knows where
+  the beats fall, only how far apart, and a pulse at the right rate in the
+  wrong phase would argue with the music.
   **Similarity is cosine over scaled vectors** (`similar.go`): each column
   has the library's mean taken out and its spread divided away — a tempo in
   beats per minute and a cepstral coefficient count alike — then unit length,

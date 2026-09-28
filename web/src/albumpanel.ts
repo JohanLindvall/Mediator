@@ -5,7 +5,7 @@ import { albumZipUrl, canDelete, getAlbum, thumbUrl, type AlbumDetailResponse, t
 import { deleteWithConfirmation } from './deletedialog';
 import { holdScroll, releaseScroll } from './scrollhold';
 import { modalFocus } from './modal';
-import { esc, formatBytes, formatDuration, hoverLines, mediaShape, releaseShape, trackTitle } from './format';
+import { esc, formatBytes, formatDuration, hoverLines, mediaShape, releaseShape, tempoLabel, trackTitle } from './format';
 import { icons } from './icons';
 import { showToast } from './toast';
 import { shareAlbum } from './links';
@@ -172,6 +172,7 @@ class AlbumPanel {
               <span class="t-title">${esc(trackTitle(t, a.artist))}</span>
               <span class="t-artist">${esc(artist)}</span>
             </span>
+            <span class="t-bpm">${tempoLabel(t.bpm)}</span>
             <span class="t-size">${right}</span>
           </button>`;
       })

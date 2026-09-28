@@ -181,18 +181,36 @@ func (l *Library) LoadFeatures(db *blob.DB) int {
 }
 
 // needsAnalysis says whether a track is still to be read: audio, and either
-// never described or described for a file that has since changed.
+// never described or described for a file that has since changed — or
+// described before its tempo was read (tempo.go), which is a read of its
+// own: the same decode, and the vector left as it was.
 func (l *Library) needsAnalysis(it *Item) bool {
 	if it.Kind != KindAudio {
 		return false
 	}
 	l.featMu.RLock()
 	rec, ok := l.features[it.ID]
+	tempo := l.tempoCurrent(it)
 	l.featMu.RUnlock()
 	if !rec.retry.IsZero() && time.Now().Before(rec.retry) {
 		return false // asked for and interrupted: not now, rather than never
 	}
-	return !ok || rec.mtime != it.ModTime || rec.size != it.Size
+	if !ok || rec.mtime != it.ModTime || rec.size != it.Size {
+		return true
+	}
+	// A decode that failed is not tried again this run, for its tempo or
+	// for anything else; and a track that decoded to silence has no tempo
+	// to be read for.
+	return !rec.failed && len(rec.vec) > 0 && !tempo
+}
+
+// vectorCurrent says whether the track's vector was read from the file as
+// it is now, which is what makes a read of it a read for its tempo alone.
+func (l *Library) vectorCurrent(it *Item) bool {
+	l.featMu.RLock()
+	defer l.featMu.RUnlock()
+	rec, ok := l.features[it.ID]
+	return ok && !rec.failed && rec.mtime == it.ModTime && rec.size == it.Size
 }
 
 // readyForAnalysis says whether enough is known about a track to describe
@@ -258,6 +276,12 @@ func (l *Library) analysisTodo() []string {
 func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, busy func() bool) {
 	start := time.Now()
 	done, failed, published := 0, 0, 0
+	// Of what was read, how many were read for a vector, and how many for
+	// their tempo alone — the tracks described before tempos were read,
+	// which are read again once for it. Only the first move the features
+	// generation: the vectors of the second are the ones they had, and the
+	// resemblances rebuilt on the request path would be rebuilt for nothing.
+	vectors, vectorsPublished := 0, 0
 	l.log.Info("audio analysis starting", "tracks", len(todo))
 	for _, id := range todo {
 		for busy() || l.enriching.Load() > 0 {
@@ -282,9 +306,13 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 			// it for good, the vector being stamped with the file.
 			continue
 		}
-		switch err := l.analyzeOne(ctx, db, it); {
+		fresh, err := l.analyzeOne(ctx, db, it)
+		switch {
 		case err == nil:
 			done++
+			if fresh {
+				vectors++
+			}
 		case ctx.Err() != nil:
 			return
 		case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
@@ -316,16 +344,29 @@ func (l *Library) analyzeAll(ctx context.Context, db *blob.DB, todo []string, bu
 			// unreadable files publishes nothing and must not discard every
 			// cache for a batch that added nothing.
 			if done > published {
-				l.publishAnalysis()
-				published = done
+				l.publishRead(vectors > vectorsPublished)
+				published, vectorsPublished = done, vectors
 			}
 		}
 	}
 	l.log.Info("audio analysis pass complete", "done", done, "failed", failed,
 		"took", time.Since(start).Round(time.Second))
 	if done > published {
-		l.publishAnalysis()
+		l.publishRead(vectors > vectorsPublished)
 	}
+}
+
+// publishRead publishes a batch of the pass: the vectors and everything
+// cached against them where any was read, and otherwise the tempos alone —
+// which move the version, the listings being cached against it and the
+// clients refetching on it, and nothing else.
+func (l *Library) publishRead(vectors bool) {
+	if vectors {
+		l.publishAnalysis()
+		return
+	}
+	l.publishTempos()
+	l.notify()
 }
 
 // Touch announces a change nothing else announced: the analysis alters
@@ -341,6 +382,7 @@ func (l *Library) Touch() { l.notify() }
 // of those caches is rebuilt by the next request that needs it, and a
 // generation that moved once a second made every request pay for it.
 func (l *Library) publishAnalysis() {
+	l.publishTempos()
 	l.bumpFeatures()
 	l.notify()
 }
@@ -372,18 +414,23 @@ func analysisOffsets(durationMs int64) []float64 {
 // separate stretches (extractFeaturesFrom): joined end to end, the frame
 // straddling two of them read as an onset and a seam in the envelope that
 // the tempo and syllable cues then measured.
-func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) error {
+//
+// It reports whether the vector was read afresh: a track whose vector is
+// current is being read for its tempo alone (needsAnalysis), and its vector
+// is left exactly as it was — the same decode would give the same numbers,
+// and writing them again would move the features generation for nothing.
+func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) (bool, error) {
 	ctx, cancel := context.WithTimeout(parent, analysisTimeout)
 	defer cancel()
 	input, extra, err := analysisInput(it)
 	if err != nil {
-		return err
+		return false, err
 	}
 	var windows [][]float32
 	for _, off := range analysisOffsets(it.Duration) {
 		samples, err := decodeWindow(ctx, input, extra, off)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if len(samples) > 0 {
 			windows = append(windows, samples)
@@ -395,21 +442,26 @@ func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) error
 		// and was written down as silence for good. Read it from the start.
 		samples, err := decodeWindow(ctx, input, extra, 0)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if len(samples) > 0 {
 			windows = append(windows, samples)
 		}
 	}
-	vec := extractFeaturesFrom(windows)
+	vec, beats := describeWindows(windows)
 	if vec == nil {
 		vec = []float32{}
 	}
+	bpm, clarity := bpmOf(beats)
+	fresh := !l.vectorCurrent(&it)
 	// The vector is kept in memory first: a database write that fails is a
 	// storage fault, not a track that could not be read, and returning it
 	// as a decode failure would markFailed the track and throw the vector
 	// away — read again next run for nothing.
-	l.putFeatures(it.ID, it.ModTime, it.Size, vec)
+	if fresh {
+		l.putFeatures(it.ID, it.ModTime, it.Size, vec)
+	}
+	l.putTempo(it.ID, it.ModTime, it.Size, float32(bpm), float32(clarity))
 	if parent.Err() != nil {
 		// Shutting down, so this write is certainly pointless: the analysis
 		// is not one of the loops shutdown waits for, and the database is
@@ -423,14 +475,19 @@ func (l *Library) analyzeOne(parent context.Context, db *blob.DB, it Item) error
 		// state store, which is main's to make. The vector stays in memory,
 		// which is where a refused write leaves it; the next run reads the
 		// file again.
-		return nil
+		return fresh, nil
 	}
 	if db != nil {
-		if err := db.PutFeatures(it.ID, it.ModTime, it.Size, featuresVersion, vec); err != nil {
-			l.log.Debug("audio features not stored", "path", it.Rel, "err", err)
+		if fresh {
+			if err := db.PutFeatures(it.ID, it.ModTime, it.Size, featuresVersion, vec); err != nil {
+				l.log.Debug("audio features not stored", "path", it.Rel, "err", err)
+			}
+		}
+		if err := db.PutTempo(it.ID, it.ModTime, it.Size, tempoVersion, float32(bpm), float32(clarity)); err != nil {
+			l.log.Debug("tempo not stored", "path", it.Rel, "err", err)
 		}
 	}
-	return nil
+	return fresh, nil
 }
 
 // analysisInput is what ffmpeg opens: the path, or the loopback URL for

@@ -584,6 +584,22 @@ body.has-audio #spacer {
   color: rgba(255, 255, 255, 0.92);
   pointer-events: none;
 }
+/* A track's tempo, in the corner its tile leaves free, styled as the
+   duration beside it is. */
+.thumb-overlays .tempo {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  color: rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
 .thumb-overlays .prog {
   position: absolute;
   left: 0;
@@ -1597,6 +1613,25 @@ input[type='range']::-moz-range-thumb {
   font-variant-numeric: tabular-nums;
   flex: none;
 }
+/* The tempo beside the length: one width down the sheet, so the column
+   lines up however many digits a row has, and gone where the title needs
+   the room more. */
+.t-bpm {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+  min-width: 7.5ch;
+  text-align: right;
+}
+.t-bpm:empty {
+  display: none;
+}
+@media (max-width: 480px) {
+  .t-bpm {
+    display: none;
+  }
+}
 
 /* ---------- audio bar ---------- */
 #audiobar {
@@ -1679,12 +1714,36 @@ input[type='range']::-moz-range-thumb {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The line under the title: who, and how fast. The performer gives way
+   before the tempo does, the tempo being four characters that say
+   something while the end of a long name says nothing. */
+.ab-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .ab-artist {
   font-size: 12.5px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+.ab-bpm {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  line-height: 16px;
+}
+.ab-bpm:empty {
+  display: none;
 }
 .ab-controls {
   display: flex;

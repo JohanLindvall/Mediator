@@ -31,7 +31,14 @@ func TestFeaturesSurviveARestart(t *testing.T) {
 	if err := db.PutFeatures("old", 1, 2, featuresVersion-1, vec); err != nil {
 		t.Fatal(err)
 	}
+	// And its tempo, which a track is read for too (tempo.go).
+	if err := db.PutTempo("abc", 7, 99, tempoVersion, 128, 0.5); err != nil {
+		t.Fatal(err)
+	}
 	l := quietLib("/m")
+	if n := l.LoadTempos(db); n != 1 {
+		t.Fatalf("restored %d tempos, want the one written", n)
+	}
 	if n := l.LoadFeatures(db); n != 1 {
 		t.Fatalf("restored %d vectors, want the one written under this recipe", n)
 	}
@@ -87,7 +94,7 @@ func TestAnalyzeOneReadsATone(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := l.analyzeOne(context.Background(), db, it); err != nil {
+	if _, err := l.analyzeOne(context.Background(), db, it); err != nil {
 		t.Fatal(err)
 	}
 	v := l.featuresOf(id)
@@ -217,7 +224,7 @@ func TestAShortUnmeasuredTrackIsReadFromTheStart(t *testing.T) {
 	l := quietLib(dir)
 	l.upsert(path, KindAudio, info.Size(), info.ModTime(), fileKey{}, false)
 	it, _ := l.Get(PathID(path)) // Duration stays 0: nobody measured it
-	if err := l.analyzeOne(context.Background(), nil, it); err != nil {
+	if _, err := l.analyzeOne(context.Background(), nil, it); err != nil {
 		t.Fatal(err)
 	}
 	if v := l.featuresOf(it.ID); len(v) != featureDims || v[55] < 5 {

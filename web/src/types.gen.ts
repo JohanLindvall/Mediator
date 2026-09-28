@@ -41,6 +41,7 @@ export interface Item {
   nocrop?: boolean;
   hidden?: boolean;
   favourite?: boolean;
+  bpm?: number;
 }
 
 export interface AudioTrack {

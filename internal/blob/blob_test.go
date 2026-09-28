@@ -170,3 +170,45 @@ func TestItemPathSurvivesNonUTF8(t *testing.T) {
 		t.Errorf("plain record = %+v, want it untouched", got["b"])
 	}
 }
+
+// A tempo is written with the file it was read from and its recipe, read
+// back whole, and pruned with the item like everything else derived from a
+// file.
+func TestTempoRoundtripAndPrune(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.PutTempo("song", 111, 222, 3, 128.5, 0.42); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutTempo("gone", 1, 2, 3, 90, 0.5); err != nil {
+		t.Fatal(err)
+	}
+	type rec struct {
+		mtime, size  int64
+		version      int
+		bpm, clarity float32
+	}
+	read := func() map[string]rec {
+		out := map[string]rec{}
+		db.EachTempo(func(id string, mtime, size int64, version int, bpm, clarity float32) {
+			out[id] = rec{mtime, size, version, bpm, clarity}
+		})
+		return out
+	}
+	if got := read()["song"]; got != (rec{111, 222, 3, 128.5, 0.42}) {
+		t.Fatalf("read back %+v", got)
+	}
+	if _, err := db.Prune(map[string]struct{}{"song": {}}); err != nil {
+		t.Fatal(err)
+	}
+	got := read()
+	if _, ok := got["gone"]; ok {
+		t.Error("the tempo of a file no longer in the library survived the prune")
+	}
+	if _, ok := got["song"]; !ok {
+		t.Error("the prune took the tempo of a file still in the library")
+	}
+}
