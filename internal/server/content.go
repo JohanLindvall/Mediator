@@ -43,12 +43,19 @@ type content struct {
 var everything = content{video: true, image: true, music: true}
 
 // contentOf reads the restriction a request arrived with.
-func contentOf(r *http.Request) content { return parseContent(r.Header.Get(ContentHeader)) }
+func contentOf(r *http.Request) content {
+	if scope, ok := r.Context().Value(scopeKey{}).(requestScope); ok {
+		return scope.content
+	}
+	return parseContent(strings.Join(r.Header.Values(ContentHeader), ","))
+}
 
 // parseContent reads the header. Anything it does not recognise is ignored;
-// a header naming nothing recognisable is treated as no header at all,
-// because the alternative is a face that shows nothing and looks broken.
+// a nonempty header naming nothing recognisable is denied by protect.
 func parseContent(h string) content {
+	if strings.TrimSpace(h) == "" {
+		return everything
+	}
 	var c content
 	for _, part := range strings.Split(h, ",") {
 		switch strings.ToLower(strings.TrimSpace(part)) {
@@ -59,9 +66,6 @@ func parseContent(h string) content {
 		case "image", "images", "photos", "pictures":
 			c.image = true
 		}
-	}
-	if c == (content{}) {
-		return everything
 	}
 	return c
 }
@@ -94,6 +98,9 @@ var (
 func (c content) kinds() library.KindSet {
 	if c.unrestricted() {
 		return 0 // the zero set is every kind
+	}
+	if c == (content{}) {
+		return library.NoKinds
 	}
 	var set library.KindSet
 	if c.video {
@@ -190,5 +197,8 @@ const PathsHeader = "X-Allowed-Paths"
 
 // pathsOf reads the restriction a request arrived with.
 func pathsOf(r *http.Request) library.PathFilter {
+	if scope, ok := r.Context().Value(scopeKey{}).(requestScope); ok {
+		return scope.paths
+	}
 	return library.ParsePaths(strings.Join(r.Header.Values(PathsHeader), "\n"))
 }

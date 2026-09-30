@@ -212,7 +212,7 @@ func (s *Server) AllowRootChanges(fn SetRootsFunc, persisted bool) {
 
 // Handler returns the root handler.
 func (s *Server) Handler() http.Handler {
-	h := s.used(s.mux)
+	h := protect(s.used(s.mux))
 	if s.access {
 		return logged(h, s.log)
 	}
@@ -300,7 +300,7 @@ func (s *Server) handleInfo(w http.ResponseWriter, r *http.Request) {
 		Content:       contentOf(r).names(),
 		StreamToken:   token,
 		StreamExpires: expires,
-		Confined:      pathsOf(r).Restricted(),
+		Confined:      pathsOf(r).Restricted() || !contentOf(r).unrestricted(),
 		Build:         buildOf(),
 		Capabilities:  s.capabilities(),
 		Deletable:     deletable,
@@ -854,6 +854,10 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, id string) 
 		return
 	}
 	defer f.Close()
+	// Media is untrusted document content when opened in its own tab. An
+	// SVG (or an HTML file named as media) must never run with the app's
+	// origin and permission to change preferences or delete files.
+	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; img-src 'self' data:")
 	if r.Header.Get(library.InternalHeader) == library.InternalToken() {
 		// This process reading its own content: the thumbnailer and the
 		// metadata probe point ffmpeg and ffprobe at this endpoint because
@@ -1517,7 +1521,7 @@ func (s *Server) handleFlagsBatch(w http.ResponseWriter, r *http.Request) {
 
 func decodeFlagUpdate(w http.ResponseWriter, r *http.Request) (FlagUpdate, bool) {
 	var body FlagUpdate
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxFlagBody)).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body, maxFlagBody); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return FlagUpdate{}, false
 	}
@@ -1563,7 +1567,7 @@ func (s *Server) handleStatePut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body PositionUpdate
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil {
+	if err := decodeJSON(w, r, &body, 4096); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}

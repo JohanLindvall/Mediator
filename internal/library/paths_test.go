@@ -30,8 +30,8 @@ func TestParsePaths(t *testing.T) {
 	// Relative paths are dropped rather than resolved: they would resolve
 	// against this process's working directory, which is not something the
 	// person writing the proxy configuration can see.
-	if ParsePaths("media, ../etc").Restricted() {
-		t.Error("relative paths must not become a restriction")
+	if f := ParsePaths("media, ../etc"); !f.Restricted() || f.Valid() || f.Allows("/srv/media/rock/a.mp3") {
+		t.Error("an unusable restriction must deny access")
 	}
 	// Canonical, so two spellings of one restriction are one cache key.
 	a := ParsePaths("/srv/media/, /srv/other")
@@ -50,6 +50,19 @@ func TestParsePaths(t *testing.T) {
 	}
 	if !f.Allows("/srv/c/x") {
 		t.Error("newline-separated paths are read")
+	}
+}
+
+func TestInvalidPathsCannotBroadenAQuery(t *testing.T) {
+	l := libAcrossTwoRoots(t)
+	for _, value := range []string{"relative", ",,", `"/srv/unclosed`, "/srv/\x00media"} {
+		f := ParsePaths(value)
+		if f.Valid() || !f.Restricted() || f.Allows("/srv/media/rock/a.mp3") || f.allower()("/srv/media/rock/a.mp3") {
+			t.Errorf("invalid scope %q grants access", value)
+		}
+		if got := l.List(Query{Paths: f}); got.Total != 0 || got.Counts.Total != 0 {
+			t.Errorf("invalid scope %q returned %d items, %+v", value, got.Total, got.Counts)
+		}
 	}
 }
 

@@ -49,6 +49,7 @@ export class LibrarySource {
    * fetching is not fetched again for a viewer stepping into it. */
   private inflight = new Map<number, Promise<void>>();
   private gen = 0;
+  private pageVersion: number | null = null;
   private abort = new AbortController();
   private failedUntil = new Map<number, number>();
   private readonly fetch: typeof listMedia;
@@ -60,6 +61,8 @@ export class LibrarySource {
 
   private nextGeneration(): void {
     this.gen++;
+    this.pageVersion = null;
+    this.error = null;
     this.abort.abort();
     this.abort = new AbortController();
     this.failedUntil.clear();
@@ -71,6 +74,7 @@ export class LibrarySource {
   /** What the chips show while a search is on; null when there is none. */
   matching: Counts | null = null;
   version = 0;
+  error: Error | null = null;
   onUpdate: () => void = () => {};
   onError: (err: Error) => void = () => {};
 
@@ -220,9 +224,22 @@ export class LibrarySource {
     if (p > 0 && this.total >= 0 && p * PAGE_SIZE >= this.total) return Promise.resolve();
     if ((this.failedUntil.get(p) ?? 0) > Date.now()) return Promise.resolve();
     const gen = this.gen;
+    const startedVersion = this.pageVersion;
     const run = this.fetch({ ...this.params(), offset: p * PAGE_SIZE, limit: PAGE_SIZE }, this.abort.signal)
       .then((res) => {
         if (gen !== this.gen) return;
+        if (this.pageVersion !== null && res.version !== this.pageVersion) {
+          // A drop on a request started at the current version means the
+          // server restarted. Accept its new generation even if SSE has not
+          // reconnected yet; only a response overtaken in flight is stale.
+          if (res.version < this.pageVersion && startedVersion !== this.pageVersion) return;
+          // Offset pages belong to one ordering. A newer answer retires
+          // requests and cached pages from the previous snapshot; otherwise
+          // a late response can restore deleted rows and roll back counts.
+          this.nextGeneration();
+          this.holdOver();
+        }
+        this.pageVersion = res.version;
         this.absorb(p, res.items, res.total, res.counts, res.version, res.matching ?? null);
       })
       .catch((err: Error) => {
@@ -230,6 +247,7 @@ export class LibrarySource {
         // A redraw asks for its missing pages again. Bound failed requests
         // so notifying the grid cannot turn an outage into a request loop.
         this.failedUntil.set(p, Date.now() + 5000);
+        this.error = err;
         this.onError(err);
       })
       .finally(() => {
@@ -270,6 +288,7 @@ export class LibrarySource {
     this.counts = counts;
     this.matching = matching;
     this.version = version;
+    this.error = null;
     this.onUpdate();
   }
 }
@@ -289,6 +308,7 @@ export class LibrarySource {
 export class CollectionSource<T> {
   items: T[] | null = null;
   matching: Counts | null = null;
+  error: Error | null = null;
   private gen = 0;
   private abort = new AbortController();
   private readonly fetch: (q: QueryState, signal?: AbortSignal) => Promise<{ items: T[]; matching?: Counts }>;
@@ -323,6 +343,7 @@ export class CollectionSource<T> {
 
   load(q: QueryState): void {
     const gen = ++this.gen;
+    this.error = null;
     this.abort.abort();
     this.abort = new AbortController();
     this.loading = true;
@@ -352,6 +373,7 @@ export class CollectionSource<T> {
       .catch((err: Error) => {
         if (gen !== this.gen) return;
         this.loading = false;
+        this.error = err;
         // Tell the grid, or a screen already drawing skeletons for this
         // fetch is never told the count is now 0.
         this.onUpdate();
@@ -371,6 +393,7 @@ export class CollectionSource<T> {
    */
   reset(): void {
     this.gen++;
+    this.error = null;
     this.abort.abort();
     this.loading = false; // nothing is on its way until something asks again
     this.searched = null;

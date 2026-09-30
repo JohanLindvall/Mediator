@@ -1679,6 +1679,13 @@ function syncStatus(): void {
     statusEl.hidden = true;
     return;
   }
+  if (total === 0 && (collectionOnScreen() ?? libSource).error) {
+    countEl.textContent = '';
+    statusEl.innerHTML = '<div class="empty" role="alert"><h3>Could not load this view</h3><p>Check your connection and try again.</p><button class="btn" data-retry>Try again</button></div>';
+    statusEl.querySelector('[data-retry]')!.addEventListener('click', () => applyQuery());
+    statusEl.hidden = false;
+    return;
+  }
   countEl.textContent = `${total.toLocaleString()} ${noun}`;
   if (total === 0) {
     const empty = !lastCounts || lastCounts.total === 0;
@@ -1705,7 +1712,7 @@ function itemsOnScreen(): boolean {
 }
 
 /** The grouped source the grid is drawing from, or null for the listing. */
-function collectionOnScreen(): { load(q: QueryState): void; reset(): void } | null {
+function collectionOnScreen(): { load(q: QueryState): void; reset(): void; error: Error | null } | null {
   switch (viewSource(state)) {
     case 'albums':
       return albumsSource;

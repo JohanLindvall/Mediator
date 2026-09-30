@@ -29,7 +29,6 @@ package server
 
 import (
 	"crypto/rand"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -234,7 +233,7 @@ func linkTargetOK(target string) bool {
 // handleLinkCreate mints a shortlink for a piece of app state.
 func (s *Server) handleLinkCreate(w http.ResponseWriter, r *http.Request) {
 	var req LinkRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, 4096); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

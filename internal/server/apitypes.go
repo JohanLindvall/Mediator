@@ -155,7 +155,7 @@ type InfoResponse struct {
 	// nothing can be signed. See sign.go.
 	StreamToken string `json:"streamToken,omitempty"`
 	// Confined says this caller sees only part of the library
-	// (`X-Allowed-Paths`). The page leaves the preferences out when it is
+	// (`X-Allowed-Paths` or `X-Media-Content`). The page leaves the preferences out when it is
 	// set, those naming the directories the library is rooted at — which a
 	// caller allowed one branch has no business learning. As with Content,
 	// the page doing so is a courtesy; handlePrefs is the guarantee.

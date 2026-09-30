@@ -774,9 +774,12 @@ func TestRemuxTrackKeepsOneSoundtrackAndItsContainer(t *testing.T) {
 	probe := exec.Command("ffprobe", "-v", "error",
 		"-show_entries", "stream=codec_type,codec_name",
 		"-show_entries", "stream_tags=language", "-of", "csv=p=0", out)
-	got, err := probe.CombinedOutput()
+	// Diagnostics vary by ffprobe version and are not CSV stream records.
+	var diagnostics bytes.Buffer
+	probe.Stderr = &diagnostics
+	got, err := probe.Output()
 	if err != nil {
-		t.Fatalf("ffprobe: %v: %s", err, got)
+		t.Fatalf("ffprobe: %v: %s", err, diagnostics.String())
 	}
 	streams := strings.Fields(strings.TrimSpace(string(got)))
 	if len(streams) != 2 {

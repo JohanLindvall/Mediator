@@ -74,3 +74,14 @@ test('storage that refuses is no memory, not a throw', () => {
   assert.equal(rememberedTrack('item4'), undefined);
   assert.equal(preferredLang(), '');
 });
+
+test('corrupt soundtrack preferences do not select a track', () => {
+  for (const value of ['', ' ', '-1', '1.5', 'NaN', 'Infinity', '9007199254740992']) {
+    installStorage({ getItem: () => value });
+    assert.equal(rememberedTrack('item'), undefined, `stored ${JSON.stringify(value)}`);
+  }
+  for (const value of ['0', '1', '12']) {
+    installStorage({ getItem: () => value });
+    assert.equal(rememberedTrack('item'), Number(value));
+  }
+});

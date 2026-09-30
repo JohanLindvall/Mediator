@@ -36,7 +36,8 @@ type PathFilter struct {
 	// key is the canonical form: cleaned, deduplicated, sorted, newline
 	// separated. It is the whole value as far as equality is concerned, so a
 	// query carrying it can be cached and compared like any other field.
-	key string
+	key  string
+	deny bool // a nonempty header that could not name a valid scope
 }
 
 // ParsePaths reads comma-separated paths (CSV quoting permits literal commas),
@@ -47,6 +48,9 @@ type PathFilter struct {
 // something the person writing the proxy configuration can see, and quietly
 // allowing the wrong directory is the one failure this must not have.
 func ParsePaths(h string) PathFilter {
+	if strings.TrimSpace(h) == "" {
+		return PathFilter{}
+	}
 	var fields []string
 	if strings.Contains(h, "\n") {
 		fields = strings.Split(h, "\n")
@@ -56,14 +60,14 @@ func ParsePaths(h string) PathFilter {
 		var err error
 		fields, err = r.Read()
 		if err != nil {
-			fields = strings.Split(h, ",") // retain unquoted-path compatibility
+			return PathFilter{deny: true}
 		}
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
 		p := strings.TrimSpace(f)
-		if p == "" || !filepath.IsAbs(p) {
+		if p == "" || !filepath.IsAbs(p) || strings.ContainsRune(p, '\x00') {
 			continue
 		}
 		p = filepath.Clean(p)
@@ -74,17 +78,26 @@ func ParsePaths(h string) PathFilter {
 		out = append(out, p)
 	}
 	if len(out) == 0 {
-		return PathFilter{}
+		return PathFilter{deny: true}
 	}
 	slices.Sort(out)
 	return PathFilter{key: strings.Join(out, "\n")}
 }
 
 // Restricted reports whether this filter narrows anything at all.
-func (f PathFilter) Restricted() bool { return f.key != "" }
+func (f PathFilter) Restricted() bool { return f.deny || f.key != "" }
+
+// Valid distinguishes a usable scope (including absent) from a malformed
+// restriction. Malformed restrictions admit no paths.
+func (f PathFilter) Valid() bool { return !f.deny }
 
 // Key is the canonical form, for a cache key or a log line.
-func (f PathFilter) Key() string { return f.key }
+func (f PathFilter) Key() string {
+	if f.deny {
+		return "<invalid>"
+	}
+	return f.key
+}
 
 // prefixes is the parsed form. Split per pass rather than held, because the
 // filter has to be comparable and a slice is not.
@@ -102,6 +115,9 @@ func (f PathFilter) prefixes() []string {
 // here hands over a directory nobody allowed. A path equal to a directory is
 // under it, so naming a file exactly allows that file.
 func (f PathFilter) Allows(path string) bool {
+	if f.deny {
+		return false
+	}
 	if f.key == "" {
 		return true
 	}
@@ -116,6 +132,9 @@ func (f PathFilter) Allows(path string) bool {
 // allower returns a function that answers the same question with the
 // prefixes already split, for passes that ask it thousands of times.
 func (f PathFilter) allower() func(string) bool {
+	if f.deny {
+		return func(string) bool { return false }
+	}
 	if f.key == "" {
 		return func(string) bool { return true }
 	}

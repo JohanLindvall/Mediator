@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -31,7 +32,7 @@ func logged(h http.Handler, log *slog.Logger) http.Handler {
 		// output reads like every other one and can be grepped like it.
 		attrs := []any{
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", redactSignedPath(r.URL.Path),
 			"status", rec.status,
 			"bytes", rec.n,
 			"duration", time.Since(start).Round(time.Millisecond).String(),
@@ -50,6 +51,11 @@ func logged(h http.Handler, log *slog.Logger) http.Handler {
 		// What was answered, not only that something was: a redirect is only
 		// legible with its target, and a range only with what came back.
 		if loc := rec.Header().Get("Location"); loc != "" {
+			if u, err := url.Parse(loc); err == nil {
+				u.Path = redactSignedPath(u.Path)
+				u.RawPath = ""
+				loc = u.String()
+			}
 			attrs = append(attrs, "location", loc)
 		}
 		if ct := rec.Header().Get("Content-Type"); ct != "" {
@@ -77,6 +83,16 @@ func logged(h http.Handler, log *slog.Logger) http.Handler {
 		// something needs explaining.
 		log.Debug("http", attrs...)
 	})
+}
+
+// Signed paths carry a bearer credential, not useful diagnostic information.
+func redactSignedPath(path string) string {
+	const prefix = "/api/signed/"
+	if rest, ok := strings.CutPrefix(path, prefix); ok {
+		_, route, _ := strings.Cut(rest, "/")
+		return prefix + "[redacted]/" + route
+	}
+	return path
 }
 
 // remoteHost is who asked, without the ephemeral port, which is noise.

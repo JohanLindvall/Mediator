@@ -41,6 +41,9 @@ var AllKinds = []Kind{KindVideo, KindImage, KindAudio, KindPlaylist}
 // asks for all of them and nothing has to remember to fill it in.
 type KindSet uint8
 
+// NoKinds denies every kind; zero remains the unrestricted default.
+const NoKinds KindSet = 1 << 7
+
 // KindsOf builds a set. No arguments is the same as the zero value: all.
 func KindsOf(kinds ...Kind) KindSet {
 	var s KindSet
@@ -51,7 +54,7 @@ func KindsOf(kinds ...Kind) KindSet {
 }
 
 // Has reports whether the set admits this kind.
-func (s KindSet) Has(k Kind) bool { return s == 0 || s&kindBit(k) != 0 }
+func (s KindSet) Has(k Kind) bool { return s != NoKinds && (s == 0 || s&kindBit(k) != 0) }
 
 func kindBit(k Kind) KindSet {
 	for i, v := range AllKinds {

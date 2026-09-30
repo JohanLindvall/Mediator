@@ -22,7 +22,7 @@ class Prefs {
   private root: HTMLElement;
   private roots: string[] = [];
   private persisted = true;
-  private editable = true;
+  private editable = false;
   private busy = false;
   private closed = false;
   private releaseFocus: () => void;
@@ -39,7 +39,7 @@ class Prefs {
           <div class="sheet-meta" data-note></div>
         </div>
         <div class="prefs-list" data-list></div>
-        <form class="prefs-add" data-add>
+        <form class="prefs-add" data-add hidden>
           <input type="text" data-path placeholder="/path/to/media" spellcheck="false"
                  autocapitalize="off" autocorrect="off" aria-label="Directory to add">
           <button class="btn primary" type="submit">Add</button>
@@ -132,22 +132,24 @@ class Prefs {
   private async reload(): Promise<void> {
     try {
       const p = await getPrefs();
+      if (this.closed) return;
       this.roots = p.roots;
       this.persisted = p.persisted;
       this.editable = p.editable;
       this.render();
     } catch {
+      if (this.closed) return;
       showToast('Could not read the preferences');
       this.close();
     }
   }
 
   private async save(roots: string[], ok?: () => void): Promise<void> {
-    if (this.busy) return;
-    this.busy = true;
-    this.root.classList.add('busy');
+    if (this.busy || this.closed || !this.editable) return;
+    this.setBusy(true);
     try {
       const p = await setPrefs(roots);
+      if (this.closed) return;
       this.roots = p.roots;
       this.persisted = p.persisted;
       this.editable = p.editable;
@@ -157,11 +159,19 @@ class Prefs {
       // through the usual change events rather than anything done here.
       showToast('Scanning…', 2000);
     } catch (err) {
+      if (this.closed) return;
       showToast(err instanceof Error ? err.message : 'Could not change the directories', 4000);
     } finally {
-      this.busy = false;
-      this.root.classList.remove('busy');
+      this.setBusy(false);
     }
+  }
+
+  private setBusy(busy: boolean): void {
+    this.busy = busy;
+    this.root.classList.toggle('busy', busy);
+    for (const control of this.root.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+      '[data-add] input, [data-add] button, [data-rm]',
+    )) control.disabled = busy;
   }
 
   private render(): void {

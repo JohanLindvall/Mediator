@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"mime"
 	"net"
@@ -968,7 +967,7 @@ func (s *Server) handleCastControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req CastControl
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, 4<<10); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

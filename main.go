@@ -557,6 +557,8 @@ func run(cfg config, log *slog.Logger) error {
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	// Bind before serving so the actual port is known (-listen :0 asks the

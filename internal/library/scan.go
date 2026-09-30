@@ -130,6 +130,10 @@ func (l *Library) Scan(addWatch func(dir string)) {
 			if l.excluded(path) {
 				return nil
 			}
+			info, symlink, err := statEntry(path, d)
+			if err != nil || !info.Mode().IsRegular() {
+				return nil // pipes, devices and linked directories are not media
+			}
 			if IsSubtitle(path) {
 				// Attachments to videos, not library items of their own —
 				// but a new one is a change like any other, and saying so
@@ -184,10 +188,6 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				return nil
 			}
 			kind := Classify(path)
-			info, symlink, err := statEntry(path, d)
-			if err != nil {
-				return nil
-			}
 			if kind == "" {
 				// A name that said nothing may still be media (sniff.go).
 				// Guarded by the size floor there, which is what keeps this
@@ -253,7 +253,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 	l.mu.RUnlock()
 	goneSubs := make(map[string]struct{})
 	for _, p := range lostSubs {
-		if _, err := os.Stat(p); err == nil && l.UnderRoots(p) && !l.excluded(p) {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() && l.UnderRoots(p) && !l.excluded(p) {
 			continue // still there, and still ours
 		}
 		goneSubs[p] = struct{}{}
@@ -318,7 +318,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 			ok, asked := containersLeft[container]
 			if !asked {
 				info, err := os.Stat(container)
-				ok = err == nil && l.stillIndexable(container, info)
+				ok = err == nil && (info.Mode().IsRegular() || info.IsDir()) && l.stillIndexable(container, info)
 				containersLeft[container] = ok
 			}
 			if ok {
@@ -334,7 +334,7 @@ func (l *Library) Scan(addWatch func(dir string)) {
 			missing[p] = struct{}{}
 			continue
 		}
-		if l.stillIndexable(p, info) {
+		if info.Mode().IsRegular() && l.stillIndexable(p, info) {
 			kept[p] = info
 		}
 	}
@@ -664,6 +664,12 @@ func (l *Library) AddFile(path string) {
 	if l.excluded(path) {
 		return
 	}
+	// Check before subtitle/container dispatch too: opening a named pipe as
+	// an archive blocks the watcher indefinitely, even when it has no data.
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
 	if IsSubtitle(path) {
 		l.mu.Lock()
 		l.addSub(path)
@@ -687,11 +693,6 @@ func (l *Library) AddFile(path string) {
 		return
 	}
 	kind := Classify(path)
-	// os.Stat follows symlinks, so a linked file is measured by its target.
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return
-	}
 	if kind == "" {
 		// As in the walk: a nameless file gets its opening read (sniff.go).
 		if kind = ClassifyContent(path, info.Size()); kind == "" {

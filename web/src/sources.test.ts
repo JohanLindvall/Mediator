@@ -46,6 +46,9 @@ test('a failed first page stops its loading placeholders and can be retried', as
   assert.equal(source.count(), 0);
   assert.equal(drawn.at(-1), 0);
   assert.equal(errors, 1);
+  assert.equal(source.error?.message, 'offline');
+  source.setQuery(query);
+  assert.equal(source.error, null);
 });
 
 test('a redraw after a failed page does not create a fetch loop', async () => {
@@ -105,4 +108,60 @@ test('collection reset cancels the pending request and ignores its answer', asyn
   await turn();
   assert.equal(source.count(), 0);
   assert.equal(source.items, null);
+});
+
+test('a failed collection stays distinguishable from an empty collection until retry', async () => {
+  let calls = 0;
+  const source = new CollectionSource<string>(async () => {
+    if (++calls === 1) throw new Error('offline');
+    return { items: [] };
+  });
+  source.load(query);
+  await turn();
+  assert.equal(source.count(), 0);
+  assert.equal(source.error?.message, 'offline');
+  source.load(query);
+  assert.equal(source.error, null);
+  await turn();
+  assert.deepEqual(source.items, []);
+  assert.equal(source.error, null);
+});
+
+test('concurrent pages cannot replace a newer library snapshot with an older one', async () => {
+  const older = deferred<Result>();
+  const newer = deferred<Result>();
+  let olderSignal: AbortSignal | undefined;
+  const source = new LibrarySource((q, signal) => {
+    if (q.offset === 200) { olderSignal = signal; return older.promise; }
+    if (q.offset === 400) return newer.promise;
+    return Promise.resolve({ ...answer([item], 600), version: 10 });
+  });
+  source.setQuery(query);
+  await turn();
+  source.need(200, 400);
+  newer.resolve({ ...answer([{ ...item, id: 'newer' }], 401), version: 11 });
+  await turn();
+  older.resolve({ ...answer([{ ...item, id: 'older' }], 600), version: 10 });
+  await turn();
+  assert.equal(source.version, 11);
+  assert.equal(source.count(), 401);
+  assert.equal(source.get(400)?.id, 'newer');
+  assert.equal(source.get(200), undefined);
+  assert.equal(olderSignal?.aborted, true);
+  // Versions restart with the server; an explicit refresh can go backwards.
+  source.invalidate();
+  await turn();
+  assert.equal(source.version, 10);
+});
+
+test('paging after a server restart accepts its reset version without needing an event', async () => {
+  let version = 10;
+  const source = new LibrarySource(async () => ({ ...answer([{ ...item, id: `v${version}` }], 401), version }));
+  source.setQuery(query);
+  await turn();
+  version = 1;
+  source.need(200, 200);
+  await turn();
+  assert.equal(source.version, 1);
+  assert.equal(source.get(200)?.id, 'v1');
 });

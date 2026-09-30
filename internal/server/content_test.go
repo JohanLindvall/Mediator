@@ -35,9 +35,8 @@ func TestParseContentHeader(t *testing.T) {
 		{"image, music", content{image: true, music: true}},
 		{" MUSIC ,videos", content{music: true, video: true}},
 		{"music,music", content{music: true}},
-		// Nothing recognisable is the same as saying nothing: a face that
-		// showed an empty library would look broken rather than restricted.
-		{"documents", everything},
+		// A nonempty typo must not grant access to the whole library.
+		{"documents", content{}},
 		{"music,documents", content{music: true}},
 	}
 	for _, c := range cases {

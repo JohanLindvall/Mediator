@@ -20,7 +20,7 @@ package server
 // refuses every change — the dialog hides its controls to match, but that is
 // a courtesy and this is the guarantee.
 //
-// A caller **confined to part of the library** (`X-Allowed-Paths`) is refused
+// A caller **confined to part of the library** by paths or content is refused
 // outright, both the reading and the writing. Changing the roots is obvious
 // enough — it is the one call that could hand somebody the whole disk — but
 // reading them matters just as much: the list names the directories the
@@ -30,7 +30,6 @@ package server
 // would have been the one place that was not.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -48,8 +47,8 @@ const maxRoots = 64
 type SetRootsFunc func(roots []string) ([]string, error)
 
 func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
-	if pathsOf(r).Restricted() {
-		http.Error(w, "this view is confined to part of the library", http.StatusForbidden)
+	if ok, why := fullLibrary(r); !ok {
+		http.Error(w, why, http.StatusForbidden)
 		return
 	}
 	writeJSON(w, s.prefs())
@@ -65,10 +64,10 @@ func (s *Server) prefs() PrefsResponse {
 }
 
 func (s *Server) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
-	if pathsOf(r).Restricted() {
+	if ok, why := fullLibrary(r); !ok {
 		// Asked before the lock, because a confined caller may not even
 		// learn whether this server would otherwise have allowed it.
-		http.Error(w, "this view is confined to part of the library", http.StatusForbidden)
+		http.Error(w, why, http.StatusForbidden)
 		return
 	}
 	if s.setRoots == nil {
@@ -79,7 +78,7 @@ func (s *Server) handlePrefsPut(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var up PrefsUpdate
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&up); err != nil {
+	if err := decodeJSON(w, r, &up, 1<<16); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

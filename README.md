@@ -816,6 +816,24 @@ first run's, at least: once directories are chosen in the preferences those
 are what is indexed, and the command line is only the seed. `-lock` keeps the
 command line in charge.
 
+Only regular files are indexed. Named pipes, devices and links to directories
+are skipped, including subtitle and archive names, so they cannot stall a scan
+or appear as playable items. Rescans remove entries replaced by such files.
+
+Browser requests that change state must come from the same origin. Other sites
+receive 403; command-line clients without browser origin headers still work.
+Keep the original `Host` header when proxying, including its port when using a
+nonstandard port (`proxy_set_header Host $http_host` in nginx). JSON writes
+require one non-null object within the endpoint's size limit; trailing values
+and oversized bodies are rejected before applying changes. Incoming requests
+have a 30-second read limit and idle connections close after two minutes;
+streaming responses have no fixed write deadline.
+
+Media opened as a document, including SVG images, is sandboxed so it cannot run
+scripts with the application's permissions. The UI cannot be embedded in a
+frame, and responses suppress referrers and MIME sniffing. These protections
+do not add authentication: use a trusted network or an authenticating proxy.
+
 Converted files (rewraps and HLS segments) live under `-tmp` in a fixed place
 rather than a fresh one per run, so a restart finds what was already
 converted instead of doing it again. `-tmp-max` is a budget shared by both,
@@ -908,6 +926,9 @@ replacement for the password in front; it is a way for the things that
 cannot answer one to fetch what they were pointed at. The key lives in the
 blob database, so links survive a restart and deleting the database
 invalidates all of them.
+
+The service's debug access log redacts tokens from request and redirect paths.
+Configure proxy access logs with the same care: a signed URL is a credential.
 
 ## Playing to a television
 
@@ -1056,6 +1077,12 @@ and when asking for anything by id — and such a caller is refused the
 preferences outright, since the list of scanned directories names the roots
 of a tree they have been given one branch of. Unset means the whole library, and the two
 headers compose: a request carrying both is shown the intersection.
+
+An invalid nonempty restriction fails closed with 403: a content header must
+name at least one supported class, and a path header must be valid CSV (or
+repeated literal paths) containing at least one absolute path. Relative paths
+are ignored when valid absolute paths are also present. Both content-restricted
+and path-restricted views are refused directory preferences, including reads.
 
     location / {
         proxy_set_header X-Media-Content music;
@@ -1232,6 +1259,12 @@ coverage and race detection separately because combining both adds substantial
 cost to audio fingerprint tests. `npm test` covers parsing, playback decisions,
 media-buffer cancellation, API helpers and asynchronous listing updates.
 
+Listing pages are kept in one library generation: a newer answer cancels older
+requests, so late pages cannot restore deleted rows or roll back counts. A
+failed initial listing shows a persistent error and a **Try again** button;
+it is distinct from an empty library. Directory controls appear after the
+preferences load and are disabled while a change is being saved.
+
 ### Layout
 
 ```
@@ -1304,8 +1337,8 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 
 | Header             | Values                          | Effect                                                       |
 | ------------------ | ------------------------------- | ------------------------------------------------------------ |
-| `X-Media-Content`  | `music`, `videos`, `images` — comma-separated for more than one | Restricts everything this request is shown to those classes: listings, counts, search, the grouped views, and anything asked for by id (404 otherwise). Absent or unrecognised means the whole library. Set it in a reverse proxy, not in the page — see [One library, several faces](#one-library-several-faces). |
-| `X-Allowed-Paths` | absolute directories, CSV quoted or one per repeated header | Restricts the request to what lives under them — listings, counts, collections and every by-id request alike. Absent or empty is the whole library. Composes with `X-Media-Content`: a request carrying both sees the intersection. Set by the proxy, never by the page, for the same reason as the header above. |
+| `X-Media-Content`  | `music`, `videos`, `images` — comma-separated for more than one | Restricts listings, counts, search, collections and by-id requests (404 for excluded items). Absent or empty means the whole library; a nonempty header with no supported class is refused with 403. Set it in a reverse proxy — see [One library, several faces](#one-library-several-faces). |
+| `X-Allowed-Paths` | absolute directories, CSV quoted or one per repeated header | Restricts listings, counts, collections and by-id requests to those paths. Absent or empty means the whole library; malformed CSV or a nonempty header with no absolute path is refused with 403. Composes with `X-Media-Content` by intersection. Set by the proxy. |
 | `X-Media-Internal` | a token the server mints for itself | Marks the server's own loopback reads — ffmpeg fetching an archived file's bytes through `/api/stream` to make a thumbnail or read its codecs. It keeps those from registering as playback, which would make the thumbnailer throttle against its own reading. Not something a caller sets: it grants nothing, and a request carrying someone else's guess at it is treated as any other request. |
 
 Notes: media is only ever served by indexed ID, so playlists cannot reach

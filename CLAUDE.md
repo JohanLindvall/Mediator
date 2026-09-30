@@ -6110,6 +6110,37 @@ it behind `recover` (`enrich.go`) — preserve that when adding tag reads.
 
 ## Review invariants
 
+- `http.go` owns cross-origin write protection, response security headers and
+  request-scoped parsing of the proxy restrictions. `contentOf` and `pathsOf`
+  reuse that value, including through signed routing, rather than parsing CSV
+  for every item in a batch. Invalid nonempty restrictions return 403 before
+  routing; `PathFilter` also denies all paths when used directly with invalid
+  input. `NoKinds` distinguishes an empty allowed set from zero's unrestricted
+  default. Content and path restrictions both deny directory preferences through
+  `fullLibrary`; `/api/info.confined` reflects both so the UI hides the control.
+- JSON mutations use `decodeJSON`: a bounded, single, non-null object is read
+  completely before publishing the decoded value. Keep response reads separate
+  from this helper. Go's `CrossOriginProtection` permits media GETs and non-browser
+  clients while denying cross-origin mutations. Proxy the original Host and port.
+  Request reads are bounded to 30 seconds, idle connections to two minutes;
+  long streaming responses intentionally have no write timeout.
+- Stream responses carry a CSP sandbox: SVG and misnamed HTML are untrusted
+  documents, even if displayed safely in an image element elsewhere. Signed
+  credentials are redacted from request and redirect paths in the access log.
+- Scan and watcher entry points check regular-file status before dispatching to
+  subtitle or container readers. Reconciliation drops ordinary files replaced
+  by special files while retaining DVD directory containers. A FIFO named as
+  media must neither enter the index nor block a reader during discovery.
+- A newer listing page retires the prior page generation and cancels outstanding
+  requests. A version drop on a request started at the current version is a
+  server restart and is accepted; an overtaken response is discarded. Explicit
+  refreshes reset the comparison too. Source errors remain observable until retry;
+  a failed first load shows an error and retry control rather than an empty
+  library. Preference edits wait for the initial read and disable controls
+  while saving; closed dialogs ignore late answers. Stored soundtrack indices
+  must be nonnegative safe integers, with blank storage treated as no preference.
+- Parse only stdout when checking ffprobe's structured output. Diagnostics on
+  stderr differ by tool version and must not be counted as stream records.
 - Every listing order ends with the item ID as a tie-breaker, including files
   with identical display paths under different roots. Clamp pagination before
   adding the limit so an oversized offset produces an empty page, never a panic.

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 )
 
@@ -17,7 +16,7 @@ func (s *Server) handleLike(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body LikeUpdate
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&body); err != nil ||
+	if err := decodeJSON(w, r, &body, 1<<10); err != nil ||
 		body.Like < -1 || body.Like > 1 {
 		http.Error(w, "like must be 1, -1 or 0", http.StatusBadRequest)
 		return

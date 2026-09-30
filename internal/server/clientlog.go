@@ -22,7 +22,6 @@ package server
 // what stands in for it.
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -76,7 +75,7 @@ func (l *clientLogLimit) allow(now time.Time) (ok bool, dropped int) {
 // fault must never become a second fault for the page to report.
 func (s *Server) handleClientLog(w http.ResponseWriter, r *http.Request) {
 	var f ClientFault
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxClientLogBody)).Decode(&f); err != nil {
+	if err := decodeJSON(w, r, &f, maxClientLogBody); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
 	}

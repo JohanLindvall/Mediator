@@ -3,7 +3,6 @@ package server
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"mime"
 	"net/http"
@@ -107,12 +106,10 @@ func (s *Server) AllowDeletes() { s.deletes.Store(true) }
 
 // mayDelete says whether this caller may delete, and if not, why.
 func (s *Server) mayDelete(r *http.Request) (bool, string) {
-	switch {
-	case pathsOf(r).Restricted():
-		return false, "this view is confined to part of the library"
-	case !contentOf(r).unrestricted():
-		return false, "this view shows part of the library"
-	case !s.deletes.Load():
+	if ok, why := fullLibrary(r); !ok {
+		return false, why
+	}
+	if !s.deletes.Load() {
 		return false, "this server was started with -lock"
 	}
 	return true, ""
@@ -135,7 +132,7 @@ func (s *Server) handleDeletePlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req library.DeleteRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&req); err != nil {
+	if err := decodeJSON(w, r, &req, 1<<12); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -192,7 +189,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c DeleteConfirm
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<12)).Decode(&c); err != nil {
+	if err := decodeJSON(w, r, &c, 1<<12); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
