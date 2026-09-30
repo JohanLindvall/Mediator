@@ -432,6 +432,8 @@ class VideoOverlay {
 
   private subs: Subtitle[] = [];
   private subIndex = -1; // -1 = subtitles off
+  /** Which source the subtitle is to come back for (startSource). */
+  private subsGen = 0;
 
   private rotation = 0; // quarter turns; a viewing aid for sideways footage
 
@@ -981,7 +983,19 @@ class VideoOverlay {
     // fed or not: a fetch left running fills a buffer nothing reads.
     this.feed?.stop();
     this.feed = o.feed ?? null;
+    this.hideSubtitles();
     this.video.src = url;
+    // The subtitle comes back once the new stream has a picture to stand on,
+    // and only for the newest source: one replaced before it loaded never
+    // fires, and its listener must not light the next stream's early.
+    const gen = ++this.subsGen;
+    this.video.addEventListener(
+      'loadeddata',
+      () => {
+        if (gen === this.subsGen && !this.closed) this.applySubtitle();
+      },
+      { once: true },
+    );
     this.showReceiverButton();
     if (o.track !== undefined) this.appliedTrack = o.track;
     this.sourced = true;
@@ -1359,14 +1373,7 @@ class VideoOverlay {
     }
     if (this.closed || this.item.id !== id || subs.length === 0) return;
     this.subs = subs;
-    for (const s of subs) {
-      const track = document.createElement('track');
-      track.kind = 'subtitles';
-      track.label = s.label;
-      if (s.lang) track.srclang = s.lang;
-      track.src = subUrl(this.item.id, s.index, this.tcOffset);
-      this.video.appendChild(track);
-    }
+    for (const s of subs) this.video.appendChild(this.subTrack(s));
     this.ccBtn.hidden = false;
     this.buildSubMenu();
     // Restore the last language chosen in this browser, if it is offered.
@@ -1383,16 +1390,48 @@ class VideoOverlay {
    * absolute in the file while a conversion restarts its clock at whichever
    * keyframe it opened on, so every seek changes what the cues have to be
    * rebased by.
+   *
+   * **Fresh tracks, not the old ones re-pointed.** A track given a new
+   * address keeps its old cues until the new file has loaded — measured in
+   * Chromium, the whole of that wait — and those are timed to the clock of
+   * the stream that has just been replaced, so the lines from where the
+   * viewer had been were shown at the start of where they went. A new
+   * element starts with no cues at all, which is the honest thing to show
+   * until its file arrives.
    */
   private retimeSubtitles(): void {
-    const tracks = this.video.querySelectorAll('track');
-    tracks.forEach((track, i) => {
-      const sub = this.subs[i];
-      if (!sub) return;
-      const url = subUrl(this.item.id, sub.index, this.tcOffset);
-      if (!track.src.endsWith(url)) track.src = url;
-    });
-    this.applySubtitle(); // a new src resets text-track modes
+    const old = this.video.querySelectorAll('track');
+    if (old.length === 0) return; // the listing has not arrived; it will carry this clock
+    this.hideSubtitles();
+    old.forEach((t) => t.remove());
+    for (const s of this.subs) this.video.appendChild(this.subTrack(s));
+    this.applySubtitle();
+  }
+
+  /** One subtitle as a <track>, against the current stream's clock. */
+  private subTrack(s: Subtitle): HTMLTrackElement {
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = s.label;
+    if (s.lang) track.srclang = s.lang;
+    track.src = subUrl(this.item.id, s.index, this.tcOffset);
+    return track;
+  }
+
+  /**
+   * Take whatever subtitle is on screen off it, now. Chromium goes on
+   * painting the last cue it drew after the element's source changes —
+   * through the whole of the new stream's loading, with its own list of
+   * active cues already empty — and a cue the new stream draws can land on
+   * top of it: after a seek into a conversion the line from where the
+   * viewer had been stayed up for as long as the spinner did, and then sat
+   * under the line from where they went. A track taken to disabled is taken
+   * off the screen at once, which is what clears it; the choice itself is
+   * kept, and put back by applySubtitle.
+   */
+  private hideSubtitles(): void {
+    const tracks = this.video.textTracks;
+    for (let i = 0; i < tracks.length; i++) tracks[i].mode = 'disabled';
   }
 
   /** Point the browser at the selected track (or none). */
@@ -2092,6 +2131,9 @@ class VideoOverlay {
     this.skipIntroOnArrival = this.arrivedFromCredits;
     this.arrivedFromCredits = false;
 
+    // Off the screen first: a track removed while showing can leave its last
+    // cue painted over the next file for as long as that file takes to load.
+    this.hideSubtitles();
     for (const track of this.video.querySelectorAll('track')) track.remove();
     this.subs = [];
     this.subIndex = -1;

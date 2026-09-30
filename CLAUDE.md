@@ -5296,9 +5296,23 @@ Serving details worth knowing before "fixing" them:
   need the player closed and reopened.
 - Subtitle cue times are absolute in the file while a converted stream's
   clock starts at its keyframe, so `/api/subs/{id}/{n}?shift=SECONDS` rebases
-  them (`shiftVTT`); the player re-points every `<track>` whenever the
-  conversion reopens. Without it, subtitles on a converted video are wrong by
-  wherever the viewer last seeked.
+  them (`shiftVTT`); the player **replaces** every `<track>` whenever the
+  conversion reopens (`retimeSubtitles`). Without it, subtitles on a converted
+  video are wrong by wherever the viewer last seeked. Replaced, not
+  re-pointed: a track given a new address keeps its old cues until the new
+  file loads — measured in Chromium, the whole of that wait — and those are
+  timed to the stream just replaced, so after a seek the lines from where the
+  viewer had been played at the start of where they went. **And the subtitle
+  is taken off the screen across every change of source** (`hideSubtitles`,
+  in `startSource` and before a new file's reset removes the old tracks; put
+  back on the new stream's `loadeddata`, for the newest source only).
+  Chromium goes on *painting* the last cue it drew after the element's
+  source changes — through the whole of the new stream's loading, with its
+  own list of active cues already empty — so the old line stayed up for as
+  long as the spinner did, and a cue the new stream drew could land on top
+  of it, two lines in one place. Reproduced on a page of its own (a showing
+  track, a source that answers after four seconds); a track taken to
+  `disabled` is taken off the screen at once, which is what clears it.
 - `/api/subs/{id}` lists external subtitle files (`subs.go` matches
   subtitle extensions against the video's stem in its own directory,
   deriving label and language from the part of the name that follows the
