@@ -32,10 +32,24 @@ func vint(v uint64) []byte {
 	}
 }
 
+// Options says how a member is described: stored, as everything here really
+// is, or claiming to be compressed — and solid, compressed against the
+// members before it. Nothing here can compress the way rar does, so a member
+// claiming to be compressed carries its bytes as they are; the parser reads
+// only headers, and a test that reads the content stands in for the decoder.
+type Options struct {
+	Compressed bool
+	Solid      bool
+}
+
 // Volume4 builds one RAR4 volume holding a slice of `name`'s data.
 // fileCRC is the part's crc32 for intermediate volumes and the whole file's
 // crc32 in the last one (that is what unrar verifies at file completion).
 func Volume4(name string, unpSize int64, part []byte, fileCRC uint32, splitBefore, splitAfter bool) []byte {
+	return volume4(name, unpSize, part, fileCRC, splitBefore, splitAfter, Options{})
+}
+
+func volume4(name string, unpSize int64, part []byte, fileCRC uint32, splitBefore, splitAfter bool, opt Options) []byte {
 	var out bytes.Buffer
 	out.Write([]byte("Rar!\x1a\x07\x00"))
 
@@ -58,6 +72,9 @@ func Volume4(name string, unpSize int64, part []byte, fileCRC uint32, splitBefor
 	if splitAfter {
 		fileFlags |= 0x02
 	}
+	if opt.Solid {
+		fileFlags |= 0x10
+	}
 	body := make([]byte, 25+len(name))
 	binary.LittleEndian.PutUint32(body[0:4], uint32(len(part))) // pack size
 	binary.LittleEndian.PutUint32(body[4:8], uint32(unpSize))   // unpacked size
@@ -65,6 +82,9 @@ func Volume4(name string, unpSize int64, part []byte, fileCRC uint32, splitBefor
 	binary.LittleEndian.PutUint32(body[9:13], fileCRC)
 	body[17] = 20   // unpack version
 	body[18] = 0x30 // method: store
+	if opt.Compressed {
+		body[18] = 0x33 // method: normal compression
+	}
 	binary.LittleEndian.PutUint16(body[19:21], uint16(len(name)))
 	binary.LittleEndian.PutUint32(body[21:25], 0x20)
 	copy(body[25:], name)
@@ -81,6 +101,10 @@ func Volume4(name string, unpSize int64, part []byte, fileCRC uint32, splitBefor
 
 // Volume5 builds one RAR5 volume holding a slice of `name`'s data.
 func Volume5(name string, unpSize int64, part []byte, volNo int, splitBefore, splitAfter bool) []byte {
+	return volume5(name, unpSize, part, volNo, splitBefore, splitAfter, Options{})
+}
+
+func volume5(name string, unpSize int64, part []byte, volNo int, splitBefore, splitAfter bool, opt Options) []byte {
 	var out bytes.Buffer
 	out.Write([]byte("Rar!\x1a\x07\x01\x00"))
 
@@ -123,8 +147,15 @@ func Volume5(name string, unpSize int64, part []byte, volNo int, splitBefore, sp
 	fh.Write(vint(0))                 // file flags
 	fh.Write(vint(uint64(unpSize)))   // unpacked size
 	fh.Write(vint(0))                 // attributes
-	fh.Write(vint(0))                 // compression: store
-	fh.Write(vint(1))                 // host os: unix
+	comp := uint64(0)                 // compression: store
+	if opt.Compressed {
+		comp = 3 << 7 // method 3
+	}
+	if opt.Solid {
+		comp |= 0x40
+	}
+	fh.Write(vint(comp))
+	fh.Write(vint(1)) // host os: unix
 	fh.Write(vint(uint64(len(name))))
 	fh.WriteString(name)
 	block(fh.Bytes(), part)
@@ -155,6 +186,12 @@ func Payload(n int) []byte {
 // volumes holding one stored member, and returns the volume paths in order.
 func WriteSet(t testing.TB, dir, stem, member string, payload []byte, parts int, v5 bool) []string {
 	t.Helper()
+	return WriteSetWith(t, dir, stem, member, payload, parts, v5, Options{})
+}
+
+// WriteSetWith is WriteSet with the member described as opt says.
+func WriteSetWith(t testing.TB, dir, stem, member string, payload []byte, parts int, v5 bool, opt Options) []string {
+	t.Helper()
 	per := (len(payload) + parts - 1) / parts
 	var vols []string
 	for i := 0; i < parts; i++ {
@@ -162,13 +199,13 @@ func WriteSet(t testing.TB, dir, stem, member string, payload []byte, parts int,
 		last := i == parts-1
 		var data []byte
 		if v5 {
-			data = Volume5(member, int64(len(payload)), payload[lo:hi], i+1, i > 0, !last)
+			data = volume5(member, int64(len(payload)), payload[lo:hi], i+1, i > 0, !last, opt)
 		} else {
 			crc := crc32.ChecksumIEEE(payload[lo:hi])
 			if last {
 				crc = crc32.ChecksumIEEE(payload) // last volume: whole-file crc
 			}
-			data = Volume4(member, int64(len(payload)), payload[lo:hi], crc, i > 0, !last)
+			data = volume4(member, int64(len(payload)), payload[lo:hi], crc, i > 0, !last, opt)
 		}
 		p := filepath.Join(dir, fmt.Sprintf("%s.part%d.rar", stem, i+1))
 		if err := os.WriteFile(p, data, 0o644); err != nil {

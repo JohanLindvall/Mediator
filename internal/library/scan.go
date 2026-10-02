@@ -165,6 +165,18 @@ func (l *Library) Scan(addWatch func(dir string)) {
 				}
 				return nil
 			}
+			if isZipContainer(path) {
+				paths, ch := l.indexZip(path)
+				for _, p := range paths {
+					seen[p] = struct{}{}
+				}
+				if ch {
+					changed = true
+					held = true
+					pending++
+				}
+				return nil
+			}
 			// A disc image is a container like a rar set, and a DVD's own
 			// VOBs are the titles they belong to rather than a tile apiece.
 			if dir := isDVDStructure(path); dir || isDiscImage(path) {
@@ -677,6 +689,12 @@ func (l *Library) AddFile(path string) {
 		l.notify() // an open player refetches its subtitle list
 		return
 	}
+	// Before the rar volumes: name.z01 is a part of name.zip where there is
+	// one, and only otherwise the eight hundredth volume of a rar set.
+	if c := zipContainerOf(path); c != "" {
+		l.reindexZip(c)
+		return
+	}
 	if isRarRelated(path) {
 		l.reindexRarSet(rarFirstVolumeOf(path))
 		return
@@ -737,6 +755,13 @@ func (l *Library) Remove(path string) {
 		if l.removeSub(path) {
 			l.notify()
 		}
+		return
+	}
+	if c := zipContainerOf(path); c != "" && c != path {
+		// A part of a zip set went: what was in it goes with it. The
+		// container itself going is the ordinary removal below, every
+		// member's path hanging off it.
+		l.reindexZip(c)
 		return
 	}
 	if isRarRelated(path) {
@@ -934,32 +959,29 @@ func (l *Library) stopMemberReads() {
 func (l *Library) indexRarSet(first string) (paths []string, changed bool) {
 	defer enterContainer(first)()
 	entries, skipped, err := parseRarSet(first)
-	// What the set holds but cannot be served, and why. A compressed member
-	// is the common one and it is invisible from outside: the set parses,
-	// yields nothing, and looks exactly like a release nobody walked. This
-	// line is the only place that question is answered — one line per set,
-	// once per process, naming no members: how many cannot be served and
-	// the reasons, grouped. It used to be a line per member per rescan,
-	// which for a set of three hundred compressed pictures was three hundred
-	// lines every ten minutes for the life of the process.
-	if len(skipped) > 0 {
-		why, kinds := skipReasons(skipped)
-		if l.once("rar skip\x00" + first + "\x00" + kinds) {
-			l.log.Debug("rar set holds members it cannot serve",
-				"path", first, "skipped", len(skipped), "served", len(entries), "why", why)
-		}
-	}
-	if err != nil {
-		if l.once("rar parse\x00" + first + "\x00" + err.Error()) {
-			l.log.Debug("rar parse failed", "path", first, "err", err)
-		}
-		return nil, false
-	}
+	// What the set holds but cannot be served, and why — an encrypted member,
+	// a solid one, one still arriving. Each is invisible from outside: the
+	// set parses, yields less than it holds, and looks like a release nobody
+	// walked. This line is the only place that question is answered — one
+	// line per set, once per process, naming no members: how many cannot be
+	// served and the reasons, grouped. It used to be a line per member per
+	// rescan, which for a set of three hundred unservable pictures was three
+	// hundred lines every ten minutes for the life of the process.
+	l.reportSkips("rar set", first, len(entries), skipped)
 	var mt time.Time
 	for _, vol := range rarVolumes(first) {
 		if info, err := os.Stat(vol); err == nil && info.ModTime().After(mt) {
 			mt = info.ModTime()
 		}
+	}
+	if err != nil {
+		if l.archiveOverCap(first, err) {
+			return l.indexStored(first, nil, mt)
+		}
+		if l.once("rar parse\x00" + first + "\x00" + err.Error()) {
+			l.log.Debug("rar parse failed", "path", first, "err", err)
+		}
+		return nil, false
 	}
 	return l.indexStored(first, discsInside(first, entries), mt)
 }
@@ -1018,6 +1040,9 @@ func discsInside(container string, entries []*storedEntry) []*storedEntry {
 		if !isDiscImage(e.name) {
 			out = append(out, e)
 			continue
+		}
+		if e.pack != nil {
+			continue // compressed: a disc is read by position, and these bytes have none
 		}
 		release := filepath.Base(filepath.Dir(container))
 		if images > 1 {

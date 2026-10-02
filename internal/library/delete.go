@@ -302,6 +302,10 @@ func (p *planner) addContainer(container string) {
 		for _, v := range rarVolumes(container) {
 			p.files[v] = true
 		}
+	case isZipContainer(container):
+		for _, part := range zipPartsOf(container) {
+			p.files[part] = true
+		}
 	default:
 		p.files[container] = true // a disc image
 	}

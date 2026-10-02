@@ -7,16 +7,21 @@ import (
 )
 
 // File is readable item content: seekable/random-access and closable.
-// *os.File implements it; so does the reader over rar volume sets.
+// *os.File implements it; so do the readers over content inside archives.
 type File interface {
 	io.ReadSeekCloser
 	io.ReaderAt
 }
 
-// OpenItem opens an item's content for reading, whether it is a plain file
-// or lives inside a rar volume set.
+// OpenItem opens an item's content for reading, whether it is a plain file,
+// lives inside an archive or a disc as plain bytes, or is packed compressed
+// inside one (pack.go) — which is unpacked as it is read. What streams to a
+// viewer goes through OpenForPlayback instead.
 func OpenItem(it Item) (File, error) {
 	if it.stored != nil {
+		if it.stored.pack != nil {
+			return openPacked(it)
+		}
 		return newStoredReader(it.stored), nil
 	}
 	return os.Open(it.Path)

@@ -840,7 +840,16 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, id string) 
 		http.NotFound(w, r)
 		return
 	}
-	f, err := library.OpenItem(it)
+	internal := r.Header.Get(library.InternalHeader) == library.InternalToken()
+	if !internal {
+		// Mark playback active for the whole response: thumbnailing and tag
+		// enrichment throttle themselves while media is being served. From
+		// before the open, since opening a large packed member is unpacking
+		// it into the scratch space (library.OpenForPlayback) — a viewer's
+		// wait, and a whole film's worth of reading and writing beside it.
+		defer s.lib.StartStream()()
+	}
+	f, err := library.OpenForPlayback(r.Context(), it)
 	if err != nil {
 		s.log.Warn("stream open failed", "path", it.Rel, "err", err)
 		// Known and unreadable is not the same answer as unknown, and the
@@ -858,7 +867,7 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, id string) 
 	// SVG (or an HTML file named as media) must never run with the app's
 	// origin and permission to change preferences or delete files.
 	w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; media-src 'self'; img-src 'self' data:")
-	if r.Header.Get(library.InternalHeader) == library.InternalToken() {
+	if internal {
 		// This process reading its own content: the thumbnailer and the
 		// metadata probe point ffmpeg and ffprobe at this endpoint because
 		// it is the only seekable view of an archived member. Counting that
@@ -876,10 +885,6 @@ func (s *Server) serveStream(w http.ResponseWriter, r *http.Request, id string) 
 		if r.Header.Get(library.InternalWholeHeader) != library.InternalToken() {
 			w = &cappedWriter{ResponseWriter: w, limit: internalStreamCap}
 		}
-	} else {
-		// Mark playback active for the whole response: thumbnailing and tag
-		// enrichment throttle themselves while media is being served.
-		defer s.lib.StartStream()()
 	}
 	if r.URL.Query().Get("dl") == "1" {
 		w.Header().Set("Content-Disposition",
@@ -926,6 +931,8 @@ func openFault(err error) string {
 		return "the disk it is on is not answering"
 	case errors.Is(err, syscall.EUCLEAN):
 		return "the filesystem it is on is damaged and needs repair"
+	case errors.Is(err, library.ErrDamagedMember):
+		return "the archive it is in is damaged"
 	}
 	var pe *fs.PathError
 	if errors.As(err, &pe) {

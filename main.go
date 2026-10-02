@@ -51,6 +51,9 @@ type config struct {
 	debug    bool
 	tmpDir   string
 	tmpMax   int64
+	// archiveMax is how many media members one archive may hold and still be
+	// indexed (-archive-max; 0 is no limit).
+	archiveMax int
 }
 
 // stringList collects a repeatable flag.
@@ -84,7 +87,8 @@ func main() {
 	version := flag.Bool("version", false, "print the build and exit")
 	open := flag.Bool("open", false, "open the UI in the default browser once listening (without -listen: a free port on 127.0.0.1)")
 	tmpDir := flag.String("tmp", "", "directory for converted files being served (default: the system temp directory)")
-	tmpMax := flag.String("tmp-max", "8G", `how much converted material may be held at once ("off" for no limit)`)
+	tmpMax := flag.String("tmp-max", "8G", `how much converted and unpacked material may be held at once ("off" for no limit)`)
+	archiveMax := flag.Int("archive-max", library.DefaultArchiveMax, "how many media members one zip archive or rar set may hold and still be indexed; one over it is left out whole (0: no limit)")
 	debug := flag.Bool("debug", false, "log every API request (method, range, status, bytes) and raise the log level")
 	lock := flag.Bool("lock", false, "refuse changes to the scanned directories and deleting from the disk: the preferences show what is indexed and nothing can alter it")
 	var excludes stringList
@@ -160,7 +164,7 @@ func main() {
 	cfg := config{
 		roots: roots, excludes: excludes, listen: *listen, dataDir: *dataDir,
 		dbPath: *dbPath, rescan: *rescan, analyze: *analyze, credits: *credits, open: *open, lock: *lock, debug: *debug,
-		tmpDir: *tmpDir, tmpMax: maxScratch,
+		tmpDir: *tmpDir, tmpMax: maxScratch, archiveMax: *archiveMax,
 	}
 	if err := run(cfg, log); err != nil {
 		log.Error("fatal", "err", err)
@@ -182,6 +186,8 @@ func flagSet(name string) bool {
 func run(cfg config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// Before anything walks: the cap decides what an archive brings in.
+	library.SetArchiveMax(cfg.archiveMax)
 
 	if err := os.MkdirAll(cfg.dataDir, 0o755); err != nil {
 		return fmt.Errorf("data dir: %w", err)
@@ -467,6 +473,13 @@ func run(cfg config, log *slog.Logger) error {
 	// the disk is one disk. -tmp says where, -tmp-max says how much.
 	scratch := server.NewScratch(cfg.tmpDir, cfg.tmpMax)
 	log.Info("scratch space", "dir", scratchDirName(cfg.tmpDir), "limit", cfg.tmpMax)
+	// A film packed compressed inside an archive is unpacked into the same
+	// space under the same budget when it is played, and a copy an earlier
+	// run made is taken in rather than made again.
+	if err := library.SetScratch(scratch, log); err != nil {
+		log.Warn("could not use the scratch space for unpacking", "err", err)
+	}
+	defer library.CloseScratch()
 
 	// Rewrapping shares ffmpeg with the thumbnailer; without it on PATH the
 	// rewrapper declines everything and the converter stays the only route.
@@ -638,6 +651,10 @@ func run(cfg config, log *slog.Logger) error {
 	if err := remux.Close(); err != nil {
 		log.Warn("could not clear the rewrap scratch directory", "err", err)
 	}
+	// The same for an unpacking a stream is waiting on: its request is one
+	// the drain would wait for, and only stopping the unpacking releases it.
+	// What has finished stays on the disk for the next run.
+	library.CloseScratch()
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {

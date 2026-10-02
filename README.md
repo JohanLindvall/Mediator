@@ -374,15 +374,35 @@ Go binary with the TypeScript frontend embedded.
   transcoded so accents survive. The chosen language is remembered. Cue
   times follow a converted stream, which starts at a keyframe rather than
   where you seeked, so subtitles stay in step after skipping around.
-- **Split RAR support** — uncompressed ("store") rar volume sets, the
-  classic multi-part set holding one huge video, are indexed
-  and streamed directly out of the volumes with full seeking — nothing is
-  extracted, and a viewer keeps only a handful of volume files open no
-  matter how many parts the set has. RAR4 and RAR5, plain and split.
-  Compressed or encrypted members are skipped — serving one would mean
-  decompressing from the first byte on every seek — and `-debug` says which
-  member was passed over and why, so a release that does not appear can be
-  told from one that was never scanned.
+- **Archives: rar sets and zip files** — the media inside them is indexed
+  and played without extracting anything by hand. RAR4 and RAR5, plain and
+  split across volumes, and zip — in one file, or split into parts either
+  way an archive is split: `name.z01 … name.zip` as an archiver writes them,
+  or `name.zip.001, .002 …` cut from one archive, including pieces a file
+  host has renamed apart with an identifier of its own. A part that is
+  missing costs only the members whose bytes were in it, and every member's
+  own header is checked against the archive's directory before it is
+  served, so a wrong offset is a member left out rather than another
+  member's bytes under its name. A member *stored* as it is — the classic
+  multi-part set holding one huge video — is streamed straight out of the
+  volumes with full seeking, and a viewer keeps only a handful of volume
+  files open however many parts the set has. A *compressed* member (rar's
+  own compression, or zip's deflate) is unpacked as it is read for
+  everything the server reads for itself — tags, picture sizes,
+  thumbnails — and, when a film of 32 MB or more is played, unpacked once
+  into the scratch space the conversions use (`-tmp`, `-tmp-max`) and
+  served from there with full seeking; the copy is checked against the
+  archive's checksum and kept across restarts until the budget needs the
+  room. A member whose bytes do not unpack — a download that went wrong part
+  way — is said to be damaged, in those words, and not unpacked again for
+  the rest of the run. Decompression is native Go (klauspost/compress for
+  zip, rardecode for rar). Members of a *solid* rar archive (compressed against the members
+  before them), encrypted members and zip compression methods other than
+  deflate are skipped, and `-debug` says which and why, so a release that
+  does not appear can be told from one that was never scanned. **An archive
+  holding more than `-archive-max` media members (1,000 by default) is left
+  out whole** — a dataset rather than a collection, like a gigapixel
+  panorama shipped as two hundred thousand tiles — and the log says so once.
 - **Formats** — video: mp4, mkv, webm, mov, avi, m4v, mpg/mpeg, wmv, flv,
   3gp, vob, the transport streams a capture or a camcorder writes (ts, mts,
   m2ts), and the older wrappers (divx, f4v, ogv, rm, rmvb); images: jpg,
@@ -827,8 +847,9 @@ Flags:
 | `-analyze` | `true` | Read how the music sounds in the background (ffmpeg needed), for similar tracks, radio, similar releases and performers, and audiobook detection; `-analyze=false` turns it off |
 | `-credits` | `true` | Find each show's intro and credits from the sound, so the player can skip them (needs ffmpeg) |
 | `-version` | | Print the build (version, commit, time, toolchain) and exit |
-| `-tmp`     | system temp        | Where converted files are kept (see below)                     |
-| `-tmp-max` | `8G`               | How much converted material may be held at once; `off` (or `0`) for no limit |
+| `-tmp`     | system temp        | Where converted files and unpacked archive members are kept (see below) |
+| `-tmp-max` | `8G`               | How much converted and unpacked material may be held at once; `off` (or `0`) for no limit |
+| `-archive-max` | `1000`         | How many media members one zip archive or rar set may hold and still be indexed; one over it is left out whole. `0` for no limit |
 | `-lock`    | `false`            | Refuse changes to the scanned directories and deleting from the disk: the preferences become read-only and nothing can be deleted |
 | `-exclude` | —                  | Glob of paths to keep out of the index; repeatable             |
 | `-debug`   | `false`            | Log every request — method, range, status, bytes, duration     |
@@ -856,13 +877,15 @@ scripts with the application's permissions. The UI cannot be embedded in a
 frame, and responses suppress referrers and MIME sniffing. These protections
 do not add authentication: use a trusted network or an authenticating proxy.
 
-Converted files (rewraps and HLS segments) live under `-tmp` in a fixed place
-rather than a fresh one per run, so a restart finds what was already
-converted instead of doing it again. `-tmp-max` is a budget shared by both,
-and it prunes: least recently wanted first, never taking something that is
-being watched — being over a limit you chose is a smaller wrong than deleting
-a film out from under a viewer. A file too large for the whole budget is left
-to the segmented converter, which only holds what it has produced.
+Converted files (rewraps and HLS segments) and films unpacked from archives
+live under `-tmp` in a fixed place rather than a fresh one per run, so a
+restart finds what was already converted or unpacked instead of doing it
+again. `-tmp-max` is a budget shared by all three, and it prunes: least
+recently wanted first, never taking something that is being watched — being
+over a limit you chose is a smaller wrong than deleting a film out from under
+a viewer. A file too large for the whole budget is left to the segmented
+converter, which only holds what it has produced; an archived film too large
+for it is played as it is packed, which seeks slowly rather than not at all.
 
 What is being written counts towards the budget as well as what is already
 there — a copy in flight is bytes on the disk whether or not anything has
@@ -1221,12 +1244,21 @@ first walk, which cannot be interrupted: waited for outright, a signal
 arriving during a cold start would hold the process open for the whole of
 that walk.
 
-**A release inside a rar set is missing.** With `-debug` the log says why,
-once per set and not per member or per rescan: `rar set holds members it
-cannot serve`, with how many and the reason — compressed (only stored
-members can be served; decompressing from the first byte for every seek
-would be the whole archive per scrub), encrypted, or incomplete, with how
-many bytes of how many have arrived.
+**A release inside a rar set or a zip archive is missing.** If the whole
+archive is missing, look for `archive left out: it holds more media than
+-archive-max allows` in the log, which names the archive and how many members
+it holds; raise `-archive-max` (or set it to `0`) to have it. Otherwise, with
+`-debug` the log says why, once per archive and not per member or per rescan:
+`rar set holds members it cannot serve` (or `zip archive …`), with how many
+and the reason — solid (compressed against the members before it, which
+cannot be unpacked one by one), encrypted, a zip method other than deflate,
+or incomplete, with how many bytes of how many have arrived or which part of
+a split zip is not there. A split zip with its directory part missing (the
+`.zip` of a `.z01` set, the last piece of a `.zip.001` set) cannot be read
+at all and says `zip parse failed`. A film that is listed and will not play,
+the player saying *the archive it is in is damaged*, is a member whose bytes
+do not unpack; `could not unpack an archive member` in the log has the
+decoder's own words.
 
 **A film stutters in the browser and plays smoothly in VLC.** Usually the
 stream lies about how far it reorders its frames: it declares a depth the
@@ -1293,8 +1325,9 @@ preferences load and are disabled while a change is being saved.
 main.go               flags, embedding (web/dist), lifecycle
 cmd/gen-ts/           Go → TypeScript API model generator
 internal/library/     index, scanner, fsnotify watcher, albums, artists,
-                      tokenized search, tag/duration enrichment, rar volume
-                      reading, loopback reads for archived members
+                      tokenized search, tag/duration enrichment, rar and zip
+                      reading (split sets included), unpacking compressed
+                      members, loopback reads for archived members
 internal/server/      HTTP API, SSE, streaming, rewrap and HLS conversion,
                       the scratch budget, thumbnails, preferences, request
                       log, embedded SPA

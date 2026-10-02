@@ -635,8 +635,9 @@ Change propagation is the core loop:
   walks, and the discipline is strictly container → `l.mu`: nothing calls
   `enterContainer` under the index lock. **The walk and the watcher must name
   a container the same way**, or the lock holds nothing together and each side
-  takes a door nobody else wants — a rar set is its first volume, a disc image
-  is itself, and a DVD folder is the directory its VOBs are in on both sides.
+  takes a door nobody else wants — a rar set is its first volume, a zip set its
+  `.zip` or its first piece, a disc image is itself, and a DVD folder is the
+  directory its VOBs are in on both sides.
   A divergence there would be silent, which is why it is tested rather than
   merely written down.
   **A container's members are read once the writer goes quiet**
@@ -2194,13 +2195,15 @@ Change propagation is the core loop:
   never the clients, and it is the second of the two notifications a watcher
   path owes, the first being the file list.
 - **A member the set holds but cannot serve is reported, not passed over.**
-  A compressed member parses without error and yields nothing, so the set
-  looks exactly like a release nobody ever walked — and the question "why is
-  this not in the library?" could only be settled by reading the archive by
-  hand, twice. `parseRarSet` returns `[]rarSkip` beside the entries and
-  `indexRarSet` logs each one with its reason: compressed (with the method),
-  encrypted, or incomplete (with how many bytes of how many arrived, which is
-  the ordinary state of a download and not an error). **One line per set,
+  A member that cannot be served parses without error and yields nothing, so
+  the set looks exactly like a release nobody ever walked — and the question
+  "why is this not in the library?" could only be settled by reading the
+  archive by hand, twice. `parseRarSet` and `parseZip` return `[]rarSkip`
+  beside the entries and `reportSkips` logs them with their reason: solid
+  (with the method), encrypted, a zip method that is not deflate, a name held
+  twice, a part of a split zip that is not here, or incomplete (with how many
+  bytes of how many arrived, which is the ordinary state of a download and
+  not an error). **One line per set,
   once per process, naming no members**: how many cannot be served, how many
   can, and the reasons grouped by kind with the first member's own wording
   (`skipReasons`). It used to be a line per member per rescan — the rescan
@@ -2210,22 +2213,141 @@ Change propagation is the core loop:
   of reason, so an incomplete member is not news again for every byte that
   arrives and a set is reported afresh only when what is wrong with it
   changes. The parse failure of a whole set is said once the same way. Measured across the
-  disks: 244 rar sets, 174 yielding media and 70 yielding nothing — most of
-  those being software, subtitle archives and other things that were never
-  media, which is exactly why the reason has to be in the log rather than
-  inferred from the count.
-  **Compressed members stay unsupported**, deliberately and after being
-  asked: serving one means decompressing from the first byte for every seek,
-  which for a film is the whole archive per scrub of the bar. A scene DVDR
-  release stored with "fastest" saves about five percent on an image that is
-  already compressed, and costs all of that.
-- Rar support (`rar.go`): store-method members of RAR4/RAR5 volume sets are
-  indexed as virtual items (`Path` = "<rar>\x00<member>", `Archived()`
-  true) and read via `OpenItem`, which stitches segments into a seekable
-  reader. That reader is not the rar's — `storedEntry` is a name, a size and
-  a list of byte ranges in files we do not own, and a DVD title is the same
-  thing (see disc images below), so both go through it and `Archived()` means
-  "the bytes are inside something else", not "this came out of an archive".
+  disks: 144 rar sets and 125 zip archives, of which 4 and 18 yield nothing —
+  software, subtitle archives and other things that were never media, which
+  is exactly why the reason has to be in the log rather than inferred from
+  the count.
+  **Compressed members are served now, by unpacking them** (`pack.go`,
+  `unpack.go`). The paragraph that used to stand here refused them, on the
+  grounds that serving one means decompressing from the first byte for every
+  seek — which is still true; what answers it is that there are two readers,
+  and the line between them is what the reader is doing. Everything this
+  process reads for itself — a picture's header for its size, a song's tags,
+  a thumbnail, the opening boxes of a film — reads from the start or near it,
+  once, and gets `packedReader`: unpacked as it is read and written nowhere,
+  a forward seek unpacking and discarding up to where it goes, a backward one
+  starting again from the top. A pass over a photo archive therefore writes
+  nothing to read each picture's first few hundred bytes — measured, a 12 MB
+  compressed picture thumbnailed in 2.1 s and a 1 MB one in 0.24 s. Playback
+  is the other thing: a browser and a converter seek all over a film, every
+  range a new reader, so a member from `unpackFrom` (32 MiB) up being streamed
+  is unpacked once into the scratch space the rewrapper and the segmented
+  converter use, under their budget, and served from there as a file
+  (`OpenForPlayback`) — the owner's choice over unpacking it in pieces.
+  The copy keeps the rewrap's rules, being the same problem: one per member,
+  keyed by identity (path, time, size); made by whoever asks first and waited
+  for by the rest; written beside its name and renamed into place; checked
+  against the zip's checksum (rardecode checks rar's) before it is believed;
+  room made before writing, counting what is being written; least recently
+  wanted freed first, but **never one asked for within `unpackKeepFor`** (five
+  minutes, the rewrapper's `remuxKeepFor`) — a player opens the copy afresh
+  for every range, minutes apart, so one pruned between two of them is a film
+  unpacked all over again in the middle of being watched; adopted across a
+  restart; belonging to no request; at most `unpackAtOnce` (2) at a time; and
+  stopped by `CloseScratch` before the drain, a copy landing then left on the
+  disk for the next run and not offered. A member larger than the whole
+  budget is streamed as it is packed, which seeks slowly rather than not at
+  all. `serveStream` marks playback **before** the open, since for such a
+  member the open is the unpacking. Measured: a 686 MB film compressed by RAR
+  2.9 unpacked in 17.9 s, byte for byte what RAR's own extraction gives, its
+  later ranges answered in 1.6 ms; a 577 MB deflated film in about half a
+  second.
+  **Decompression is native Go, by the owner's rule** — no unrar or 7z
+  process: klauspost/compress's flate for zip, rardecode for rar.
+  **rardecode v2.4.1 decodes some RAR 2.9 members wrong**: an LZ match that
+  runs past the end of its window has its remainder dropped (`copyBytes`
+  clamps at the window's end), so a member long enough to wrap the window
+  comes out short and fails its checksum — measured on two films here, wrong
+  from the third wrap on. `go.mod` pins upstream's v2.4.1 plus the two
+  commits of nwaples/rardecode#69, which fix it and were checked byte for byte
+  against RAR's own extraction; drop the `replace` once a release carries
+  them. **A solid archive's members are reported and left out**: each is
+  compressed against the ones before it, rardecode will not open one out of
+  order, and serving one would mean unpacking every member before it per
+  read; none was found on these disks. A compressed member is complete only
+  where its last part says nothing follows and no volume holds less than its
+  header says (`packing.ended`, `short`): a stored member's completeness is its
+  byte ranges, and a compressed one cannot be served in part. A member is
+  found in rardecode's listing by name and, where the name reads differently
+  (rar keeps one in two encodings and this parser reads the first), by its
+  sizes; the listings of the last four sets are kept (`rarListings`), or a set
+  of a thousand pictures read for its thumbnails would be listed a thousand
+  times. Measured across these disks: 27 of the 144 rar sets hold compressed
+  media — 18,571 members, nearly all of them pictures — and none is solid.
+  **A member whose bytes do not unpack is damaged, and said so once**
+  (`ErrDamagedMember`). A deflate stream that breaks off, a checksum that does
+  not match, fewer bytes than were promised — or rardecode's own words for
+  the same — is a verdict on the file, unlike a read that failed: the copy is
+  refused as "the archive it is in is damaged", which is what the player
+  shows (`openFault`), and remembered for the run by the member's identity,
+  since asking again would unpack the same bytes to fail at the same place.
+  Measured: two films cut into pieces by a file host broke off 137 MB and
+  620 MB in, and Python's own zip reader stops at the same bytes; the first
+  ask took 1.1 s to find that out and the second answered at once.
+- **Zip** (`archive.go`, `zipset.go`) goes through a rar set's doors: members
+  hang off the container after a NUL, `indexStored` reconciles them, nothing
+  is persisted, `OpenItem` reads them, `enterContainer` holds a read and its
+  reconcile together. **The directory is read here, not by the zip
+  package**, because that reads past the one field a spanned set turns on —
+  the part a member begins in — and keeps nothing of it; the first version
+  refused split sets for want of it. One reader for every shape, the single
+  file included, so that no shape has a path of its own. Checked against the
+  zip package on every archive on these disks: 8,025 members at the same data
+  offsets (the one apparent difference was a name stored twice, where the
+  comparison held the second copy and this serves the first).
+  **A zip comes split two ways, and both are read.** A spanned set —
+  `name.z01 … name.zip`, the directory in the last — gives each member a part
+  number and an offset from that part's start; a byte-split set —
+  `name.zip.001, .002 …` — is one archive cut into pieces afterwards, its
+  offsets counting from the first. Either way a member is a run of bytes that
+  may cross from one file into the next, which is a `storedEntry`'s segments
+  (`zipSet.span`), so the stitched reader serves it and a deflated one is
+  unpacked through it. The container is the file a set is known by — the
+  `.zip` of a spanned set, the first piece of a byte-split one — and
+  `zipContainerOf` names it from any part exactly as the walk does, which a
+  test pins; a part that arrives or goes reads the set again, and `name.z01`
+  is a zip part where `name.zip` exists and only otherwise the eight
+  hundredth volume of a rar set. **A file host renames pieces apart** — an
+  identifier of its own before the number, a different one for each piece, so
+  the pieces of one set share no name at all — and that is the only shape of
+  byte-split set on these disks: pieces group by name, or failing that by name
+  less a trailing `-identifier` (`hostID`), and a number held by two files is
+  two sets that cannot be told apart and joins nothing.
+  **Every member's own header is read before it is served and has to name
+  it** (`dataStart`): a member header, carrying the directory's name for it.
+  That is the guard against every way an offset can be wrong — a part missing
+  or misgrouped, a damaged directory — any of which would otherwise serve
+  another member's bytes under this one's name; Python's zip reader insists on
+  the same agreement, which is the evidence that real archives keep it. A part
+  that is not here costs the members whose bytes are in it (`incomplete: part
+  1 of 4 is not here`); an archive read without fault that is not a whole one
+  — no end record, a directory that does not parse, a byte-split set short of
+  its last piece — is a verdict (`zipShape`) and what it held goes, where a
+  read that failed keeps it. An archive with something in front of it, a
+  self-extractor's code, has its offsets moved by that much, as the zip
+  package does. Measured: a spanned set short of two of its four parts serves
+  27 of its 55 members, each byte for byte what zlib makes of the same bytes.
+- **An archive holding more media than `-archive-max` is left out whole**
+  (`archiveMax`, default 1,000, 0 for none; `mediaMembers` counts what would
+  be items). Whole, never its first thousand: for a tile set that would be a
+  thousand tiles. It is a verdict — what the archive held before is dropped —
+  and logged once at Info, since an owner may go looking (`archiveOverCap`).
+  A zip is judged from its end record before its directory is read
+  (`zipEntriesPerMember`): past ten entries of any kind per member allowed it
+  is over however few are media, and reading a quarter of a million names
+  every ten minutes to learn that again is the cost the bound exists to
+  avoid. What the cap costs on these disks is in `DefaultArchiveMax`'s
+  comment: thirteen rar sets of pictures, about 62,000 that were in the
+  library before.
+- Rar support (`rar.go`): members of RAR4/RAR5 volume sets — stored, and
+  compressed as above — are indexed as virtual items (`Path` =
+  "<rar>\x00<member>", `Archived()` true) and read via `OpenItem`, which
+  stitches a stored member's segments into a seekable reader. That reader is
+  not the rar's — `storedEntry` is a name, a size and a list of byte ranges in
+  files we do not own, and a DVD title (see disc images below) and a zip
+  member, in one file or across a split set's parts, are the same thing, so
+  all of them go through it and `Archived()` means "the bytes are inside
+  something else", not "this came out of an archive".
   The index of where each segment starts lives on the *reader*, built by
   `newStoredReader`: it is what `readAt` binary-searches, and putting it on
   the entry meant every producer of one had to remember to build it — which
@@ -4142,7 +4264,9 @@ that race a viewer's own playback say so now where they used to say nothing:
 the border detection, which borrows the thumbnailer's ffmpeg slot, and the
 watcher's own debounced reads, which stand down for `Library.Streaming` like
 the sweep does — bounded, since they hold a process-wide slot while they
-wait (`enrichBusyWait`). The caption extraction already marked it and still
+wait (`enrichBusyWait`). Opening a large compressed archive member is
+unpacking it, so `serveStream` marks playback before the open rather than
+after it. The caption extraction already marked it and still
 does; what changed there is only that it no longer runs on the context of
 whoever asked first. Every one of
 those releases is a `defer`: a stream count that is never given back reads as
@@ -5002,9 +5126,10 @@ Serving details worth knowing before "fixing" them:
   `Scratch` has no total to ask for, only `Excess()`, which reads 0 in exactly
   the case that matters.
   Both converters share one working space and one budget (`scratch.go`,
-  `-tmp` and `-tmp-max`), because the disk is one disk: each reports what it
-  holds, asks whether the two of them are over, and frees its own least
-  recently wanted. A finished rewrap is counted, and the budget pruned,
+  `-tmp` and `-tmp-max`), because the disk is one disk — and so does the
+  unpacker, a third owner (`library.SetScratch`, under `unpack`): each
+  reports what it holds, asks whether they are over between them, and frees
+  its own least recently wanted. A finished rewrap is counted, and the budget pruned,
   **before** its waiters are released: announced first, a caller that found
   its film ready and asked for the next one at once raced the accounting,
   and the older file was still on disk a moment after the newer one was
@@ -5489,7 +5614,10 @@ Serving details worth knowing before "fixing" them:
   being converted with nobody watching it. The **rewrapper** is therefore
   closed before the drain, the defer left as an idempotent backstop: a copy
   still being written is unplayable in any case and `Close` takes its `.part`
-  with it, so ending it early costs a viewer nothing. The **segmented
+  with it, so ending it early costs a viewer nothing. The **unpacker**
+  (`library.CloseScratch`) is stopped in the same place for the same reason,
+  a request waiting on an unpacking being one the drain would otherwise wait
+  out. The **segmented
   converter is deliberately not**: `HLS.Close` deletes the directory of every
   session still converting, and during the drain a viewer's player is still
   asking for segments out of it, so closing it first answers them 404 for the
@@ -5896,8 +6024,8 @@ Serving details worth knowing before "fixing" them:
   version deleted the second part's subtitles with the first part. A
   subtitle goes with the video whose name it carries most of
   (`subtitleOfAnother`), read off the folder itself. Content inside another file cannot be taken out,
-  so the container goes — every volume of a rar set (`rarVolumes`), the disc
-  image, or a DVD folder's files — and its other members go with it and are
+  so the container goes — every volume of a rar set (`rarVolumes`), every part
+  of a zip set (`zipPartsOf`), the disc image, or a DVD folder's files — and its other members go with it and are
   named (`Others`). A release, a show, a season: their tracks or episodes.
   A playlist release is its tracks and the playlist, unless a track lives
   outside the playlist's folder, when it is a mixtape and only the list

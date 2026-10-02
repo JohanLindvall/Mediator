@@ -15,12 +15,14 @@ import (
 	"sync"
 )
 
-// Support for reading media out of uncompressed ("store" method) rar volume
-// sets without extracting them — the classic split archive holding one huge
-// video. Both RAR 4.x and RAR 5.x headers are parsed, just enough to find
-// each stored member's data runs; compressed or encrypted members are
-// skipped. A member spanning volumes becomes a list of (file, offset, len)
-// segments that storedReader stitches into one random-access stream.
+// Support for reading media out of rar volume sets without extracting them
+// first — the classic split archive holding one huge video. Both RAR 4.x and
+// RAR 5.x headers are parsed, just enough to find each member's data runs. A
+// stored member spanning volumes becomes a list of (file, offset, len)
+// segments that storedReader stitches into one random-access stream; a
+// compressed one becomes a packed entry (pack.go), read by unpacking it.
+// Encrypted members, and the compressed members of a solid archive — whose
+// bytes depend on every member before them — are skipped and reported.
 
 // storedSeg is one contiguous run of member data inside a volume file.
 type storedSeg struct {
@@ -35,7 +37,7 @@ type storedSeg struct {
 // so both are this, and one reader serves them.
 type storedEntry struct {
 	name string // member path as recorded in the container (slash-normalized)
-	size int64  // unpacked size (== sum of segment lengths)
+	size int64  // unpacked size (the segments' lengths summed, unless packed)
 	segs []storedSeg
 	// durationMs is what the container says the content is worth, where it
 	// says anything — a DVD does, in its own information file, and it is the
@@ -44,6 +46,10 @@ type storedEntry struct {
 	// seek maps moments in the content to the bytes they start at, for
 	// content that cannot be seeked by timestamp. See SeekByte.
 	seek []seekPoint
+	// pack is set for a member stored compressed: its segments then hold
+	// what the content was packed into rather than the content, and it is
+	// read by unpacking them (pack.go).
+	pack *packing
 }
 
 // seekPoint is one moment in the content and the byte it begins at.
@@ -145,9 +151,26 @@ func rarVolumes(first string) []string {
 // reading the archive by hand.
 type rarSkip struct{ name, why string }
 
+// rarPart is one volume's share of a member, as that volume's header
+// describes it.
+type rarPart struct {
+	name    string
+	unpSize int64
+	seg     storedSeg
+	// splitBefore and splitAfter say the member began in an earlier volume
+	// and goes on in a later one.
+	splitBefore, splitAfter bool
+	// packed is a compressed member rather than a stored one.
+	packed bool
+	// whole is false where the volume holds fewer bytes than its header
+	// says it carries: a volume still arriving.
+	whole bool
+}
+
 // parseRarSet reads the volume set and returns the members that can be
-// served — store-method, unencrypted, complete — along with the ones that
-// cannot and the reason, which the caller logs.
+// served — stored or compressed, unencrypted, complete — along with the ones
+// that cannot and the reason, which the caller logs. A set holding more media
+// than one archive may bring in (archiveMax) answers tooManyMembers.
 func parseRarSet(first string) ([]*storedEntry, []rarSkip, error) {
 	var order []*storedEntry
 	var skips []rarSkip
@@ -168,25 +191,32 @@ func parseRarSet(first string) ([]*storedEntry, []rarSkip, error) {
 	// id — an id is hashed from the path — and silently replace it in the
 	// index. It is refused, and so are its continuations.
 	twice := make(map[string]bool)
-	add := func(name string, unpSize int64, seg storedSeg, splitBefore bool) {
-		if twice[name] {
+	add := func(p rarPart) {
+		if twice[p.name] {
 			return
 		}
-		e := open[name]
-		if e != nil && !splitBefore {
-			twice[name] = true
-			skip(name, "duplicate: a second member of this name in the set")
+		e := open[p.name]
+		if e != nil && !p.splitBefore {
+			twice[p.name] = true
+			skip(p.name, "duplicate: a second member of this name in the set")
 			return
 		}
 		if e == nil {
 			if len(open) >= rarMaxEntries {
 				return
 			}
-			e = &storedEntry{name: name, size: unpSize}
-			open[name] = e
+			e = &storedEntry{name: p.name, size: p.unpSize}
+			if p.packed {
+				e.pack = &packing{format: packRar, firstPacked: p.seg.n}
+			}
+			open[p.name] = e
 			order = append(order, e)
 		}
-		e.segs = append(e.segs, seg)
+		e.segs = append(e.segs, p.seg)
+		if e.pack != nil {
+			e.pack.ended = !p.splitAfter
+			e.pack.short = e.pack.short || !p.whole
+		}
 	}
 
 	for _, vol := range rarVolumes(first) {
@@ -195,11 +225,27 @@ func parseRarSet(first string) ([]*storedEntry, []rarSkip, error) {
 		}
 	}
 
+	if limit := archiveMax.Load(); limit > 0 {
+		if n := mediaMembers(order); n > limit {
+			return nil, skips, tooManyMembers{n: n, max: limit}
+		}
+	}
 	var out []*storedEntry
 	for _, e := range order {
 		var got int64
 		for _, s := range e.segs {
 			got += s.n
+		}
+		if e.pack != nil {
+			// What a compressed member unpacks to is not the sum of its
+			// parts, so it is complete when the last part seen says nothing
+			// follows it and every volume holds what its header promised.
+			if !e.pack.ended || e.pack.short || e.size == 0 {
+				skip(e.name, fmt.Sprintf("incomplete: compressed, %d bytes across %d volumes so far", got, len(e.segs)))
+				continue
+			}
+			out = append(out, e)
+			continue
 		}
 		if got != e.size || e.size == 0 {
 			// The volumes hold less than the member says it is: a set still
@@ -215,7 +261,7 @@ func parseRarSet(first string) ([]*storedEntry, []rarSkip, error) {
 	return out, skips, nil
 }
 
-func parseRarVolume(path string, add func(string, int64, storedSeg, bool), skip func(string, string)) error {
+func parseRarVolume(path string, add func(rarPart), skip func(string, string)) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -236,7 +282,7 @@ func parseRarVolume(path string, add func(string, int64, storedSeg, bool), skip 
 
 // --- RAR 4.x -----------------------------------------------------------------
 
-func parseRar4(f *os.File, path string, add func(string, int64, storedSeg, bool), skip func(string, string)) error {
+func parseRar4(f *os.File, path string, add func(rarPart), skip func(string, string)) error {
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -293,15 +339,17 @@ func parseRar4(f *os.File, path string, add func(string, int64, storedSeg, bool)
 				switch {
 				case encrypted:
 					skip(name, "encrypted")
-				case method != 0x30:
-					// Compressed. Serving it would mean decompressing from
-					// the first byte for every seek, which for a film is the
-					// whole archive per scrub — so the answer is no, and
-					// saying so is the only way anyone can find that out.
-					skip(name, fmt.Sprintf("compressed (method 0x%02x), not stored", method))
+				case method != 0x30 && flags&0x10 != 0:
+					// Solid: compressed against the members before it, so
+					// none of it can be unpacked without unpacking them all.
+					skip(name, fmt.Sprintf("solid (method 0x%02x), compressed against the members before it", method))
 				default:
-					add(name, unpSize, storedSeg{path: path, off: pos + headSize, n: packSize},
-						flags&0x01 != 0)
+					add(rarPart{
+						name: name, unpSize: unpSize,
+						seg:         storedSeg{path: path, off: pos + headSize, n: packSize},
+						splitBefore: flags&0x01 != 0, splitAfter: flags&0x02 != 0,
+						packed: method != 0x30, whole: pos+headSize+packSize <= size,
+					})
 				}
 			}
 		case 0x7B: // end of archive
@@ -340,7 +388,7 @@ func rarVint(f io.ReaderAt, off int64) (val int64, n int, err error) {
 	return 0, 0, fmt.Errorf("bad vint")
 }
 
-func parseRar5(f *os.File, path string, add func(string, int64, storedSeg, bool), skip func(string, string)) error {
+func parseRar5(f *os.File, path string, add func(rarPart), skip func(string, string)) error {
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -428,11 +476,17 @@ func parseRar5(f *os.File, path string, add func(string, int64, storedSeg, bool)
 				switch {
 				case encrypted:
 					skip(name, "encrypted")
-				case method != 0:
-					skip(name, fmt.Sprintf("compressed (method %d), not stored", method))
+				case method != 0 && comp&0x40 != 0:
+					// Solid: compressed against the members before it, so
+					// none of it can be unpacked without unpacking them all.
+					skip(name, fmt.Sprintf("solid (method %d), compressed against the members before it", method))
 				default:
-					add(name, unpSize, storedSeg{path: path, off: headStart + headSize, n: dataSize},
-						flags&0x08 != 0) // split-before
+					add(rarPart{
+						name: name, unpSize: unpSize,
+						seg:         storedSeg{path: path, off: headStart + headSize, n: dataSize},
+						splitBefore: flags&0x08 != 0, splitAfter: flags&0x10 != 0,
+						packed: method != 0, whole: headStart+headSize+dataSize <= size,
+					})
 				}
 			}
 		case 4: // archive encryption: headers unreadable from here on
