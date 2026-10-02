@@ -1386,20 +1386,29 @@ Change propagation is the core loop:
   fall silent over a performer nothing has read; with no seed (the chip)
   it is popularity alone, so the first song leans to what the owner liked
   and played.
-  **Whose a track is** is one rule (`performerOf`): the performer its own
-  tag names where the library knows them by that name (credited with a
-  release of their own — the artists view's word), else the performer its
-  release is credited to, else the tag. The tag first because a
-  compilation is credited to nobody, and because a known guest on a split
-  is the guest's; the credit next because a tag with a guest on it, an
-  untagged file and a name the library has no release by all belong to the
-  release they are on. Guests come off a tag first (`withoutGuests`: "feat.",
-  "ft.", "featuring", or a bracket opening on any of them — an undotted
-  "feat" outside a bracket is left, being as likely a band's own name). The
-  station is asked for by the **seed** rather than by a name the page keeps,
-  and the same rule decides membership, so every track a station answers
-  seeds that same station (tested): it cannot drift to a guest, and it
-  follows whatever the listener queues next.
+  **Whose a track is** is one rule (`performerOf`), and **the track's own
+  tag decides whenever it names anyone**, a guest's credit taken off first
+  (`withoutGuests`: "feat.", "ft.", "featuring", or a bracket opening on any
+  of them — an undotted "feat" outside a bracket is left, being as likely a
+  band's own name). The release's credit names a track only where the tag
+  names nobody, or where the tag names the release's own performer first
+  and others with them (`leadsWith`: "A, B", "A/B", "A;B", and "AB" — the
+  tag reader joins the several names of one frame with nothing between them
+  — wanting a separator or a capital after the name, so that a band whose
+  name merely runs on from theirs is not them). It used to give way to the
+  credit wherever the library had no release by the name the tag gave,
+  taking such a name for a stray spelling of the release's own performer,
+  and **that put another band on artist radio**: reported on a split, which
+  is credited by majority to the band holding more of its tracks, the other
+  band having nothing else in the library. Measured over every station: 95
+  tracks in 48 pairs were somebody else's — split partners and the bands on
+  tribute records — against one pair that really was a spelling, a letter
+  typed two ways on two tracks, which is the cheaper thing to lose; the 15
+  collaborations on a performer's own release stay theirs through
+  `leadsWith`. The station is asked for by the **seed** rather than by a
+  name the page keeps, and the same rule decides membership, so every track
+  a station answers seeds that same station (tested): it cannot drift to a
+  guest, and it follows whatever the listener queues next.
   **The draw is undamped** (`pickRadio`'s `damp` of 1): the pool is one
   performer by design, and damping the tracks that name them alone while
   sparing one that names a guest besides would favour the guest's.

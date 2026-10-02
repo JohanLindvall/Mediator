@@ -9,11 +9,16 @@ import (
 )
 
 // A catalogue holding every way a track can be somebody's: their own
-// release, with a guest credited in one tag and a name the library has no
-// release by in another; a live record repeating a song; a compilation
-// credited to nobody, one of whose tracks has a guest; a split credited to them by majority, holding a track
-// by another performer the library knows; that other performer's own
-// release; and a file nobody tagged under nobody's directory.
+// release, with a guest credited in one tag and, in another, a band the
+// library has no release by — the shape of a split partner, which is what
+// got onto another band's artist radio; a release of collaborations led by
+// them, one of them in the shape the tag reader hands over two names in,
+// joined with nothing between, beside a band whose name merely runs on from
+// theirs; a live record repeating a song; a compilation credited to nobody,
+// one of whose tracks has a guest; a split credited to them by majority,
+// holding a track by another performer the library knows; that other
+// performer's own release; and a file nobody tagged under nobody's
+// directory.
 func libForStation(t *testing.T) *Library {
 	t.Helper()
 	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -28,6 +33,12 @@ func libForStation(t *testing.T) *Library {
 	add("/library/Gorse Beacon/Signal Fires/03.mp3", "Gorse Beacon", "Signal Fires", "Harbour Wall")
 	add("/library/Gorse Beacon/Signal Fires/04.mp3", "Gorse Beacon feat. Sixth Quay", "Signal Fires", "Two Lamps")
 	add("/library/Gorse Beacon/Signal Fires/05.mp3", "Sixth Quay", "Signal Fires", "Guest Turn")
+	add("/library/Gorse Beacon/Joint Works/01.mp3", "Gorse Beacon", "Joint Works", "Salt Road")
+	add("/library/Gorse Beacon/Joint Works/02.mp3", "Gorse Beacon", "Joint Works", "Iron Bell")
+	add("/library/Gorse Beacon/Joint Works/03.mp3", "Gorse Beacon", "Joint Works", "Low Bridge")
+	add("/library/Gorse Beacon/Joint Works/04.mp3", "Gorse Beacon, Tern Signal", "Joint Works", "Joint Venture")
+	add("/library/Gorse Beacon/Joint Works/05.mp3", "Gorse BeaconSixth Quay", "Joint Works", "Glued Credit")
+	add("/library/Gorse Beacon/Joint Works/06.mp3", "Gorse Beaconry", "Joint Works", "Other Shore")
 	add("/library/Gorse Beacon/Live Record/01.mp3", "Gorse Beacon", "Live Record", "First Breath")
 	add("/library/Gorse Beacon/Live Record/02.mp3", "Gorse Beacon", "Live Record", "Low Tide (Live)")
 	add("/library/comp/Winter Sampler/01.mp3", "Gorse Beacon", "Winter Sampler", "Night Ferry")
@@ -62,7 +73,8 @@ func TestAStationIsOnePerformersTracks(t *testing.T) {
 	if name != "Gorse Beacon" {
 		t.Errorf("station named %q, want the performer as the library spells them", name)
 	}
-	want := []string{"First Breath", "Low Tide", "Harbour Wall", "Two Lamps", "Guest Turn",
+	want := []string{"First Breath", "Low Tide", "Harbour Wall", "Two Lamps",
+		"Salt Road", "Iron Bell", "Low Bridge", "Joint Venture", "Glued Credit",
 		"Low Tide (Live)", "Night Ferry", "Shared Night", "Pier End", "Pier Light"}
 	have := titles(got)
 	slices.Sort(have)
@@ -78,8 +90,10 @@ func TestAStationIsOnePerformersTracks(t *testing.T) {
 	}
 	// And the tracks it leaves out are somebody else's by the same rule.
 	for path, who := range map[string]string{
-		"/library/splits/Split Seven/03.mp3":         "Tern Signal", // a known name on another's split
-		"/library/comp/Winter Sampler/03.mp3":        "Sixth Quay",  // nobody's compilation, a name with no release
+		"/library/splits/Split Seven/03.mp3":         "Tern Signal",    // a known name on another's split
+		"/library/Gorse Beacon/Signal Fires/05.mp3":  "Sixth Quay",     // a name with no release, on theirs
+		"/library/Gorse Beacon/Joint Works/06.mp3":   "Gorse Beaconry", // a name running on from theirs
+		"/library/comp/Winter Sampler/03.mp3":        "Sixth Quay",     // nobody's compilation, a name with no release
 		"/library/Tern Signal/Harbour Lights/01.mp3": "Tern Signal",
 	} {
 		if seedName, _ := l.Station("", idOf(path), 0, PathFilter{}); seedName != who {
@@ -137,9 +151,10 @@ func TestAStationRunsNearestFirst(t *testing.T) {
 			last = d
 		}
 	}
-	// Ten recordings of theirs, less the seed's, whose live copy goes with it.
-	if len(got) != 9 {
-		t.Errorf("%d tracks, want the nine others: %q", len(got), titles(got))
+	// Fourteen recordings of theirs, less the seed's, whose live copy goes
+	// with it.
+	if len(got) != 13 {
+		t.Errorf("%d tracks, want the thirteen others: %q", len(got), titles(got))
 	}
 }
 
@@ -164,9 +179,10 @@ func TestAStationKeepsToWhatTheCallerMaySee(t *testing.T) {
 			t.Errorf("a confined station handed out %q from %q", it.Title, it.Album)
 		}
 	}
-	// Seven files under it, one of them a second copy of a recording.
-	if len(got) != 6 {
-		t.Errorf("%d tracks, want the six recordings under the allowed directory: %q", len(got), titles(got))
+	// Eleven files of theirs under it, one of them a second copy of a
+	// recording.
+	if len(got) != 10 {
+		t.Errorf("%d tracks, want the ten recordings under the allowed directory: %q", len(got), titles(got))
 	}
 }
 

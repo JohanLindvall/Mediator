@@ -28,6 +28,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // guests is where a credit to a guest begins in an artist tag: "feat.",
@@ -46,29 +48,51 @@ func withoutGuests(artist string) string {
 }
 
 // performerOf is whose a track is, for artist radio: the performer its own
-// tag names, where the library knows them by that name; else the performer
-// its release is credited to; else what the tag says.
+// tag names, with any guest taken off — and the performer its release is
+// credited to only where the tag names nobody, or where it names that
+// performer first and others with them (leadsWith).
 //
-// The tag first, because a compilation is credited to nobody and its tracks
-// are still each somebody's — and because a guest the library knows by name
-// is that guest's even on another performer's release, a split being two
-// performers' music. The credit next, because a tag naming the performer
-// with a guest, or naming somebody the library has no release by, or naming
-// nobody at all, belongs to the release it is on. Known means credited with
-// a release of their own: the artists view's word for a performer, spelled
-// as it spells them. known is keyed by the lower-cased name.
+// **The tag decides whenever it names anyone.** It used to give way to the
+// release's credit wherever the library had no release by the name it
+// gave, on the reasoning that such a name was a stray spelling of the
+// release's own performer. Measured over every station in the library that
+// reasoning held for one pair in forty-eight: the rest were split partners
+// and the bands on tribute records — a split being credited by majority to
+// whichever band holds more of its tracks, and the band holding fewer being,
+// often enough, a band the library has nothing else by — 95 tracks in all,
+// each played on another band's artist radio, which is the one thing it
+// promises not to do. The one variant it caught was a letter typed two ways
+// (two tracks), which is the cheaper thing to lose. The credit still names an
+// untagged file, a release's own performer being the only answer there is.
+//
+// Known is the artists view's word for a performer, used here only to spell
+// the name as it spells them; keyed by the lower-cased name.
 func performerOf(tag, credit string, known map[string]string) string {
 	own := withoutGuests(tag)
-	if name, ok := known[strings.ToLower(own)]; ok && own != "" {
+	who := own
+	if own == "" || leadsWith(own, credit) {
+		who = credit
+	}
+	if name, ok := known[strings.ToLower(who)]; ok {
 		return name
 	}
-	if credit != "" {
-		if name, ok := known[strings.ToLower(credit)]; ok {
-			return name
-		}
-		return credit
+	return who
+}
+
+// leadsWith says whether a tag names the release's own performer first and
+// others with them: "A, B", "A/B", "A;B", "A & B" — and "AB", which is how
+// the tag reader hands over a frame holding two names, joined with nothing
+// between them. What follows the performer's name has to be the start of
+// something else, a separator or a capital, or a band whose name merely runs
+// on from theirs ("Abcd" after "Abc") would be counted as them. Measured: 15
+// tracks across the library, each a collaboration on the performer's own
+// release, and every one of them theirs.
+func leadsWith(tag, credit string) bool {
+	if credit == "" || len(tag) <= len(credit) || !strings.EqualFold(tag[:len(credit)], credit) {
+		return false
 	}
-	return own
+	next, _ := utf8.DecodeRuneInString(tag[len(credit):])
+	return !unicode.IsLower(next)
 }
 
 // Station answers a performer's station: every track of theirs the caller

@@ -558,10 +558,11 @@ Go binary with the TypeScript frontend embedded.
     14,938 songs — so each song comes once, however many copies and takes of
     it there are, and when every one of them has been queued the station
     says so and stops rather than play one again. Started from the bar it is
-    the playing track's performer — their own name in the tag, where the
-    library knows them by it, or else the performer the release is credited
-    to, so a guest credit or an untagged file is still theirs — and it
-    follows whatever is queued next; started from a performer's page it
+    the playing track's performer — the name in its own tag, with any
+    "feat." credit taken off, or for a file with no artist tag the
+    performer its release is credited to; a split partner's track is the
+    partner's, not the band the split is credited to — and it follows
+    whatever is queued next; started from a performer's page it
     opens on one of their songs, leaning to what you liked and played.
     Radio and artist radio are one setting: turning one on turns the other
     off.
