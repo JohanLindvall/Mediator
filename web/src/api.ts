@@ -196,7 +196,7 @@ export function listGenres(
  * tracks; `truncated` says the view holds more than a queue takes.
  */
 export function tracksOf(
-  of: QueueSource | 'similar',
+  of: QueueSource | 'similar' | 'station',
   q: ListFilters & GroupedQuery & { id?: string; n?: number },
 ): Promise<TracksResponse> {
   let p: URLSearchParams;
@@ -207,6 +207,12 @@ export function tracksOf(
     p = new URLSearchParams();
     if (q.id) p.set('id', q.id);
     if (q.n) p.set('n', String(q.n));
+  } else if (of === 'station') {
+    // Artist radio: one performer's tracks, nearest the seed first — the
+    // seed's performer, or the one named — and `artist` says whose.
+    p = new URLSearchParams();
+    if (q.id) p.set('id', q.id);
+    if (q.artist) p.set('artist', q.artist);
   } else {
     p = groupedQuery(of === 'audiobooks' ? { ...q, audiobooks: true } : q);
   }

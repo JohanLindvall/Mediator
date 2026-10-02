@@ -130,8 +130,8 @@ Go binary with the TypeScript frontend embedded.
 - **Music** — mp3/flac/m4a/ogg files are tagged (ID3 & friends, read in the
   background) and grouped into **albums** by directory; `.m3u`/`.m3u8`
   playlists become albums too. A persistent bottom player provides
-  queue/shuffle/repeat, a queue panel, and OS media-key integration, a thumb up and a thumb down for the playing track, radio, the spectrum
-  and a link to the track — the last three under a "⋯" menu on a phone, so
+  queue/shuffle/repeat, a queue panel, and OS media-key integration, a thumb up and a thumb down for the playing track, radio and artist radio, the spectrum
+  and a link to the track — the last four under a "⋯" menu on a phone, so
   the title keeps its room —
   play/pause, stop (which pauses where it is, and resumes when pressed
   again), previous and next. An album
@@ -543,7 +543,28 @@ Go binary with the TypeScript frontend embedded.
     comes out with half a dozen names in it. Every queue is folded that way, not
     only radio's: queueing a search or a discography holds one place for each
     recording, keeping the first, while a performance tagged as its own
-    ("… [Live]") stays.
+    ("… [Live]") stays. Radio goes one step further and holds one place for
+    each *song*: a live take, a demo, a remaster, an instrumental or a cover
+    of a song already queued is that song again, and so is the same title
+    spelt with or without its accents, apostrophes and full stops. A track called
+    "Untitled" or "Track 3" names no song and is folded with nothing — a
+    performer's untitled pieces are as many songs as there are of them.
+  - **Artist radio.** The button beside radio, and *Artist radio* on a
+    performer's page, keep the queue going with one performer's songs and
+    nobody else's: the next ones are drawn, nearest likeliest, from those
+    of theirs that sound most like the one playing, and nothing the analysis
+    has not reached is left out. A performer's catalogue is where the same
+    song turns up most — measured on this library, 28,158 tagged tracks are
+    14,938 songs — so each song comes once, however many copies and takes of
+    it there are, and when every one of them has been queued the station
+    says so and stops rather than play one again. Started from the bar it is
+    the playing track's performer — their own name in the tag, where the
+    library knows them by it, or else the performer the release is credited
+    to, so a guest credit or an untagged file is still theirs — and it
+    follows whatever is queued next; started from a performer's page it
+    opens on one of their songs, leaning to what you liked and played.
+    Radio and artist radio are one setting: turning one on turns the other
+    off.
   - **Similar releases and performers.** A release's sheet offers *Similar*,
     the releases that sound most like it, each saying how alike; a performer,
     once drilled into, offers *Similar artists*. Nearest first, a chip back.
@@ -1294,7 +1315,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead. Each carries `path` (where the release is kept, as the listing names a file) and `formats` (what its tracks are, commonest first) |
 | `GET /api/artists?q&sort&order`           | Artists, grouped from album tags         |
 | `GET /api/genres?q&sort&order`            | Genres, grouped from album tags          |
-| `GET /api/tracks?of&…`                    | The tracks behind a view (`of` = albums, artists, genres or items, with that view's own parameters), in the order a queue plays them; `of=similar&id=…&n=` the tracks that sound most like one (`n` at most 200) |
+| `GET /api/tracks?of&…`                    | The tracks behind a view (`of` = albums, artists, genres or items, with that view's own parameters), in the order a queue plays them; `of=similar&id=…&n=` the tracks that sound most like one (`n` at most 200); `of=station&id=…` or `of=station&artist=…` one performer's tracks for artist radio — the seed's performer or the one named, nearest the seed first (by popularity without one), the unanalysed after, `artist` saying whose |
 | `GET /api/albums?near={id}`               | The releases that sound like one, nearest first (`order=asc` turns it round), each with `similarity`; `audiobooks=1` lists the audiobook shelf instead of the records |
 | `GET /api/artists?near={name}`            | The performers that sound like one, nearest first (`order=asc` turns it round) |
 | `GET /api/series?q&sort&order`            | Television, read out of the file and directory names; each show carries its seasons. `q` finds a show by its name or by any episode in it; one found through some of its seasons carries `matched`, those seasons |

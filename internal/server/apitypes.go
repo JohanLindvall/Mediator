@@ -101,9 +101,12 @@ type AlbumDetailResponse struct {
 
 // TracksResponse is the tracks behind a view, in the order a queue plays
 // them (handleTracks). Truncated says the view holds more than a queue takes.
+// Artist is the performer a station is of (of=station), as the library
+// spells them, and empty where the seed is nobody's.
 type TracksResponse struct {
 	Tracks    []library.Item `json:"tracks"`
 	Truncated bool           `json:"truncated,omitempty"`
+	Artist    string         `json:"artist,omitempty"`
 }
 
 // SubtitlesResponse is the body of GET /api/subs/{id}: the external

@@ -1185,6 +1185,10 @@ function renderChips(): void {
       html += `<button class="chip" data-similar-artist title="Performers that sound like ${esc(state.artist)}">
         ${icons.radio}<span>Similar artists</span>
       </button>`;
+      // And their radio: their songs and nobody else's, each once (audio.ts).
+      html += `<button class="chip" data-artist-radio title="Artist radio: ${esc(state.artist)}'s songs and nobody else's, each song once">
+        ${icons.artistRadio}<span>Artist radio</span>
+      </button>`;
     }
     if (state.near) {
       html += `<button class="chip active" data-clear-near title="Back to the list">
@@ -1247,6 +1251,10 @@ chipsNav.addEventListener('click', (ev) => {
   }
   if (chip.hasAttribute('data-similar-artist')) {
     showNear('artists', state.artist, state.artist);
+    return;
+  }
+  if (chip.hasAttribute('data-artist-radio')) {
+    void audioPlayer.startStation(state.artist);
     return;
   }
   if (chip.hasAttribute('data-clear-near')) {

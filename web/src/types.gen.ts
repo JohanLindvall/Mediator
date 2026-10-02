@@ -297,6 +297,7 @@ export interface AlbumDetailResponse {
 export interface TracksResponse {
   tracks: Item[];
   truncated?: boolean;
+  artist?: string;
 }
 
 export interface SubtitlesResponse {

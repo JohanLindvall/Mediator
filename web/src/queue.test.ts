@@ -14,12 +14,14 @@ import {
   appendToOrder,
   freshForRadio,
   freshFrom,
+  namesNothing,
   nextPosition,
   pickRadio,
   placeFirst,
   recentArtists,
-  recordingKey,
   resumable,
+  songKey,
+  songTitle,
   runsHours,
   shuffleInPlace,
   windowRows,
@@ -92,20 +94,66 @@ test('resumable: loaded, not failed, not played out, and not parked on the final
   assert.ok(resumable({ ...ok, ended: true, atLast: true, repeat: true }), 'unless repeat wraps it');
 });
 
-test('one recording is one key, whatever file it is in', () => {
-  // The same song on the album, on a compilation and on a live record.
+test('one song is one key, whatever file and whatever take it is in', () => {
+  const key = (artist: string, title: string) => songKey({ id: '', artist, title });
+  const song = key('Gorse Beacon', 'Signal Fires');
+  // The same song on the album, on a compilation and on a live record —
+  // tagged alike, or as the take it is.
+  for (const title of [
+    'signal fires',
+    'Signal Fires (Live)',
+    'Signal Fires (Live at the Harbour, 1999)',
+    'Signal Fires [Demo 1994]',
+    'Signal Fires - 2011 Remaster',
+    'Signal Fires (Remastered 2017)',
+    'Signal Fires (Instrumental)',
+    'Signal Fires (Tern Signal cover)',
+    'Signal Fires (Bonus Track)',
+    'Signal Fires (Re-Recorded)',
+    'Signal Fires (Demo Version - Remaster 2017)',
+    'Signal Fires (1994)',
+    'Signal Fires.',
+    'Signal Fires (feat. Sixth Quay)',
+  ]) {
+    assert.equal(key('Gorse Beacon', title), song, title);
+  }
+  // Accents and punctuation are spelling, not a different song.
+  assert.equal(key('Gorse Beacon', 'Fjärdljus'), key('Gorse Beacon', 'Fjardljus'));
+  assert.equal(key('Gorse Beacon', 'Vs. The Tide'), key('Gorse Beacon', 'Vs The Tide'));
+  assert.equal(key('Gorse Beacon', "Harbour's Edge (Demo Version)"), key('Gorse Beacon', 'Harbours Edge'));
+  assert.equal(key('Gorse Beacon', 'Don’t Wake the Tide'), key('Gorse Beacon', "Don't Wake the Tide"));
+  assert.equal(key('Gorse Beacon', 'Salt & Iron'), key('Gorse Beacon', 'Salt and Iron'));
+  // A guest is still their song.
+  assert.equal(key('Gorse Beacon feat. Sixth Quay', 'Signal Fires'), song);
+  // Somebody else's song of the same name is another song.
+  assert.notEqual(key('Tern Signal', 'Signal Fires'), song);
+  // And a bracket that names another piece of music keeps it apart.
+  for (const title of ['Signal Fires (Part II)', 'Signal Fires (Reprise)', 'Signal Fires (Intro)', 'Signal Fires - Demonic Shore']) {
+    assert.notEqual(key('Gorse Beacon', title), song, title);
+  }
+});
+
+test('a title that names nothing is no song', () => {
+  for (const title of ['Untitled', '[untitled]', '(Untitled Track)', 'Track 3', 'track01', 'Unknown', 'untitled #2']) {
+    assert.ok(namesNothing(title), title);
+    assert.equal(songKey({ id: '', artist: 'Gorse Beacon', title }), '', title);
+  }
+  for (const title of ['Untitled Harbour Air', 'Tracks in Snow', 'The Unknown Shore']) {
+    assert.ok(!namesNothing(title), title);
+  }
+  // Nothing at all has no key, and neither has a name that is only a number:
+  // two different songs called "01" are not one song.
+  assert.equal(songKey({ id: '' }), '');
+  assert.equal(songKey({ id: '', name: '01.mp3' }), '');
+  assert.equal(songTitle('(Live)'), '');
+});
+
+test('a file nothing tagged is the song its name says', () => {
+  // The title the row is drawn with: no number, no extension, no performer.
   assert.equal(
-    recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' }),
-    recordingKey({ artist: 'gorse beacon', title: 'signal fires' }),
+    songKey({ id: '', name: 'GORSE BEACON - 03.Signal Fires_320.mp3', performer: 'Gorse Beacon' }),
+    songKey({ id: '', artist: 'Gorse Beacon', title: 'Signal Fires' }),
   );
-  assert.notEqual(
-    recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' }),
-    recordingKey({ artist: 'Tern Signal', title: 'Signal Fires' }),
-  );
-  // Nothing tagged has no key: the file name is not a title, and two
-  // different songs called "01" are not one recording.
-  assert.equal(recordingKey({}), '');
-  assert.equal(recordingKey({ artist: 'Gorse Beacon' }), '');
 });
 
 test('radio draws the nearest likeliest, and never the same track twice', () => {
@@ -144,10 +192,12 @@ test('radio never brings back a song the queue already holds', () => {
   const live = { id: '1', artist: 'Gorse Beacon', title: 'Signal Fires' };
   const queued = [live, { id: '2', artist: 'Tern Signal', title: 'Low Water' }];
   const batch = [
-    // The same recording, in three other files: an album, a bootleg, a live
-    // record. Different ids, one song.
+    // The same song, in four other files: an album, a bootleg, a live record
+    // and a demo. Different ids, one song.
     { id: '3', artist: 'Gorse Beacon', title: 'Signal Fires' },
     { id: '4', artist: 'gorse beacon', title: 'SIGNAL FIRES' },
+    { id: '6', artist: 'Gorse Beacon', title: 'Signal Fires (Live at the Pier)' },
+    { id: '7', artist: 'Gorse Beacon', title: 'Signal Fires [Demo]' },
     { id: '1', artist: 'Gorse Beacon', title: 'Signal Fires' },
     { id: '5', artist: 'Gorse Beacon', title: 'First Breath' },
   ];
@@ -157,17 +207,40 @@ test('radio never brings back a song the queue already holds', () => {
   );
 });
 
-test('radio keeps one copy of a song it has not heard, and every untagged file', () => {
+test('radio keeps one copy of a song it has not heard, and every file that names no song', () => {
   const batch = [
     { id: '1', artist: 'Gorse Beacon', title: 'First Breath' },
-    { id: '2', artist: 'Gorse Beacon', title: 'First Breath' },
+    { id: '2', artist: 'Gorse Beacon', title: 'First Breath (Remastered)' },
     { id: '3' },
     { id: '4' },
+    { id: '5', artist: 'Gorse Beacon', title: '[untitled]' },
+    { id: '6', artist: 'Gorse Beacon', title: '[untitled]' },
   ];
   assert.deepEqual(
     freshForRadio(batch, []).map((t) => t.id),
-    ['1', '3', '4'],
+    ['1', '3', '4', '5', '6'],
   );
+});
+
+test('artist radio draws undamped: a guest credit is no reason to be drawn', () => {
+  // One performer's catalogue, the farthest track crediting a guest besides.
+  // Damped, every track that names them alone falls by a third per draw and
+  // the guest's does not, so it is drawn far more than its place says.
+  const pool = [
+    ...Array.from({ length: 9 }, (_, i) => ({ id: `${i}`, artist: 'Gorse Beacon' })),
+    { id: 'guest', artist: 'Gorse Beacon feat. Sixth Quay' },
+  ];
+  const drawn = (damp?: number) => {
+    const rand = seeded(11);
+    let n = 0;
+    for (let run = 0; run < 400; run++) {
+      if (pickRadio(pool, 5, rand, [], damp).some((t) => t.id === 'guest')) n++;
+    }
+    return n;
+  };
+  const undamped = drawn(1);
+  const damped = drawn();
+  assert.ok(undamped * 2 < damped, `undamped ${undamped}, damped ${damped} in 400`);
 });
 
 /** A little deterministic generator, so a failure can be read back. */
@@ -241,7 +314,7 @@ test('recentArtists reads backwards through the order, not the queue tail', () =
 
 test('freshFrom reads the sets and does not add the whole pool to them', () => {
   const ids = new Set(['a']);
-  const heard = new Set([recordingKey({ artist: 'Gorse Beacon', title: 'Signal Fires' })]);
+  const heard = new Set([songKey({ id: '', artist: 'Gorse Beacon', title: 'Signal Fires' })]);
   const pool = [
     { id: 'a', artist: 'x', title: 'y' }, // already queued by id
     { id: 'b', artist: 'Gorse Beacon', title: 'Signal Fires' }, // queued recording

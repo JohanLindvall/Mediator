@@ -3,6 +3,7 @@
  * tested: the order is a list of queue indices, and what "after everything
  * already queued" means is a question about that list and nothing else.
  */
+import { trackTitle } from './format.ts';
 
 /** Fisher–Yates, in place; `rand` is injectable so a test can pin the result. */
 export function shuffleInPlace(arr: number[], rand: () => number = Math.random): void {
@@ -115,18 +116,128 @@ export function resumable(s: {
 }
 
 /**
- * What makes two tracks the same recording: the performer and the title, as
- * the tags spell them. The server folds the copies of one recording out of a
- * resemblance answer; this is the same rule applied to what is already in
- * the queue, since a copy one batch left there would otherwise be matched by
- * a different copy in the next.
- *
- * An untagged file has no key and is never folded — its title is unknown,
- * and the file name is not one.
+ * What a ripper or a release writes where a track has no name: "Untitled",
+ * "[untitled]", "Track 3", "track01". Such a title names no song, so it
+ * makes no recording and no song of one — a performer's untitled pieces are
+ * as many different songs as there are of them. The server asks the same
+ * question with the same pattern (placeholderTitle in similar.go).
  */
-export function recordingKey(t: { artist?: string; title?: string }): string {
-  if (!t.title) return '';
-  return `${(t.artist ?? '').toLowerCase()}\u0000${t.title.toLowerCase()}`;
+const PLACEHOLDER = /^[[({]?\s*(?:untitled(?: track)?|no title|unknown(?: title)?|unnamed|track)\s*[#.\-_]?\s*\d*\s*[\])}]?$/i;
+
+export function namesNothing(title: string): boolean {
+  return title.length <= 32 && PLACEHOLDER.test(title.trim());
+}
+
+/**
+ * The words that say a bracket, or a tail after a dash, names a version of a
+ * song rather than a song: "(Live at …)", "[Demo 1994]", "- 2011 Remaster",
+ * "(… cover)", "(feat. …)". Read off this library's own titles — every
+ * word inside a bracket or after a dash, counted — rather than guessed, and
+ * kept to those: "(Part II)", "(Reprise)", "(Intro)" are different pieces
+ * of music and say so, and a word that merely *begins* like one of these is
+ * not one ("Demonic" is no demo). The few prefixes are compounds that only
+ * ever mean one thing.
+ */
+const VERSION_WORDS = new Set(
+  `live demo demos remaster remastered remastering remix remixed mix mixes edit edited version versions
+  ver feat featuring ft bonus acoustic akustisk instrumental mono stereo single rerecorded rerecording
+  rerecord take takes alternate alternative alt rehearsal rehearsals bootleg unplugged session sessions
+  cover extended explicit clean outtake outtakes unreleased early rough unmixed acapella cappella
+  karaoke original orchestral radio preproduction vinyl master mastered recording recorded rec studio
+  deluxe anniversary expanded edition commentary raw rare rarity ep mcd lp cd split`.split(/\s+/),
+);
+const VERSION_PREFIXES = ['remaster', 'remix', 'rerecord', 'preprod'];
+
+/**
+ * Lower case, with the accents off and the apostrophes out: "Fjärdljus" and
+ * "Fjardljus" are one title, and so are "Harbour's Edge" and "Harbours
+ * Edge" — an apostrophe joins a word, and read as a space it made a second
+ * song out of a possessive spelt two ways, which a real station queued twice.
+ */
+function folded(s: string): string {
+  return s
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .replace(/['’‘`´]/g, '')
+    .toLowerCase();
+}
+
+/** Letters and digits, one space between runs: what a title is made of. */
+function wordsOf(s: string): string[] {
+  return s.match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/** Whether a bracket's contents, or a dashed tail, name a version. */
+function namesAVersion(text: string): boolean {
+  const t = folded(text).replace(/\./g, ' ');
+  // A year alone, or a span of them, dates a take: "(1994)", "(1991-92)".
+  if (/^\s*\d{4}(\s*[-/]\s*\d{2,4})?\s*$/.test(t)) return true;
+  // Hyphens both ways: "re-recorded" is one word, "porch-session" two.
+  const words = [...wordsOf(t.replace(/-/g, ' ')), ...wordsOf(t.replace(/-/g, ''))];
+  if (words.length === 0) return true;
+  return words.some((w) => VERSION_WORDS.has(w) || VERSION_PREFIXES.some((p) => w.startsWith(p)));
+}
+
+const BRACKETED = /\s*[([{]([^()[\]{}]*)[)\]}]/g;
+const DASHED = /\s+[-–—]\s+([^-–—]+)$/;
+
+/**
+ * A title as a song: what names a version taken off, the accents and the
+ * punctuation folded away — "Low Tide (Live at the Pier)", "Low Tide -
+ * 2011 Remaster" and "Low Tide." are one song. Empty where nothing that
+ * names one is left.
+ */
+export function songTitle(title: string): string {
+  let t = title;
+  for (;;) {
+    const before = t;
+    t = t.replace(BRACKETED, (whole: string, inner: string) => (namesAVersion(inner) ? '' : whole));
+    const tail = DASHED.exec(t);
+    if (tail && namesAVersion(tail[1]!)) t = t.slice(0, tail.index);
+    if (t === before) break;
+  }
+  const song = wordsOf(folded(t).replace(/&/g, ' and ')).join(' ');
+  return /\p{L}/u.test(song) ? song : '';
+}
+
+/**
+ * Where a credit to a guest begins in an artist tag: "feat.", "ft." or
+ * "featuring" after a space, or a bracket opening on any of them. An
+ * undotted "feat" outside a bracket is left, being as likely the end of a
+ * band's own name. The server takes guests off the same way (station.go).
+ */
+const GUESTS = /\s+(?:feat\.|ft\.|featuring\s|[([]\s*(?:feat|ft|featuring)\b)/i;
+
+/**
+ * A song, whichever file and whichever version of it this is: what radio
+ * remembers, so that it never plays one song twice.
+ *
+ * The server folds the copies of one *recording* out of every answer
+ * (RecordingKey: the performer and the title as the tags spell them), and it
+ * keeps a performance that says it is one — "… (Live)" is another title.
+ * That is right for a queue somebody built: a live record queued is meant to
+ * be heard. It is wrong for radio, which chooses on the listener's behalf:
+ * the song back as a live take, a demo or a remaster is the same song again,
+ * and a performer's catalogue is full of them — measured over this library,
+ * 28,158 tagged tracks are 15,820 recordings and 14,938 songs. Radio for one
+ * performer is where that shows. And the fold has to be here as well as
+ * there, applied to what is already queued, since a copy one batch left
+ * there would otherwise be matched by a different copy in the next.
+ *
+ * A file with no title is keyed by the title its name gives it
+ * (`trackTitle`), where the server's key refuses to: a file name is not a
+ * title to fold a queue on, but for radio the worst a wrong fold costs is a
+ * song left for another day, where a missed one is the same song twice. A
+ * name that leaves no letters ("01") is still no key, nor is a placeholder.
+ */
+export function songKey(t: RadioTrack): string {
+  const title = t.title || (t.name ? trackTitle({ name: t.name, artist: t.artist, performer: t.performer }) : '');
+  if (!title || namesNothing(title)) return '';
+  const song = songTitle(title);
+  if (!song) return '';
+  const who = t.artist || t.performer || '';
+  const at = who.search(GUESTS);
+  return `${wordsOf(folded(at < 0 ? who : who.slice(0, at))).join(' ')}\u0000${song}`;
 }
 
 /**
@@ -168,13 +279,17 @@ function artistKey(t: { artist?: string }): string {
  * `recent` is the performers already in the queue, which is what keeps one
  * band out of batch after batch: their tracks start damped rather than
  * being damped only once this batch has drawn them. A track that names
- * nobody is never damped — the unnamed are not one performer.
+ * nobody is never damped — the unnamed are not one performer. Artist radio
+ * passes a `damp` of 1: its pool is one performer by design, and damping
+ * the tracks that name them while sparing one that names a guest besides
+ * would favour the guest's.
  */
 export function pickRadio<T extends { artist?: string }>(
   pool: T[],
   want: number,
   rand: () => number = Math.random,
   recent: readonly string[] = [],
+  damp: number = ARTIST_DAMP,
 ): T[] {
   const left = pool.slice();
   const out: T[] = [];
@@ -187,7 +302,7 @@ export function pickRadio<T extends { artist?: string }>(
     const n = left.length;
     let total = 0;
     const weights = left.map((t, i) => {
-      const w = (n - i) * ARTIST_DAMP ** (drawn.get(artistKey(t)) ?? 0);
+      const w = (n - i) * damp ** (drawn.get(artistKey(t)) ?? 0);
       total += w;
       return w;
     });
@@ -211,18 +326,23 @@ export interface RadioTrack {
   id: string;
   artist?: string;
   title?: string;
+  /** The file's name, which titles a track nothing tagged (songKey). */
+  name?: string;
+  /** Who its release is by, where the file names nobody (Item.performer). */
+  performer?: string;
 }
 
 /**
  * What of a batch of similar tracks is worth queueing: not what is queued
- * already, by file or by recording.
+ * already, by file or by song (songKey).
  *
  * The second half of that is the one that matters. Radio asks again every
  * few tracks, and each answer is drawn from the same neighbourhood as the
  * last — so the song that has just played comes back at once, in a different
  * file. Measured on a real library: one song is there nine times over, on
  * three live records, four bootlegs and two albums, all tagged alike, and
- * four of them arrived in one batch.
+ * four of them arrived in one batch. And in another version: the live take
+ * of a song is its nearest neighbour after its own copies.
  *
  * The queue is the whole memory, played part included, so this holds for
  * every later batch and not only the next.
@@ -232,7 +352,7 @@ export function freshForRadio<T extends RadioTrack>(pool: T[], queued: RadioTrac
   const heard = new Set<string>();
   for (const t of queued) {
     ids.add(t.id);
-    const key = recordingKey(t);
+    const key = songKey(t);
     if (key !== '') heard.add(key);
   }
   // Within the batch too (freshFrom keeps adding as it goes): the server
@@ -276,7 +396,7 @@ export function recentArtists(
 
 /**
  * The fold of `freshForRadio` when the caller already holds the queue's ids
- * and recording keys, so a top-up need not walk a queue that may be the
+ * and song keys, so a top-up need not walk a queue that may be the
  * whole library. The two sets are **read, not written**: only the tracks a
  * top-up actually keeps go into the queue, and the caller adds those as it
  * appends them — folding the whole pool in here would bar every track it
@@ -292,7 +412,7 @@ export function freshFrom<T extends RadioTrack>(
   const batchKeys = new Set<string>();
   return pool.filter((t) => {
     if (ids.has(t.id) || batchIds.has(t.id)) return false;
-    const key = recordingKey(t);
+    const key = songKey(t);
     if (key !== '' && (heard.has(key) || batchKeys.has(key))) return false;
     batchIds.add(t.id);
     if (key !== '') batchKeys.add(key);

@@ -22,6 +22,7 @@ package library
 import (
 	"cmp"
 	"math"
+	"regexp"
 	"slices"
 	"strings"
 )
@@ -178,12 +179,28 @@ func spokenWith(byRelease map[string]bool, sv *scaled) func(id string) bool {
 //
 // An untagged file has no key and is never folded: its title is unknown, and
 // taking the file name for one would make two different songs called "01"
-// the same recording.
+// the same recording. Nor has a title that names nothing (namesNothing).
 func RecordingKey(artist, title string) string {
-	if title == "" {
+	if title == "" || namesNothing(title) {
 		return ""
 	}
 	return strings.ToLower(artist) + "\x00" + strings.ToLower(title)
+}
+
+// placeholderTitle is what a ripper or a release writes where a track has no
+// name: "Untitled", "[untitled]", "Track 3", "track01". Kept in step with
+// PLACEHOLDER in queue.ts, which asks the same question of the queue.
+var placeholderTitle = regexp.MustCompile(`(?i)^[\[({]?\s*(?:untitled(?: track)?|no title|unknown(?: title)?|unnamed|track)\s*[#.\-_]?\s*\d*\s*[\])}]?$`)
+
+// namesNothing says whether a title is a placeholder rather than a name. One
+// performer's untitled pieces are as many different songs as there are of
+// them, so folding them as one recording is wrong in a way nobody sees: it
+// is a queue quietly short. Measured here, 307 tracks under fifteen pairs of
+// performer and placeholder — one release of a hundred and twenty-five
+// tracks all called "[untitled]" among them — and a queue of that
+// performer's catalogue kept one of the hundred and twenty-five.
+func namesNothing(title string) bool {
+	return len(title) <= 32 && placeholderTitle.MatchString(strings.TrimSpace(title))
 }
 
 func recordingKey(it *Item) string { return RecordingKey(it.Artist, it.Title) }

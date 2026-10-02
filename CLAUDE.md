@@ -1171,7 +1171,15 @@ Change propagation is the core loop:
   the **seed itself** is dropped outright, being the nearest thing of all to
   it and the least worth being told about. An untagged file has no key and
   is never folded: its title is unknown, and taking the file name for one
-  would make two different songs called "01" the same recording.
+  would make two different songs called "01" the same recording. **Nor has
+  a title that names nothing** (`namesNothing`, the same pattern as
+  `PLACEHOLDER` in `queue.ts`): "Untitled", "[untitled]", "Track 3" are what
+  a ripper writes where it has nothing to say, and one performer's untitled
+  pieces are as many songs as there are of them. Measured here, 307 tracks
+  under fifteen pairs of performer and placeholder, one release of a hundred
+  and twenty-five "[untitled]" tracks among them — and a queue of that
+  performer's catalogue kept one of the hundred and twenty-five, which is a
+  fault nobody sees: a queue quietly short.
   **Every queue the server hands out is folded the same way**
   (`FoldRecordings`, applied to every `of=` answer in `handleTracks`).
   Radio was only where it was noticed: a search for a song and "queue all"
@@ -1335,6 +1343,84 @@ Change propagation is the core loop:
   this holds for every later batch and not only the next. The server folds
   the copies within one answer; this is what keeps the next answer from
   bringing another copy of what the last one left behind.
+  **And the memory is of songs, not recordings** (`songKey`, tested). The
+  server's key keeps a performance that says it is one, which is right for
+  a queue somebody built and wrong for radio, which chooses on the
+  listener's behalf: a live take, a demo, a remaster, an instrumental or a
+  cover of a song already queued is that song again. `songTitle` takes off
+  a bracket or a dashed tail holding a word that names a version, and the
+  words were **read off this library's titles** — every word inside a
+  bracket or after a dash, counted — rather than guessed; what it keeps
+  apart is as deliberate as what it folds: "(Part II)", "(Reprise)",
+  "(Intro)" are other pieces of music, and a word that merely begins like
+  one is not one ("Demonic" is no demo — a prefix rule took that tail off a
+  real title until it was cut back to four compounds that only ever mean
+  one thing). Accents, punctuation and "&" are spelling, so a title with its
+  umlaut and the same title typed without, or with and without the full stop
+  of an abbreviation, are one song — both shapes were in the library, under
+  one performer each — an apostrophe is dropped rather than read as a space,
+  and a guest credited in the artist tag is still the performer's.
+  A file with no title is keyed by the title its name gives it
+  (`trackTitle`) where the server refuses to: the worst a wrong fold costs
+  radio is a song left for another day, where a missed one is the same song
+  twice — and a name that leaves no letters ("01") is still no key.
+  Measured over this library: 28,158 tagged tracks are 15,820 recordings and
+  14,938 songs.
+  **Artist radio** (`station.go`, `of=station`; `topUpStation` and
+  `startStation` in `audio.ts`) keeps the queue going with one performer's
+  songs and nobody else's. Radio and artist radio are **one setting**
+  (`RadioMode`, remembered as `media.radio`, where "1" still reads as the
+  radio there was before there were two), since a queue can be kept going
+  only one way; the bar has a button for each, both folding into "⋯" on a
+  phone, and a performer's page has an *Artist radio* chip that starts one
+  — a new queue, as pressing play on a release is.
+  **A station is the performer's whole catalogue**, nearest the seed first,
+  where radio asks for a pool of fifty: fifty of twenty thousand is a field
+  that lasts all evening, and fifty of one band are queued within a few
+  top-ups, after which a pool of the nearest has nothing fresh in it. The
+  bar draws from the head of what is not yet queued (`RADIO_POOL` of it).
+  Measured: 660 performers, a median of eleven tracks, the largest about
+  fifteen hundred — some 650 KB of answer at the very worst, for a top-up
+  every ten songs. The tracks the analysis has not reached are in it too,
+  after the ranked ones and most popular first, since a station must not
+  fall silent over a performer nothing has read; with no seed (the chip)
+  it is popularity alone, so the first song leans to what the owner liked
+  and played.
+  **Whose a track is** is one rule (`performerOf`): the performer its own
+  tag names where the library knows them by that name (credited with a
+  release of their own — the artists view's word), else the performer its
+  release is credited to, else the tag. The tag first because a
+  compilation is credited to nobody, and because a known guest on a split
+  is the guest's; the credit next because a tag with a guest on it, an
+  untagged file and a name the library has no release by all belong to the
+  release they are on. Guests come off a tag first (`withoutGuests`: "feat.",
+  "ft.", "featuring", or a bracket opening on any of them — an undotted
+  "feat" outside a bracket is left, being as likely a band's own name). The
+  station is asked for by the **seed** rather than by a name the page keeps,
+  and the same rule decides membership, so every track a station answers
+  seeds that same station (tested): it cannot drift to a guest, and it
+  follows whatever the listener queues next.
+  **The draw is undamped** (`pickRadio`'s `damp` of 1): the pool is one
+  performer by design, and damping the tracks that name them alone while
+  sparing one that names a guest besides would favour the guest's.
+  **And it ends rather than repeat.** When every song of theirs is queued
+  the bar says so once and stops asking (`stationSpent`), until the queue,
+  the setting or what is queued by hand changes — playing a song again is
+  the one thing it must not do. Measured on one real performer's directory:
+  153 files are 83 recordings, 63 songs by their tags, and 49 by the bar's
+  key — eleven of them held a second time as an untagged rip, which only
+  the name could join to its tagged copy, and three a second time under a
+  possessive spelt with and without its apostrophe, which a browser trial
+  then queued twice until `folded` dropped the apostrophe instead of
+  splitting the word at it. Three whole sessions simulated against it with
+  the bar's own functions queued all 49, none twice, and never left the
+  performer.
+  **What radio asks is generation-guarded** (`radioAsk`): a change of
+  setting or a new queue moves it on and frees the busy flag, so an answer
+  in flight for the last question is not heard — radio's batch landing a
+  moment after artist radio was turned on would be the wrong performers —
+  and the new queue's first top-up is not refused for being busy with the
+  old one's, which it was.
   **The queue has no limit worth the name** (`QUEUE_CAP` and `maxQueue`, a
   million): the whole library goes in and is shuffled there. Two things made
   that true. A spread over a hundred thousand arguments is more than a call
@@ -2639,7 +2725,7 @@ Frontend (`web/src`, no framework, no runtime deps):
   (`queuedAhead`), because a `null` URI was also "asked and refused" and
   every top-up re-sent the request to a set that had said no.
   **Radio's memory is the queue's sets, not the queue.** What is queued, by
-  id and by recording, is kept in two Sets extended as the queue is
+  id and by song (`songKey`), is kept in two Sets extended as the queue is
   (`freshFrom`), where walking a million-entry queue on every top-up was two
   million allocations a song. The performers lately played are read
   *backwards from the position through the order* (`recentArtists`,

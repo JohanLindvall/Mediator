@@ -26,7 +26,7 @@ import {
   freshFrom,
   nextPosition,
   recentArtists,
-  recordingKey,
+  songKey,
   pickRadio,
   placeFirst,
   resumable,
@@ -77,6 +77,19 @@ const RADIO_BATCH = 10;
  * after it filling up with the band the last one just introduced.
  */
 const RADIO_MEMORY = 20;
+
+/**
+ * Which radio is on: the one that keeps the queue going with whatever sounds
+ * like the track playing, the one that keeps it going with the songs of the
+ * track's own performer and nobody else's (artist radio), or neither.
+ */
+type RadioMode = 'off' | 'similar' | 'artist';
+
+/** The radio the listener left on. "1" is the radio there was before there were two. */
+function recallRadio(): RadioMode {
+  const v = recall('media.radio');
+  return v === '1' ? 'similar' : v === 'artist' ? 'artist' : 'off';
+}
 /** A queue panel row's height, pinned in the stylesheet: the window is laid out from it. */
 const Q_ROW = 38;
 /** Rows drawn beyond the visible window on either side, so a scroll never shows blank. */
@@ -219,20 +232,34 @@ export class AudioPlayer {
   /** The sleeve fetched ahead of the boundary, so it is fetched once. */
   private artAhead = '';
   /**
-   * Radio: when on, the queue is kept going with tracks that sound like the
-   * one playing (RADIO_AHEAD). Remembered, since it is a way of listening
+   * Radio: when on, the queue is kept going (RADIO_AHEAD) with tracks that
+   * sound like the one playing — or, as artist radio, with the songs of its
+   * performer and nobody else's. Remembered, since it is a way of listening
    * rather than a choice about one track.
    */
-  private radio = recall('media.radio') === '1';
+  private radio: RadioMode = recallRadio();
   private radioBusy = false;
   /**
-   * What is in the queue, by file id and by recording, so a radio top-up
-   * need not walk the queue — which is the whole library when it has been
-   * shuffled in. Kept in step as the queue is replaced or extended; see
-   * freshFrom.
+   * Which ask the radio is on. A change of radio or a new queue moves it on,
+   * so an answer still in flight for the last one is not heard — artist
+   * radio turned on a moment after radio must not be answered by radio.
+   */
+  private radioAsk = 0;
+  /**
+   * The performer whose station has nothing left that is not queued. Said
+   * once, and not asked again until the queue or the radio changes: the
+   * answer would be the same, and for a large catalogue it is the largest
+   * answer the server gives.
+   */
+  private stationSpent = '';
+  /**
+   * What is in the queue, by file id and by song, so a radio top-up need not
+   * walk the queue — which is the whole library when it has been shuffled
+   * in. Kept in step as the queue is replaced or extended; see freshFrom and
+   * songKey.
    */
   private queuedIds = new Set<string>();
-  private queuedKeys = new Set<string>();
+  private queuedSongs = new Set<string>();
   /**
    * Whether the set has been handed the track that follows: asked once per
    * track, not on every radio top-up. `unasked` after a track change,
@@ -276,6 +303,7 @@ export class AudioPlayer {
     like: HTMLButtonElement;
     dislike: HTMLButtonElement;
     radio: HTMLButtonElement;
+    artistRadio: HTMLButtonElement;
     share: HTMLButtonElement;
     more: HTMLButtonElement;
   };
@@ -323,6 +351,7 @@ export class AudioPlayer {
           <button class="icon-btn sm ab-like" data-like="1" aria-label="Like" aria-pressed="false" title="Like: outranks any number of plays in the popular orders">${icons.thumbUp}</button>
           <button class="icon-btn sm ab-like" data-like="-1" aria-label="Dislike" aria-pressed="false" title="Dislike: sinks below anything untouched">${icons.thumbDown}</button>
           <button class="icon-btn sm ab-radio" data-radio aria-label="Radio" aria-pressed="false" title="Radio: keep the queue going with tracks that sound like this one">${icons.radio}</button>
+          <button class="icon-btn sm ab-radio" data-artist-radio aria-label="Artist radio" aria-pressed="false" title="Artist radio: keep the queue going with this performer's songs and nobody else's, each song once">${icons.artistRadio}</button>
           <button class="icon-btn sm" data-share aria-label="Copy a link to this track">${icons.link}</button>
           <div class="ab-menu-wrap ab-more-wrap">
             <button class="icon-btn sm ab-more" data-more aria-label="More" aria-haspopup="menu" aria-expanded="false">${MORE_GLYPH}</button>
@@ -371,12 +400,13 @@ export class AudioPlayer {
       like: this.q<HTMLButtonElement>('[data-like="1"]'),
       dislike: this.q<HTMLButtonElement>('[data-like="-1"]'),
       radio: this.q<HTMLButtonElement>('[data-radio]'),
+      artistRadio: this.q<HTMLButtonElement>('[data-artist-radio]'),
       share: this.q<HTMLButtonElement>('[data-share]'),
       more: this.q<HTMLButtonElement>('[data-more]'),
     };
     this.castMenu = this.q('[data-castmenu]');
     this.moreMenu = this.q('[data-moremenu]');
-    this.press(this.els.radio, this.radio);
+    this.markRadio();
     this.bind();
 
     const vol = Number(recall('media.volume') ?? '1');
@@ -496,6 +526,10 @@ export class AudioPlayer {
     this.queueCtx = context;
     this.queue = items.slice(0, QUEUE_CAP);
     this.rebuildQueuedSets();
+    // And the radio's: whatever it was asking was about the queue that went.
+    this.radioAsk++;
+    this.radioBusy = false;
+    this.stationSpent = '';
     // A new queue is a clean slate: a run of failures from the last one must
     // not count against this one and stop it on its first stumble.
     this.errStreak = 0;
@@ -545,6 +579,9 @@ export class AudioPlayer {
       showToast('The queue is full');
       return;
     }
+    // Something new to follow: a station that had run out asks again when
+    // the queue reaches it.
+    this.stationSpent = '';
     showToast(`${taken.toLocaleString()} track${taken === 1 ? '' : 's'} added to the queue`);
   }
 
@@ -561,8 +598,8 @@ export class AudioPlayer {
     for (const t of taken) {
       this.queue.push(t);
       this.queuedIds.add(t.id);
-      const key = recordingKey(t);
-      if (key !== '') this.queuedKeys.add(key);
+      const key = songKey(t);
+      if (key !== '') this.queuedSongs.add(key);
     }
     const at = appendToOrder(this.order, first, taken.length, this.shuffle);
     if (this.exhausted) {
@@ -581,24 +618,67 @@ export class AudioPlayer {
     return taken.length;
   }
 
-  /** Rebuild the queued-id and queued-recording sets from the whole queue. */
+  /** Rebuild the queued-id and queued-song sets from the whole queue. */
   private rebuildQueuedSets(): void {
     this.queuedIds = new Set();
-    this.queuedKeys = new Set();
+    this.queuedSongs = new Set();
     for (const t of this.queue) {
       this.queuedIds.add(t.id);
-      const key = recordingKey(t);
-      if (key !== '') this.queuedKeys.add(key);
+      const key = songKey(t);
+      if (key !== '') this.queuedSongs.add(key);
     }
   }
 
-  /** Radio on or off; on, the queue is topped up at once. */
-  private setRadio(on: boolean): void {
-    this.radio = on;
-    remember('media.radio', on ? '1' : '0');
-    this.press(this.els.radio, on);
-    if (on) void this.topUp();
-    else showToast('Radio off');
+  /**
+   * Radio, artist radio, or neither — the two are one setting, since a queue
+   * can be kept going only one way. Turned on, the queue is topped up at
+   * once, and artist radio says whose it is.
+   */
+  private setRadio(mode: RadioMode): void {
+    const was = this.radio;
+    this.useRadio(mode);
+    if (mode === 'off') showToast(was === 'artist' ? 'Artist radio off' : 'Radio off');
+    else void this.topUp(true);
+  }
+
+  /** The setting itself: remembered, lit, and the last one's asks left unheard. */
+  private useRadio(mode: RadioMode): void {
+    this.radio = mode;
+    remember('media.radio', mode === 'similar' ? '1' : mode === 'artist' ? 'artist' : '0');
+    this.markRadio();
+    this.radioAsk++;
+    this.radioBusy = false;
+    this.stationSpent = '';
+  }
+
+  private markRadio(): void {
+    this.press(this.els.radio, this.radio === 'similar');
+    this.press(this.els.artistRadio, this.radio === 'artist');
+  }
+
+  /**
+   * Artist radio from a performer's page: one of their songs now, and the
+   * radio on, so the rest follows as it does from the bar. A new queue, as
+   * pressing play on a release is. The first song is drawn the way radio
+   * draws, from the head of the performer's catalogue — which, asked for with
+   * no track to sound like, is ordered by what the owner liked and played.
+   */
+  async startStation(name: string): Promise<void> {
+    const res = await tracksOf('station', { artist: name }).catch(() => null);
+    if (!res) {
+      showToast('Could not start artist radio');
+      return;
+    }
+    const who = res.artist || name;
+    const songs = freshFrom(res.tracks, new Set(), new Set());
+    const first = pickRadio(songs.slice(0, RADIO_POOL), 1, Math.random, [], 1)[0];
+    if (!first) {
+      showToast(`Nothing by ${who} to play`);
+      return;
+    }
+    this.useRadio('artist');
+    this.playItems([first], 0, false, null);
+    showToast(`Artist radio: ${who}, ${songs.length.toLocaleString()} song${songs.length === 1 ? '' : 's'}`);
   }
 
   /** A toggle's lamp and what a screen reader is told of it, together. */
@@ -609,34 +689,80 @@ export class AudioPlayer {
 
   /**
    * Keep the queue going: when fewer than RADIO_AHEAD tracks follow the one
-   * playing, fetch the ones that sound most like it and put them after
-   * everything queued, leaving out what is queued already. Asked for on
-   * every track change and when the queue runs out; one ask at a time.
+   * playing, fetch what the radio plays next and put it after everything
+   * queued, leaving out what is queued already. Asked for on every track
+   * change and when the queue runs out; one ask at a time. `announce` is the
+   * radio being turned on, when artist radio says whose it is whether or not
+   * the queue needs anything yet.
    */
-  private async topUp(): Promise<void> {
+  private async topUp(announce = false): Promise<void> {
     const it = this.current;
-    if (!this.radio || this.radioBusy || !it) return;
-    if (ahead(this.order.length, this.orderPos) >= RADIO_AHEAD) return;
+    const mode = this.radio;
+    if (mode === 'off' || this.radioBusy || !it) return;
+    const short = ahead(this.order.length, this.orderPos) < RADIO_AHEAD;
+    const wanted = mode === 'artist' ? announce || (short && !this.stationSpent) : short;
+    if (!wanted) return;
     this.radioBusy = true;
+    const ask = ++this.radioAsk;
     try {
-      const res = await tracksOf('similar', { id: it.id, n: RADIO_POOL });
-      // A fast skip meanwhile: the batch is for the track just left, and
-      // the track now playing asks for its own on the next change.
-      if (this.current !== it) return;
-      // By the sets the queue maintains, not by walking it — the queue is
-      // the whole library once it has been shuffled in.
-      const fresh = freshFrom(res.tracks, this.queuedIds, this.queuedKeys);
-      if (fresh.length > 0) {
-        const lately = recentArtists(this.order, this.queue, this.orderPos, RADIO_MEMORY);
-        this.append(pickRadio(fresh, RADIO_BATCH, Math.random, lately));
-      } else if (ahead(this.order.length, this.orderPos) <= 0) {
-        showToast('Radio: nothing else sounds like this yet');
-      }
+      if (mode === 'artist') await this.topUpStation(it, ask, short, announce);
+      else await this.topUpSimilar(it, ask);
     } catch {
       // The next track change asks again.
     } finally {
-      this.radioBusy = false;
+      if (ask === this.radioAsk) this.radioBusy = false;
     }
+  }
+
+  /** Radio's top-up: a draw from the tracks that sound most like this one. */
+  private async topUpSimilar(it: Item, ask: number): Promise<void> {
+    const res = await tracksOf('similar', { id: it.id, n: RADIO_POOL });
+    // A fast skip meanwhile, a change of radio or a new queue: the batch is
+    // for a track or a question nobody is on any more, and the track now
+    // playing asks for its own on the next change.
+    if (ask !== this.radioAsk || this.current !== it) return;
+    // By the sets the queue maintains, not by walking it — the queue is
+    // the whole library once it has been shuffled in.
+    const fresh = freshFrom(res.tracks, this.queuedIds, this.queuedSongs);
+    if (fresh.length > 0) {
+      const lately = recentArtists(this.order, this.queue, this.orderPos, RADIO_MEMORY);
+      this.append(pickRadio(fresh, RADIO_BATCH, Math.random, lately));
+    } else if (ahead(this.order.length, this.orderPos) <= 0) {
+      showToast('Radio: nothing else sounds like this yet');
+    }
+  }
+
+  /**
+   * Artist radio's top-up: the performer's whole catalogue, nearest this
+   * track first, and of it what is not queued yet — by file and by song, so
+   * a song comes once however many copies and takes of it the library holds.
+   * Drawn from the head of what is left, as radio draws, but undamped: the
+   * pool is one performer by design. Whose the station is, the server says
+   * (the track's own performer, by the rule that keeps every track it answers
+   * in the same station); a track nobody is credited with has none.
+   */
+  private async topUpStation(it: Item, ask: number, short: boolean, announce: boolean): Promise<void> {
+    const res = await tracksOf('station', { id: it.id });
+    if (ask !== this.radioAsk || this.current !== it) return;
+    const who = res.artist ?? '';
+    if (!who) {
+      if (announce || ahead(this.order.length, this.orderPos) <= 0) {
+        showToast('Artist radio: nobody is credited with this track');
+      }
+      return;
+    }
+    const fresh = freshFrom(res.tracks, this.queuedIds, this.queuedSongs);
+    if (fresh.length === 0) {
+      // Every song of theirs is queued: the station ends with the queue,
+      // since playing one again is the one thing it must not do.
+      this.stationSpent = who;
+      showToast(`Artist radio: every song by ${who} is in the queue`);
+      return;
+    }
+    if (announce) {
+      showToast(`Artist radio: ${who}, ${fresh.length.toLocaleString()} more song${fresh.length === 1 ? '' : 's'}`);
+    }
+    if (short) this.append(pickRadio(fresh.slice(0, RADIO_POOL), RADIO_BATCH, Math.random, [], 1));
   }
 
   toggle(): void {
@@ -756,7 +882,7 @@ export class AudioPlayer {
       // the `play` listener catches. With radio on, the top-up that follows
       // finds the player parked and moves it on to what it fetched.
       this.exhausted = true;
-      if (this.radio) void this.topUp();
+      if (this.radio !== 'off') void this.topUp();
       this.audio.pause();
       // Nothing follows on the television either: leave the last track
       // showing there rather than stopping it, the same as here — and stop
@@ -789,7 +915,9 @@ export class AudioPlayer {
     this.order = [];
     this.orderPos = -1;
     this.queuedIds = new Set();
-    this.queuedKeys = new Set();
+    this.queuedSongs = new Set();
+    this.radioAsk++;
+    this.stationSpent = '';
     // The queue is gone, so its owner's claim goes with it: whoever started it
     // must not still be told the player is playing their collection.
     this.queueCtx = null;
@@ -923,7 +1051,8 @@ export class AudioPlayer {
     this.on('[data-share]', () => this.shareTrack());
     this.on('[data-like="1"]', () => void this.rate(1));
     this.on('[data-like="-1"]', () => void this.rate(-1));
-    this.on('[data-radio]', () => this.setRadio(!this.radio));
+    this.on('[data-radio]', () => this.setRadio(this.radio === 'similar' ? 'off' : 'similar'));
+    this.on('[data-artist-radio]', () => this.setRadio(this.radio === 'artist' ? 'off' : 'artist'));
     this.on('[data-queue]', () => this.toggleQueue());
     this.on('[data-viz]', () => this.toggleViz());
     this.els.more.addEventListener('click', (ev) => {
@@ -1019,7 +1148,7 @@ export class AudioPlayer {
   }
 
   /**
-   * The overflow: on a phone the spectrum, the radio and the link fold into
+   * The overflow: on a phone the spectrum, both radios and the link fold into
    * this one menu (the stylesheet hides their buttons below 720px and shows
    * this one), each entry saying its state so the fold costs nothing but a
    * press. Built on opening, since the states move.
@@ -1028,7 +1157,8 @@ export class AudioPlayer {
     if (show) {
       this.moreMenu.innerHTML = `
         <button class="vo-menu-item" data-m="viz" aria-pressed="${this.spectrum.isOpen}"${this.els.vizBtn.disabled ? ' disabled' : ''}>Spectrum${this.spectrum.isOpen ? ' — on' : ''}</button>
-        <button class="vo-menu-item" data-m="radio" aria-pressed="${this.radio}">Radio${this.radio ? ' — on' : ''}</button>
+        <button class="vo-menu-item" data-m="radio" aria-pressed="${this.radio === 'similar'}">Radio${this.radio === 'similar' ? ' — on' : ''}</button>
+        <button class="vo-menu-item" data-m="artist-radio" aria-pressed="${this.radio === 'artist'}">Artist radio${this.radio === 'artist' ? ' — on' : ''}</button>
         <button class="vo-menu-item" data-m="share">Copy a link to this track</button>`;
       for (const el of this.moreMenu.querySelectorAll<HTMLElement>('[data-m]')) {
         el.addEventListener('click', () => {
@@ -1038,7 +1168,10 @@ export class AudioPlayer {
               this.toggleViz();
               break;
             case 'radio':
-              this.setRadio(!this.radio);
+              this.setRadio(this.radio === 'similar' ? 'off' : 'similar');
+              break;
+            case 'artist-radio':
+              this.setRadio(this.radio === 'artist' ? 'off' : 'artist');
               break;
             case 'share':
               this.shareTrack();

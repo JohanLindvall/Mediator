@@ -47,14 +47,16 @@ func albumQuery(q url.Values, paths library.PathFilter) library.AlbumQuery {
 // them: every release listed, every release of every performer listed, every
 // release in every genre listed, or the tracks of a listing. It is what
 // "queue all" asks — the grid holds tiles and the queue needs tracks, and
-// asking release by release would be a request per tile. Music's own, like
-// the collections it flattens, so a face without music is answered with
-// nothing; a confined caller is handed only what it may see.
+// asking release by release would be a request per tile. And what radio
+// asks: the tracks that sound like one (similar), or one performer's
+// (station). Music's own, like the collections it flattens, so a face
+// without music is answered with nothing; a confined caller is handed only
+// what it may see.
 func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	of := q.Get("of")
-	if of != "albums" && of != "artists" && of != "genres" && of != "items" && of != "similar" {
-		http.Error(w, "of must be albums, artists, genres, items or similar", http.StatusBadRequest)
+	if of != "albums" && of != "artists" && of != "genres" && of != "items" && of != "similar" && of != "station" {
+		http.Error(w, "of must be albums, artists, genres, items, similar or station", http.StatusBadRequest)
 		return
 	}
 	c := contentOf(r)
@@ -63,6 +65,7 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 	// One more than the cap is asked for, which is how the cut is known
 	// without counting the whole view.
 	tracks := []library.Item{}
+	station := ""
 	if c.music {
 		switch of {
 		case "albums":
@@ -88,6 +91,17 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 			if _, ok := s.item(r, q.Get("id")); ok {
 				tracks = s.lib.Similar(q.Get("id"), min(n, similarMax), c.kinds(), paths)
 			}
+		case "station":
+			// Artist radio: one performer's tracks, nearest the seed first —
+			// the seed's performer, or the one named. A seed, like similar's,
+			// has to be something this caller may see.
+			seed := q.Get("id")
+			if seed != "" {
+				if _, ok := s.item(r, seed); !ok {
+					break
+				}
+			}
+			station, tracks = s.lib.Station(q.Get("artist"), seed, c.kinds(), paths)
 		}
 	}
 	if tracks == nil {
@@ -111,7 +125,7 @@ func (s *Server) handleTracks(w http.ResponseWriter, r *http.Request) {
 	// first thousand: a queue of the whole library is not about to be
 	// listened to all at once, and the sweep reaches the rest in its turn.
 	s.lib.EnrichSoon(itemIDs(tracks[:min(len(tracks), 1000)]))
-	writeJSON(w, TracksResponse{Tracks: tracks, Truncated: truncated})
+	writeJSON(w, TracksResponse{Tracks: tracks, Truncated: truncated, Artist: station})
 }
 
 // countsOfAlbums is what the chips say over a listing of releases the
