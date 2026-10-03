@@ -3972,63 +3972,42 @@ set that has gone away should be given up on in seconds, and no more than
   A play pressed **during** a fade out is a play wherever it is pressed
   (`fadingOut`): the early return that asked only whether the deck had
   paused made the reversal the comment promised unreachable.
-- **The sounding deck is never let end** (`wrappedAround` in `queue.ts`,
-  tested; `checkWrap`, `loadDecks`). WebKit gives up a page's audio session
-  the moment an element plays to its natural end with nothing else playing
-  (`sessionWillEndPlayback`, iOS 17 on), and a page in the background cannot
-  get it back: the next track's `play()` then waits, silent, until the app is
-  opened. Seen in the server's log from a phone in a car: an album's second
-  track ended with the page in the background, and its third was not asked
-  for until nearly seven minutes later, after the page had been brought back
-  to the front. So the sounding deck **loops**, and the jump back to its
-  start is where the bar moves on — the `ended` listener stays as the
-  fallback for an engine that ends a looping element. The jump is told apart
-  from a seek by the clock the bar keeps (`lastPos`), which every seek it
-  makes moves with it (`seekDeck`: the seek bar, previous, the end of a cast,
-  and the lock screen's scrubber, now claimed as `seekto` for exactly this);
-  what is left is a jump nobody here asked for, backwards, into the opening
-  seconds, from the closing stretch — the loop and nothing else. The next
-  track goes on the **other** deck whether or not the preloader got there
-  first, and that deck is asked to play **before** the old one is stopped
-  (`loadDecks`), so something is playing at every instant: re-pointing the
-  sounding deck stops it first, which in a pocket is the session gone.
-  **And both decks are unlocked by the first tap** (`unlockIdle`). iOS lets
-  an element start playback without a gesture only once a gesture has
-  started it, and that is per element — the bar plays every other track on
-  its other deck, which no tap had ever started. Seen on the first drive with
-  the loop: the end of the first track was refused (`audio-refused … (hidden)`
-  in the server's log), the queue standing until play was pressed on the
-  car's own screen, which is a gesture; the next boundary, onto the deck the
-  first tap had started, went by itself — its play counted five seconds
-  after the last track's end, where a press would have come later. So whenever the sounding deck is
-  started, the idle one is started and stopped in the same moment: inside a
-  gesture that is all WebKit asks, outside one it is refused with nothing
-  changed, and nothing is heard, the pause landing before playback begins.
-  The same restriction is why the preloader's fetch never appeared in the
-  log before that drive: iOS loads nothing for an element no gesture has
-  started, and from then on the next track arrived fifteen seconds early as
-  it was always meant to.
-  Checked in Chromium against generated tracks: an album played through,
-  each track once and never two decks sounding together, the queue parked
-  at its end; seeking about, from the closing seconds straight back to the
-  start included, stayed on the track; a seek into the last second moved on;
-  previous restarted. What could not be checked here is iOS itself — the
-  next drive is the trial, and the reports below are what it will say.
-  **What a listener hears and nothing recorded now reaches the server's
-  log**: a deck that ran dry, as one line per track when it is left
-  (`audio-stalls`: how many, how long in all, how many with the page out of
-  sight — a wait during a seek or under 50 ms is not one — and how far the
-  deck's own clock fell behind the wall clock while it was meant to sound,
-  `trackClock`, which a hiccup too short to raise `waiting` still shows), and
-  a play the browser refused without a gesture (`audio-refused`, with
-  whether the page was visible). A track is reported only where something
-  happened, so silence in the log is a clean track. Stutter with neither
-  stalls nor a lagging clock is past the element — the Bluetooth link, the
-  car — and stutter with them is the network; the server alone cannot tell,
-  the proxy in front of it taking each file whole in under half a second and
-  feeding the phone from its own buffer. The first drive with these reports:
-  a track heard as choppy over a car's Bluetooth from its first seconds, and
-  not one stall recorded in it or in the track after.
+- **iOS queues keep the element the listener started** (`AudioDecks` in
+  `audiodecks.ts`, selected by `singleAudioElement` in `playback.ts`). Playback
+  permission and the audio session belong to an element. Alternating decks
+  left a locked phone trying to start a different element at every boundary.
+  The attempted repair played an empty spare and immediately paused it, then
+  treated any error except `NotAllowedError` as successful unlocking. Neither
+  an empty-source failure nor an aborted play proves that the next background
+  start will work, and starting a second element can disturb the active route.
+  That probe is gone. iPhone, iPod and iPad WebKit — including an iPad's
+  desktop-style user agent and CriOS/FxiOS — replace the source on the same
+  element and call `play()` in the same callback, with no intervening `pause`,
+  explicit `load`, or asynchronous wait. The idle element never plays or
+  preloads on this path. This trades the desktop's prebuffered handoff for a
+  possible short buffer wait at a mobile track boundary.
+  **The active element still loops** (`wrappedAround`, `checkWrap`). This
+  avoids reaching a natural end before the source change, where mobile
+  WebKit can release the background audio session. Each seek updates the
+  clock used to distinguish a deliberate seek from a loop (`seekDeck`, also
+  used by the lock-screen scrubber); a source change resets that clock before
+  queued time/seek events can arrive. Queue exhaustion pauses normally.
+  Desktop playback still alternates prebuffered decks. `AudioDecks` owns the
+  source changes, play requests and cancellation generation; a rejection from
+  a skipped track, a paused request, or a closed queue is discarded. A current
+  refusal still reaches the existing `audio-refused` report. The controller's
+  tests model per-element permission and exercise visible/hidden transitions,
+  spare-player inactivity, pause/resume, repeat, preload, and late rejections.
+  Browser smoke checks can verify the mobile code path, but a desktop browser
+  with an iPhone agent does not exercise iOS's native audio session or a car's
+  Bluetooth receiver. Those still need a device check after deployment.
+  **Playback diagnostics** remain one report per affected track when it is
+  left: `audio-stalls` counts waits and clock lag, and `audio-refused` records
+  a denied play with the page's visibility. Neither counter identifies the
+  cause by itself: buffering, decoding and output can all interrupt sound;
+  no reported stall does not exonerate the browser's audio session. Request
+  logs are insufficient behind a proxy that buffers a file before feeding
+  it to the phone.
 - **The player has the spectrum too**, on the film's own soundtrack, and it
   is the same `Visualizer` — `attach` takes media elements rather than audio
   ones, which is the whole of what that needed — inside the same

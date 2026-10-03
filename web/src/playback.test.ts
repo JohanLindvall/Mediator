@@ -12,6 +12,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import { defaultMode, fallbackMode, modeShown } from './content.ts';
+import { singleAudioElement } from './playback.ts';
 import { REPORT_CAP, REPORT_QUIET_MS, shouldReport } from './report.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
 import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
@@ -36,6 +37,21 @@ const AGENTS = {
 /** What each engine really answers for Apple's playlist type. */
 const saysMaybe = (): string => 'maybe';
 const saysNothing = (): string => '';
+
+test('music reuses one element on mobile WebKit, including desktop-mode iPads and iOS browsers', () => {
+  for (const ua of [
+    AGENTS.iphone, AGENTS.ipad,
+    AGENTS.iphone.replace('Version/17.5', 'CriOS/127.0.0.0'),
+    AGENTS.iphone.replace('Version/17.5', 'FxiOS/128.0'),
+    AGENTS.iphone.replaceAll('17_5', '27_0_1').replace('Version/17.5', 'Version/27.0'),
+  ]) assert.equal(singleAudioElement(ua, 5), true, ua);
+  assert.equal(singleAudioElement(AGENTS.macSafari, 5), true, 'iPad desktop agent');
+  for (const ua of [AGENTS.chromeLinux, AGENTS.chromeMac, AGENTS.edge, AGENTS.firefox, AGENTS.macSafari]) {
+    assert.equal(singleAudioElement(ua, 0), false, ua);
+  }
+  assert.equal(singleAudioElement(AGENTS.androidChrome, 5), false);
+  assert.equal(singleAudioElement(AGENTS.edge, 10), false, 'touchscreen Windows');
+});
 
 test('HLS: WebKit plays it natively', () => {
   for (const ua of [AGENTS.iphone, AGENTS.ipad, AGENTS.macSafari]) {

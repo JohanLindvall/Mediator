@@ -17,7 +17,8 @@ import { reportFault } from './report';
 import { TrackCard } from './trackcard';
 import { playingAudio } from './nowplaying';
 import { clamp, esc, formatDuration, tempoLabel, trackTitle } from './format';
-import { playButtonIcon } from './playback';
+import { playButtonIcon, singleAudioElement } from './playback';
+import { AudioDecks } from './audiodecks';
 import { recall, remember } from './remember';
 import { icons } from './icons';
 import { showToast } from './toast';
@@ -161,15 +162,12 @@ const CAST_HANDOVER = 5;
 
 export class AudioPlayer {
   /**
-   * Two elements, alternated. Loading a new source into the element that is
-   * playing is what the silence between tracks was: teardown, a fresh
-   * request, and a decode, all after the last sample of the previous track
-   * had already gone quiet. So the track that is coming buffers in the other
-   * element while this one plays, and the boundary is a change of deck.
+   * Alternate prebuffered elements where possible. On iOS the queue stays
+   * on the element the listener started, so locking the phone never leaves
+   * the next track dependent on permission to start a different element.
    */
   private decks: [HTMLAudioElement, HTMLAudioElement] = [new Audio(), new Audio()];
-  private deckUrl: [string, string] = ['', ''];
-  private deck = 0;
+  private transport = new AudioDecks(this.decks, singleAudioElement(navigator.userAgent, navigator.maxTouchPoints));
   private queue: Item[] = [];
   private order: number[] = [];
   private orderPos = -1;
@@ -259,11 +257,6 @@ export class AudioPlayer {
    * and a new track.
    */
   private clockRef: { wall: number; media: number } | null = null;
-  /**
-   * The decks iOS will let start without a tap — see unlockIdle. Per
-   * element, which is the whole of why there are two entries to keep.
-   */
-  private unlocked = new Set<HTMLAudioElement>();
   private browserReceiver = new Set<HTMLMediaElement>();
   private netReceivers = false;
   /**
@@ -464,12 +457,12 @@ export class AudioPlayer {
 
   /** The element that is sounding. */
   private get audio(): HTMLAudioElement {
-    return this.decks[this.deck];
+    return this.transport.current;
   }
 
   /** The other one: free, or holding the track that comes next. */
   private get idle(): HTMLAudioElement {
-    return this.decks[1 - this.deck];
+    return this.transport.idle;
   }
 
   // ---- public API ------------------------------------------------------
@@ -866,7 +859,7 @@ export class AudioPlayer {
     if (this.audio.paused) return;
     if (!this.fadeHeard()) {
       this.cancelFade();
-      this.audio.pause();
+      this.transport.pause();
       return;
     }
     // Faded out first, and only actually paused at the end of it — pausing
@@ -895,56 +888,23 @@ export class AudioPlayer {
    * simply stops.
    */
   private playDeck(): void {
-    const deck = this.audio;
-    const id = this.current?.id;
-    void deck.play().then(
-      () => {
-        this.unlocked.add(deck);
-      },
-      (e: unknown) => {
-        if (e instanceof DOMException && e.name === 'NotAllowedError') {
-          reportFault({
-            what: 'audio-refused',
-            detail: `${e.message} (${document.visibilityState})`,
-            item: id,
-            at: Math.round(deck.currentTime),
-          });
-        }
-        this.updatePlayState();
-      },
-    );
-    this.unlockIdle();
+    this.observePlay(this.transport.play());
   }
 
-  /**
-   * Let the other deck start without a tap when its turn comes. iOS lets an
-   * element begin playback without a user gesture only once a gesture has
-   * started it — per element — and the bar plays every other track on its
-   * other deck. Started by a track boundary with the phone locked, that deck
-   * was refused: "audio-refused … (hidden)" in the server's log, and the
-   * queue stood still until play was pressed on the car's own screen. So
-   * whenever the sounding deck is started the idle one is started and
-   * stopped in the same moment, which inside a gesture is all WebKit asks
-   * and outside one is refused with nothing changed. Nothing is heard:
-   * playback begins asynchronously, and the pause lands first.
-   */
-  private unlockIdle(): void {
-    const idle = this.idle;
-    if (this.unlocked.has(idle)) return;
-    let started: Promise<void>;
-    try {
-      started = idle.play();
-    } catch {
-      return;
-    }
-    idle.pause();
-    started.then(
-      () => this.unlocked.add(idle),
-      (e: unknown) => {
-        // Interrupted by the pause is the answer wanted: it was allowed.
-        if (!(e instanceof DOMException && e.name === 'NotAllowedError')) this.unlocked.add(idle);
-      },
-    );
+  private observePlay(started: Promise<void>): void {
+    const deck = this.audio;
+    const id = this.current?.id;
+    void started.catch((e: unknown) => {
+      if (e instanceof DOMException && e.name === 'NotAllowedError') {
+        reportFault({
+          what: 'audio-refused',
+          detail: `${e.message} (${document.visibilityState})`,
+          item: id,
+          at: Math.round(deck.currentTime),
+        });
+      }
+      this.updatePlayState();
+    });
   }
 
   /**
@@ -960,8 +920,8 @@ export class AudioPlayer {
   /**
    * How far the deck's own clock fell behind the wall clock while it was
    * meant to be sounding. A hiccup too short to raise `waiting` still costs
-   * time here, where audio lost after the element — on the way to a car's
-   * Bluetooth receiver — costs none: the two are what this tells apart.
+   * time here. This measures media progress, not the browser's output or
+   * the Bluetooth receiver, so it cannot identify every audible dropout.
    * Measured between timeupdates, which a throttled page delays for both
    * clocks alike, and never across a pause, a seek or a counted stall.
    */
@@ -1008,8 +968,8 @@ export class AudioPlayer {
   /**
    * Say in the server's log how often the track being left ran dry, and for
    * how long, and how much of that was with the page out of sight. Once per
-   * track, and only where it did: the next drive answers whether stutter is
-   * the network or something past the element.
+   * track, and only where it did, to help distinguish stalled media progress
+   * from a problem in the output path.
    */
   private reportStalls(): void {
     this.endStall();
@@ -1056,7 +1016,7 @@ export class AudioPlayer {
         deck.volume = this.volume;
         return;
       }
-      deck.pause();
+      this.transport.pause();
       // Left at the level it will be wanted at: the next thing to touch this
       // deck is a resume, or a track change that expects a working volume.
       deck.volume = this.volume;
@@ -1096,7 +1056,7 @@ export class AudioPlayer {
       // finds the player parked and moves it on to what it fetched.
       this.exhausted = true;
       if (this.radio !== 'off') void this.topUp();
-      this.audio.pause();
+      this.transport.pause();
       // Nothing follows on the television either: leave the last track
       // showing there rather than stopping it, the same as here — and stop
       // asking, or the poll would find it stopped for ever and call this
@@ -1236,7 +1196,7 @@ export class AudioPlayer {
       // rather than a queue nothing in could be played.
       this.errStreak++;
       if (this.errStreak >= this.order.length) {
-        this.audio.pause();
+        this.transport.pause();
         this.updatePlayState();
         showToast('Nothing in the queue could be played', 4000);
         return;
@@ -1457,26 +1417,14 @@ export class AudioPlayer {
     this.tv?.cast.volume(level * 100);
   }
 
-  /** Point a deck at a track and remember what it is holding. */
-  private setDeckSrc(a: HTMLAudioElement, url: string): void {
-    a.preload = 'auto';
-    a.src = url;
-    this.deckUrl[this.decks.indexOf(a) as 0 | 1] = url;
-  }
-
   /** Silence a deck and let go of what it was holding. */
   private stopDeck(a: HTMLAudioElement): void {
-    a.pause();
-    this.clearDeck(a);
+    this.transport.stop(a);
   }
 
   /** Release a deck's source without touching whether it is playing. */
   private clearDeck(a: HTMLAudioElement): void {
-    if (a.getAttribute('src') !== null) {
-      a.removeAttribute('src');
-      a.load(); // without this the element keeps buffering what it had
-    }
-    this.deckUrl[this.decks.indexOf(a) as 0 | 1] = '';
+    this.transport.clear(a);
   }
 
   /**
@@ -1509,9 +1457,7 @@ export class AudioPlayer {
     const next = this.nextItem();
     if (!next) return;
     this.prefetchArt(next);
-    const url = streamUrl(next.id);
-    if (this.deckUrl[1 - this.deck] === url) return; // already waiting
-    this.setDeckSrc(this.idle, url);
+    this.transport.preload(streamUrl(next.id));
   }
 
   /**
@@ -1847,39 +1793,17 @@ export class AudioPlayer {
 
   /** Point the decks at a track: the way this bar plays things itself. */
   private loadDecks(item: Item, autoplay: boolean): void {
-    // A new track ends whatever the last one was in the middle of. The fade
-    // belongs to pausing, not to a boundary — those are gapless by deck
-    // swap, and fading one would put a hole between two tracks.
+    // A track change cancels a pause fade and restores the volume before
+    // either reusing the current element or swapping to the buffered deck.
     this.cancelFade();
     this.reportStalls();
-    const url = streamUrl(item.id);
-    const was = this.audio;
-    if (this.deckUrl[this.deck] !== url) {
-      // The new track goes on the deck that is not sounding — where the
-      // preloader may well have put it already, which costs no request and
-      // no decode. Never onto the sounding deck: re-pointing that one stops
-      // it first, and a phone in a pocket that stops playing for an instant
-      // has given up its audio session and cannot start the next track at
-      // all. The deck going quiet is stopped only once the new one has been
-      // asked to play (below), so something is playing throughout.
-      if (this.deckUrl[1 - this.deck] !== url) this.setDeckSrc(this.idle, url);
-      this.deck = 1 - this.deck;
-    }
-    // The sounding deck loops and is never let end (wrappedAround); the
-    // other does not, being silent or on its way out.
-    this.audio.loop = true;
-    if (was !== this.audio) was.loop = false;
+    // Reset before changing src: reusing an element also queues time/seek
+    // events, which must not mistake the new track's zero for another wrap.
+    this.lastPos = 0;
+    if (autoplay) this.spectrum.viz.resume();
+    const started = this.transport.load(streamUrl(item.id), autoplay);
     this.lastPos = this.audio.currentTime;
-    // Asked for from the top — but only when it is not there already. A deck
-    // the preloader filled has never played and is at zero, and seeking one
-    // to where it already is still costs a seek: right at a track boundary
-    // that is a hiccup in the place this was supposed to have removed one.
-    if (this.audio.currentTime > 0.01) this.seekDeck(0);
-    if (autoplay) {
-      this.spectrum.viz.resume();
-      this.playDeck();
-    }
-    if (was !== this.audio) this.stopDeck(was);
+    this.observePlay(started);
   }
 
   private updateMediaSession(item: Item, title: string): void {

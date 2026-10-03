@@ -31,6 +31,15 @@ export function nativeHLS(ua: string, canPlay: (type: string) => string): boolea
 }
 
 /**
+ * Mobile WebKit's playback permission belongs to the element started by a
+ * tap. Reuse it for the queue, including iPadOS's desktop-style agent and
+ * the WebKit-based browsers whose names are not Safari (CriOS, FxiOS).
+ */
+export function singleAudioElement(ua: string, touchPoints: number): boolean {
+  return /AppleWebKit/.test(ua) && (/iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && touchPoints > 1));
+}
+
+/**
  * What a file's container is, as a browser names it. Only the ones worth
  * asking about: anything not here is left to the element to try, which is
  * what it did for all of them before.

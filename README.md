@@ -140,11 +140,12 @@ Go binary with the TypeScript frontend embedded.
   the title keeps its room —
   play/pause, stop (which pauses where it is, and resumes when pressed
   again), previous and next, and the lock screen's scrubber. A queue goes
-  on from track to track on a locked iPhone: a track that plays to its end
-  gives up the phone's audio session, so the bar never lets one end — it
-  loops and moves on as it goes round — and both of the bar's players are
-  readied by the first tap, iOS letting a player start on its own only
-  once a tap has started it. A pause from the lock screen takes effect at
+  on from track to track on a locked iPhone using the same audio element
+  started by the listener's tap. The bar loops at the boundary and replaces
+  its source immediately, keeping the next track on that element instead of
+  trying to start a second player in the background. It never starts and
+  stops a spare player to obtain permission, which could disturb playback
+  over Bluetooth. A pause from the lock screen takes effect at
   once. On a phone the AirPlay button is always offered, its picker listing
   the phone's own outputs too, and the page never searches for receivers
   itself. An album
@@ -155,13 +156,15 @@ Go binary with the TypeScript frontend embedded.
   the queue that sheet started, and otherwise plays the album from the top.
   Whichever track is loaded is marked in the list, wherever it was started
   from, and tapping a track starts the album at that track. The play badge
-  on an album or playlist card starts it without opening it. Tracks are
-  crossed without a gap: the next one buffers in a second element while the
-  current plays, so the boundary is a change of deck rather than a fresh
+  on an album or playlist card starts it without opening it. On desktop,
+  the next track buffers in a second element while the current plays, so
+  the boundary is a change of deck rather than a fresh
   request — and the preloading stands aside whenever the track being
-  listened to still has fetching left to do. The sleeve is fetched ahead in
-  the same way, so it changes with the track; and another release's is never
-  left standing under a new title while the next one loads. A spectrum view draws what is
+  listened to still has fetching left to do. On iPhone and iPad the same
+  player loads each track in turn, so a boundary can include a short buffer
+  wait. The sleeve is fetched ahead, so it changes with the track; and
+  another release's is never left standing under a new title while the next
+  one loads. A spectrum view draws what is
   sounding as a quarter-octave analyser: 36 bands spaced by musical interval
   from 30 Hz to 16 kHz rather than by arithmetic, tilted 3 dB per octave so a
   well-mastered track reads roughly flat instead of sloping into the floor,
@@ -1311,9 +1314,10 @@ line per track that ran out of data or whose own clock fell behind (how
 many times, for how long in all, how many with the page out of sight, and
 how many seconds its clock lost), and `audio-refused`, a track the browser
 would not start without a tap. A track that played cleanly says nothing.
-Stalls or a lagging clock mean the network or the browser could not keep
-up; stutter with neither is past the browser — the Bluetooth link or the
-car. The server's own request log cannot tell the two apart
+Stalls or a lagging clock show that playback could not keep up; these
+measurements alone cannot distinguish the network, decoding, or audio
+output. Stutter without either can still be a browser audio-session or
+Bluetooth problem. The server's own request log cannot tell them apart
 behind a reverse proxy, which takes each file whole in a moment and feeds
 the phone from its own buffer.
 
