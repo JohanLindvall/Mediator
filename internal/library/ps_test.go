@@ -3,8 +3,47 @@ package library
 import (
 	"bytes"
 	"io"
+	"math"
 	"testing"
 )
+
+func TestProgramStreamSeekPreservesPositionOnError(t *testing.T) {
+	r := &psFix{src: nopFile{}, size: 12}
+	if _, err := r.Seek(5, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		offset int64
+		whence int
+	}{{-1, io.SeekStart}, {-6, io.SeekCurrent}, {math.MaxInt64, io.SeekCurrent}, {math.MaxInt64, io.SeekEnd}, {0, 99}} {
+		if _, err := r.Seek(tc.offset, tc.whence); err == nil {
+			t.Errorf("accepted Seek(%d, %d)", tc.offset, tc.whence)
+		}
+		if got, _ := r.Seek(0, io.SeekCurrent); got != 5 {
+			t.Fatalf("failed seek moved the position to %d", got)
+		}
+	}
+}
+
+func TestProgramStreamReadAtBounds(t *testing.T) {
+	r := &psFix{src: &fakeFile{data: []byte("abcdefghijkl")}, size: 12}
+	for _, off := range []int64{-1, math.MinInt64, 12, 4096, math.MaxInt64} {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("ReadAt(%d) panicked: %v", off, p)
+				}
+			}()
+			if n, err := r.ReadAt(make([]byte, 4), off); n != 0 || err == nil {
+				t.Errorf("ReadAt(%d) = %d, %v", off, n, err)
+			}
+		}()
+	}
+	p := make([]byte, 4)
+	if n, err := r.ReadAt(p, 10); n != 2 || err != io.EOF || string(p[:n]) != "kl" {
+		t.Errorf("partial read = %q, %d, %v", p, n, err)
+	}
+}
 
 // The field layouts, which are where this lives or dies: one marker bit in
 // the wrong place produces a file nothing will play.

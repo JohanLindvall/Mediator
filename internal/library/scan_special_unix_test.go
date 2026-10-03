@@ -61,3 +61,19 @@ func TestRescanRemovesFilesReplacedByPipes(t *testing.T) {
 		t.Fatalf("kept %d pipe items and %d subtitle directories", l.Size(), len(l.subsByDir))
 	}
 }
+
+func TestRarVolumesSkipSpecialFiles(t *testing.T) {
+	for _, names := range [][2]string{{"set.rar", "set.r00"}, {"set.part1.rar", "set.part2.rar"}} {
+		dir := t.TempDir()
+		first := filepath.Join(dir, names[0])
+		if err := os.WriteFile(first, []byte("archive"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Mkfifo(filepath.Join(dir, names[1]), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if vols := rarVolumes(first); len(vols) != 1 || vols[0] != first {
+			t.Errorf("discovery included a pipe: %v", vols)
+		}
+	}
+}

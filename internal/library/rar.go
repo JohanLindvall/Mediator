@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -113,7 +112,7 @@ func rarVolumes(first string) []string {
 		width := len(m[2])
 		for n := 2; n <= rarMaxVolumes; n++ {
 			p := filepath.Join(dir, m[1]+fmt.Sprintf("%0*d", width, n)+m[3])
-			if _, err := os.Stat(p); err != nil {
+			if info, err := os.Stat(p); err != nil || !info.Mode().IsRegular() {
 				break
 			}
 			vols = append(vols, p)
@@ -126,11 +125,11 @@ func rarVolumes(first string) []string {
 	// first name that is not there ends the set.
 	for letter := 'r'; letter <= 'z'; letter++ {
 		for n := 0; n <= 99; n++ {
-			if len(vols) > rarMaxVolumes {
+			if len(vols) >= rarMaxVolumes {
 				return vols
 			}
 			p := filepath.Join(dir, fmt.Sprintf("%s.%c%02d", stem, letter, n))
-			if _, err := os.Stat(p); err != nil {
+			if info, err := os.Stat(p); err != nil || !info.Mode().IsRegular() {
 				return vols
 			}
 			vols = append(vols, p)
@@ -697,20 +696,11 @@ func (r *storedReader) Seek(offset int64, whence int) (int64, error) {
 	if r.closed {
 		return 0, os.ErrClosed
 	}
-	var base int64
-	switch whence {
-	case io.SeekStart:
-	case io.SeekCurrent:
-		base = r.pos
-	case io.SeekEnd:
-		base = r.e.size
-	default:
-		return 0, fmt.Errorf("invalid whence %d", whence)
+	pos, err := seekPosition(r.pos, r.e.size, offset, whence)
+	if err != nil {
+		return 0, err
 	}
-	if offset < -base || offset > math.MaxInt64-base {
-		return 0, fmt.Errorf("seek position out of range")
-	}
-	r.pos = base + offset
+	r.pos = pos
 	return r.pos, nil
 }
 

@@ -175,20 +175,11 @@ func (r *packedReader) Seek(offset int64, whence int) (int64, error) {
 	if r.closed {
 		return 0, os.ErrClosed
 	}
-	var base int64
-	switch whence {
-	case io.SeekStart:
-	case io.SeekCurrent:
-		base = r.pos
-	case io.SeekEnd:
-		base = r.it.stored.size
-	default:
-		return 0, fmt.Errorf("invalid whence %d", whence)
+	pos, err := seekPosition(r.pos, r.it.stored.size, offset, whence)
+	if err != nil {
+		return 0, err
 	}
-	if offset < -base {
-		return 0, errors.New("seek position out of range")
-	}
-	r.pos = base + offset
+	r.pos = pos
 	return r.pos, nil
 }
 

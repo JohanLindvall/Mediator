@@ -57,6 +57,9 @@ func TestBrowserWritesRequireSameOrigin(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("cross-origin media read = %d", w.Code)
 	}
+	if vary := w.Header().Get("Vary"); !strings.Contains(vary, ContentHeader) || !strings.Contains(vary, PathsHeader) {
+		t.Errorf("stream cache ignores restrictions: Vary %q", vary)
+	}
 }
 
 func TestInvalidRestrictionsFailClosed(t *testing.T) {

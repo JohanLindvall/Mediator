@@ -75,3 +75,21 @@ func TestAlbumsRevalidateWithETag(t *testing.T) {
 		t.Fatalf("library Cache-Control = %q, want no-store", cc)
 	}
 }
+
+func TestCollectionETagChangesAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "track.mp3"), []byte("audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, first, _ := serverUnderTest(t, dir)
+	_, second, _ := serverUnderTest(t, dir)
+	r := httptest.NewRequest(http.MethodGet, "/api/albums", nil)
+	w := httptest.NewRecorder()
+	first.Handler().ServeHTTP(w, r)
+	r.Header.Set("If-None-Match", w.Header().Get("ETag"))
+	w = httptest.NewRecorder()
+	second.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("restart reuses an earlier process's version: %d", w.Code)
+	}
+}

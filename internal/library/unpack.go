@@ -394,7 +394,18 @@ func unpackTo(ctx context.Context, it Item, path string) error {
 		return err
 	}
 	sum := crc32.NewIEEE()
-	n, err := io.Copy(io.MultiWriter(f, sum), ctxReader{ctx, src})
+	reader := ctxReader{ctx, src}
+	// The directory's size is untrusted. Bound the write itself, then read
+	// one extra byte without writing it to detect a decompression bomb.
+	n, err := io.Copy(io.MultiWriter(f, sum), io.LimitReader(reader, it.stored.size))
+	if err == nil && n == it.stored.size {
+		var extra [1]byte
+		if more, end := io.ReadFull(reader, extra[:]); more != 0 {
+			err = fmt.Errorf("%w: more than %d bytes", errUnpackedWrong, n)
+		} else if end != io.EOF {
+			err = end
+		}
+	}
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}

@@ -79,6 +79,29 @@ func TestIndexSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestRestoredIndexAppliesExclusionsBeforeScanning(t *testing.T) {
+	root := excludeTree(t)
+	db, err := blob.Open(filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	l := quietLib(root)
+	l.SetMetaDB(db)
+	l.Scan(nil)
+	flushNow(l, db)
+	restored := quietLib(root)
+	restored.SetExcludes([]string{"Extras", "*.trailer.mkv", "private"})
+	if n := restored.LoadFromDB(db); n != 2 {
+		t.Fatalf("restored %d items, want only the two non-excluded files", n)
+	}
+	for _, name := range []string{"Extras/behind.mkv", "movie.trailer.mkv", "shows/private/secret.mkv"} {
+		if _, ok := restored.Get(PathID(filepath.Join(root, name))); ok {
+			t.Errorf("excluded item %q is accessible before the first scan", name)
+		}
+	}
+}
+
 func TestRestartDropsDeletedFiles(t *testing.T) {
 	dir := t.TempDir()
 	keep := filepath.Join(dir, "Keep.mkv")

@@ -110,6 +110,9 @@ export class CastTransport<C extends CastLike = CastLike> {
    * ending.
    */
   private gen = 0;
+  private controlVersion = 0;
+  private nextRequest = 0;
+  private polling = false;
   private timer: unknown = null;
   private readonly hooks: CastHooks;
   private readonly opts: CastOptions;
@@ -169,12 +172,14 @@ export class CastTransport<C extends CastLike = CastLike> {
 
   play(): void {
     if (this.playing) return;
+    this.controlVersion++;
     this.playing = true;
     this.cast.play();
   }
 
   pause(): void {
     if (!this.playing) return;
+    this.controlVersion++;
     this.playing = false;
     this.cast.pause();
   }
@@ -186,6 +191,7 @@ export class CastTransport<C extends CastLike = CastLike> {
 
   /** The readout moves at once; the set follows a round trip later. */
   seek(t: number): void {
+    this.controlVersion++;
     this.pos = t;
     this.cast.seek(t);
   }
@@ -199,11 +205,12 @@ export class CastTransport<C extends CastLike = CastLike> {
   async queueNext(item: string, audio?: number): Promise<void> {
     this.next = null;
     const gen = this.gen;
-    const uri = await this.cast.queueNext(item, audio);
+    const request = ++this.nextRequest;
+    const uri = await this.cast.queueNext(item, audio).catch(() => null);
     // The file changed while the set was being asked: what it accepted was
     // queued behind the last one, and claiming it here would make the poll
     // see the set "move on" to what it is already playing.
-    if (gen !== this.gen) return;
+    if (gen !== this.gen || request !== this.nextRequest) return;
     this.next = uri;
   }
 
@@ -217,10 +224,18 @@ export class CastTransport<C extends CastLike = CastLike> {
     const w = this.opts.endWindow;
     const nearEnd = w != null && this.dur > 0 && this.pos >= this.dur - w;
     if (!nearEnd && this.ticks % this.opts.pollEvery !== 0) return;
+    // One unanswered poll is enough. A slow receiver otherwise accumulates
+    // requests, whose replies can arrive in a different order.
+    if (this.polling) return;
+    this.polling = true;
     const gen = this.gen;
+    const control = this.controlVersion;
     void this.cast.status().then((st) => {
-      if (gen === this.gen) this.answer(st);
-    });
+      // A request predating a seek/pause/play cannot undo the user's action.
+      if (gen === this.gen && control === this.controlVersion) this.answer(st);
+    }, () => {
+      // An unreachable set has supplied no new state. Try on the next tick.
+    }).finally(() => { this.polling = false; });
   }
 
   private answer(st: CastAnswer | null): void {
@@ -268,7 +283,8 @@ export class CastTransport<C extends CastLike = CastLike> {
     }
     // A set that has not opened the file will not say where it is, and a
     // zero there would drag the clock back to the beginning.
-    if (st?.position && !this.hooks.seeking()) this.pos = st.position;
+    if (st?.position !== undefined && Number.isFinite(st.position) && st.position >= 0 &&
+        step.action !== 'opening' && !this.hooks.seeking()) this.pos = st.position;
     this.hooks.onClock(this.pos, this.dur);
     this.hooks.onPoll?.();
   }

@@ -110,7 +110,7 @@ func parseZip(container string) ([]*storedEntry, []rarSkip, []string, error) {
 		}
 	}
 	limit := archiveMax.Load()
-	if limit > 0 && end.entries > limit*zipEntriesPerMember {
+	if limit > 0 && end.entries > 0 && (end.entries-1)/zipEntriesPerMember >= limit {
 		return nil, nil, parts, tooManyMembers{n: end.entries, max: limit}
 	}
 	dir, err := z.directory(end)

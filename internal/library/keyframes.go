@@ -130,22 +130,28 @@ func (r *ebmlReader) vint(pos int64, keepMarker bool) (v uint64, n int, unknown,
 // elem reads the header at pos: the id, and the bounds of the data. An
 // element of unknown size runs to the end of the enclosing space.
 func (r *ebmlReader) elem(pos, end int64) (id uint64, start, stop int64, ok bool) {
+	if pos < 0 || end > r.size || pos >= end {
+		return 0, 0, 0, false
+	}
 	id, n, _, ok := r.vint(pos, true)
-	if !ok {
+	if !ok || int64(n) >= end-pos {
 		return 0, 0, 0, false
 	}
 	size, m, unknown, ok := r.vint(pos+int64(n), false)
 	if !ok {
 		return 0, 0, 0, false
 	}
+	if int64(m) > end-pos-int64(n) {
+		return 0, 0, 0, false
+	}
 	start = pos + int64(n+m)
 	if unknown {
 		return id, start, end, true
 	}
-	stop = start + int64(size)
-	if size < 0 || stop > end {
+	if size > uint64(end-start) {
 		return 0, 0, 0, false
 	}
+	stop = start + int64(size)
 	return id, start, stop, true
 }
 

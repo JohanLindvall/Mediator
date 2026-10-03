@@ -386,3 +386,66 @@ test('cast: the clock keeps advancing while a set is still opening', async () =>
   clock.tick(1);
   assert.equal(tv.pos, 2, 'and the carried clock goes on');
 });
+
+test('cast: slow status requests never overlap', async () => {
+  const { tv, set, clock } = harness({ pollEvery: 1 });
+  let finish!: (value: CastAnswer | null) => void;
+  let requests = 0;
+  set.cast.status = () => {
+    requests++;
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  tv.begin(0, 300);
+  tv.run();
+  clock.tick(10);
+  assert.equal(requests, 1, 'a slow receiver must not accumulate polls');
+  finish({ state: 'PLAYING', position: 10 });
+  await settle();
+  clock.tick();
+  assert.equal(requests, 2, 'polling resumes once the request settles');
+  tv.stop();
+  finish(null);
+  await settle();
+});
+
+test('cast: a poll started before a control cannot undo that control', async () => {
+  for (const action of ['pause', 'play', 'seek'] as const) {
+    const { tv, set, clock } = harness({ pollEvery: 1 });
+    tv.begin(10, 300);
+    if (action === 'play') tv.pause();
+    set.says({ state: action === 'play' ? 'PAUSED_PLAYBACK' : 'PLAYING', position: 10 });
+    tv.run();
+    clock.tick();
+    if (action === 'seek') tv.seek(100);
+    else tv[action]();
+    const expected = { pos: tv.pos, playing: tv.playing };
+    await settle();
+    assert.deepEqual({ pos: tv.pos, playing: tv.playing }, expected, action);
+    tv.stop();
+  }
+});
+
+test('cast: only the latest queued successor is remembered', async () => {
+  const { tv, set } = harness({ pollEvery: 1 });
+  const replies: ((uri: string) => void)[] = [];
+  set.cast.queueNext = () => new Promise((resolve) => replies.push(resolve));
+  tv.begin(0, 300);
+  const older = tv.queueNext('old');
+  const newer = tv.queueNext('new');
+  replies[1]('uri:new');
+  await newer;
+  replies[0]('uri:old');
+  await older;
+  assert.equal(tv.nextUri, 'uri:new');
+});
+
+test('cast: a playing receiver can report a position of zero', async () => {
+  const { tv, set, clock } = harness({ pollEvery: 1 });
+  tv.begin(60, 300);
+  set.says({ state: 'PLAYING', position: 0 });
+  tv.run();
+  clock.tick();
+  await settle();
+  assert.equal(tv.pos, 0, 'a rewind to the beginning must reset the carried clock');
+  tv.stop();
+});

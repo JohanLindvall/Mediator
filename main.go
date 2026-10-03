@@ -166,7 +166,9 @@ func main() {
 		dbPath: *dbPath, rescan: *rescan, analyze: *analyze, credits: *credits, open: *open, lock: *lock, debug: *debug,
 		tmpDir: *tmpDir, tmpMax: maxScratch, archiveMax: *archiveMax,
 	}
-	if err := run(cfg, log); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, cfg, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -183,8 +185,8 @@ func flagSet(name string) bool {
 	return found
 }
 
-func run(cfg config, log *slog.Logger) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+func run(ctx context.Context, cfg config, log *slog.Logger) error {
+	ctx, stop := context.WithCancel(ctx)
 	defer stop()
 	// Before anything walks: the cap decides what an archive brings in.
 	library.SetArchiveMax(cfg.archiveMax)
@@ -250,8 +252,9 @@ func run(cfg config, log *slog.Logger) error {
 		// Directories chosen in the preferences outrank the ones on the
 		// command line, which are the seed for a first run rather than the
 		// setting itself — otherwise a directory removed in the dialog would
-		// come back at every restart.
-		if stored := db.Roots(); len(stored) > 0 {
+		// come back at every restart. With -lock, the command line is the
+		// authority before either the saved index or the scanner sees roots.
+		if stored := db.Roots(); !cfg.lock && len(stored) > 0 {
 			lib.SetRoots(stored)
 			log.Info("scanning the stored directories", "dirs", lib.Roots())
 		}
@@ -325,6 +328,7 @@ func run(cfg config, log *slog.Logger) error {
 
 	watcher, err := library.NewWatcher(lib)
 	if err != nil {
+		close(analysisDone) // its producer has not started
 		return fmt.Errorf("watcher: %w", err)
 	}
 
@@ -524,19 +528,9 @@ func run(cfg config, log *slog.Logger) error {
 		// Deleting from the disk is the owner's, and -lock is the owner
 		// saying nothing here may alter the library (server/delete.go).
 		srv.AllowDeletes()
-		// Two requests changing the directories at once are two
-		// read-modify-writes over two stores with nothing between them: one
-		// can write its list to the database while the other writes a
-		// different list to the index, leaving the running library indexing
-		// one set and the next restart reading the other — which is the very
-		// disagreement this callback exists to prevent, and the dialog is
-		// then answered with the list that lost. Nothing else serializes
-		// them, there being no authentication here and so no reason two
-		// clients cannot ask together.
-		var prefsMu sync.Mutex
+		// The server serializes preference callbacks; scanGate serializes
+		// their background walks with the startup and reconciliation walks.
 		srv.AllowRootChanges(func(roots []string) ([]string, error) {
-			prefsMu.Lock()
-			defer prefsMu.Unlock()
 			if db != nil {
 				if err := db.SetRoots(roots); err != nil {
 					return nil, err
@@ -607,7 +601,7 @@ func run(cfg config, log *slog.Logger) error {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Info("listening", "url", url, "roots", cfg.roots)
+		log.Info("listening", "url", url, "roots", lib.Roots())
 		if err := httpSrv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}

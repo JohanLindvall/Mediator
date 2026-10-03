@@ -6347,6 +6347,41 @@ it behind `recover` (`enrich.go`) — preserve that when adding tag reads.
 
 ## Review invariants
 
+- Apply exclusions while restoring persisted items, before the first scan.
+  `-lock` uses command-line roots even when the database has saved preferences.
+  Root-level startup tests run the real listener and cancel through `run`'s
+  context; the Docker Go-source stage must copy `main*.go`, including tests.
+- Every HLS child resolves the current scoped item and matches its ID to the
+  session. A live session snapshot and a restored session key grant no access.
+  Media responses vary on both restriction headers; collection validators
+  include a per-server epoch. Subtitle validators hash the converted bytes.
+- Stream ZIP directory records through a bounded buffer and count records
+  actually read. Required ZIP64 values must be present and fit signed bounds;
+  local method/flags must agree with the directory. An unpacker must cap bytes
+  written before checking for excess output, not after filling the disk.
+- MP4 and EBML children stay within their parent's header and payload bounds.
+  Check lengths by subtraction before adding offsets. Sample dimensions and
+  clocks belong to their own records, never adjacent bytes. Keep the synthetic
+  MP4/ZIP fuzz targets alongside the parser regression tests.
+- DVD timestamp readers share the archive seek validator. Reject negative
+  offsets and reads beyond EOF before rounding to sectors or allocating, and
+  clamp the sector end without overflowing the file offset.
+- Bound sidecar and extracted subtitles to 16 MiB before conversion, including
+  ffmpeg stdout. Bounded writers must not inherit a `ReadFrom` that bypasses
+  `Write`. HLS labels are single quoted-string attributes with unique names,
+  including collisions between natural names and generated suffixes.
+- Create new databases with `0600`; derived crop records participate in pruning.
+  Existing database permissions are preserved and documented for upgrades.
+- DLNA relative control URLs use an explicit URLBase or the final description
+  URL after redirects. Reject oversized, incomplete and non-SOAP responses;
+  a SOAP fault is a failure even if the device sends HTTP 200. Resolve the
+  receiver host from the transport control URL.
+- Cast polling has one request in flight and discards answers predating a
+  local control or item change. Queue replies follow the latest request, and
+  a playing receiver's zero position is meaningful. Media-key callbacks keep
+  their owner as `this`. Initial lightbox loads, steps and swipes invalidate
+  superseded navigation; stale preloads do not start image requests.
+
 - `http.go` owns cross-origin write protection, response security headers and
   request-scoped parsing of the proxy restrictions. `contentOf` and `pathsOf`
   reuse that value, including through signed routing, rather than parsing CSV

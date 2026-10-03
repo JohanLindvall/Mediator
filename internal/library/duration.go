@@ -262,28 +262,34 @@ func mp4Duration(f io.ReaderAt, size int64) int64 {
 	if !ok {
 		return 0
 	}
-	mvhdS, _, ok := child(f, moovS, moovE, "mvhd")
+	mvhdS, mvhdE, ok := child(f, moovS, moovE, "mvhd")
 	if !ok {
 		return 0
 	}
-	return mp4Mvhd(f, mvhdS)
+	return mp4Mvhd(io.NewSectionReader(f, mvhdS, mvhdE-mvhdS), 0)
 }
 
 func mp4Mvhd(f io.ReaderAt, pos int64) int64 {
 	var b [32]byte
-	if _, err := f.ReadAt(b[:], pos); err != nil {
+	if _, err := f.ReadAt(b[:20], pos); err != nil {
 		return 0
 	}
 	var scale, dur uint64
-	if b[0] == 1 { // version 1: 64-bit creation/modification times
+	switch b[0] {
+	case 1: // version 1: 64-bit creation/modification times
+		if _, err := f.ReadAt(b[20:], pos+20); err != nil {
+			return 0
+		}
 		scale = uint64(binary.BigEndian.Uint32(b[20:24]))
 		dur = binary.BigEndian.Uint64(b[24:32])
-	} else {
+	case 0:
 		scale = uint64(binary.BigEndian.Uint32(b[12:16]))
 		dur = uint64(binary.BigEndian.Uint32(b[16:20]))
 		if dur == 0xFFFFFFFF { // "unknown"
 			return 0
 		}
+	default:
+		return 0
 	}
 	if scale == 0 || dur > math.MaxUint64/1000 {
 		return 0 // a corrupt 64-bit duration would wrap into a plausible number

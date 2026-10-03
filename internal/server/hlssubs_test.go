@@ -19,11 +19,13 @@ func TestMasterPlaylistNamesEveryRendition(t *testing.T) {
 		{Index: 2, Label: "English", Lang: "en"},
 		{Index: 3, Label: ""},
 		{Index: 4, Label: `Say "hello"`},
+		{Index: 5, Label: "English 2"},
 	}
 	body := string(masterPlaylist("sess", library.Item{Duration: 60_000, Size: 1 << 20}, subs, "1", true, quality{}, 0))
 	for _, want := range []string{
 		`NAME="English",`, `NAME="English 2",`, `NAME="English 3",`,
 		`NAME="Track 4",`, `NAME="Say 'hello'",`,
+		`NAME="English 2 2",`,
 	} {
 		if strings.Count(body, want) != 1 {
 			t.Errorf("%s appears %d times in\n%s", want, strings.Count(body, want), body)
@@ -39,6 +41,16 @@ func TestMasterPlaylistNamesEveryRendition(t *testing.T) {
 	}
 	if !strings.Contains(body, "sess/media.m3u8") {
 		t.Errorf("no media playlist beside the renditions:\n%s", body)
+	}
+}
+
+func TestSubtitleMetadataCannotInjectHLSLines(t *testing.T) {
+	subs := []library.Subtitle{{Label: "title\r\n#EXT-X-ENDLIST", Lang: "en\n#EXT-X-ENDLIST"}}
+	body := string(masterPlaylist("s", library.Item{}, subs, "", false, quality{}, 0))
+	for _, line := range strings.Split(body, "\n") {
+		if strings.HasPrefix(line, "#EXT-X-ENDLIST") || strings.ContainsRune(line, '\r') {
+			t.Fatalf("metadata became playlist syntax: %q", body)
+		}
 	}
 }
 

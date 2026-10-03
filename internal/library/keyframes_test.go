@@ -11,6 +11,20 @@ import (
 
 // ---- Matroska ----------------------------------------------------------------
 
+func TestEBMLElementStaysInsideItsParent(t *testing.T) {
+	for _, data := range [][]byte{{0xEC, 0xFF}, {0xEC, 0x80}, {0xEC, 0x81, 0}} {
+		r := ebmlReader{f: bytes.NewReader(data), size: int64(len(data))}
+		for end := int64(0); end < int64(len(data)); end++ {
+			if _, start, stop, ok := r.elem(0, end); ok {
+				t.Errorf("%x: parent ends at %d, accepted child [%d, %d)", data, end, start, stop)
+			}
+		}
+		if _, _, _, ok := r.elem(0, int64(len(data))); !ok {
+			t.Errorf("refused valid element %x", data)
+		}
+	}
+}
+
 // ebml is one element: the id bytes as they are written, and the payload
 // behind an eight-byte size, which is the one length every reader has to
 // take and keeps the fixture's offsets independent of the numbers in it.

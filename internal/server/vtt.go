@@ -134,7 +134,7 @@ func shiftVTT(data []byte, shift float64) []byte {
 // false when the whole cue has passed before the new origin. Anything else on
 // the line — cue settings such as line: or align: — is left alone.
 func shiftCueTiming(line string, shift float64) (string, bool) {
-	at := vttTime.FindAllStringIndex(line, -1)
+	at := vttTime.FindAllStringIndex(line, 2)
 	if len(at) < 2 {
 		return line, true // not a timing line after all
 	}
@@ -153,22 +153,33 @@ func shiftCueTiming(line string, shift float64) (string, bool) {
 
 func parseVTTTime(s string) (float64, bool) {
 	m := vttTime.FindStringSubmatch(s)
-	if m == nil {
+	if m == nil || m[0] != s {
 		return 0, false
 	}
-	hours, _ := strconv.Atoi(m[1]) // empty when the timestamp has no hours
+	hours := 0.0
+	if m[1] != "" {
+		var err error
+		hours, err = strconv.ParseFloat(m[1], 64)
+		if err != nil || hours > maxMediaSeconds/3600 {
+			return 0, false
+		}
+	}
 	minutes, _ := strconv.Atoi(m[2])
 	seconds, _ := strconv.Atoi(m[3])
+	if minutes >= 60 || seconds >= 60 {
+		return 0, false
+	}
 	frac := m[4]
 	for len(frac) < 3 {
 		frac += "0"
 	}
 	millis, _ := strconv.Atoi(frac)
-	return float64(hours*3600+minutes*60+seconds) + float64(millis)/1000, true
+	total := hours*3600 + float64(minutes*60+seconds) + float64(millis)/1000
+	return total, total <= maxMediaSeconds
 }
 
 func formatVTTTime(t float64) string {
-	millis := int(t*1000 + 0.5)
+	millis := int64(t*1000 + 0.5)
 	return fmt.Sprintf("%02d:%02d:%02d.%03d",
 		millis/3_600_000, millis/60_000%60, millis/1000%60, millis%1000)
 }
@@ -335,13 +346,9 @@ func srtTiming(line string) string {
 // srtStamp normalises one timestamp: WebVTT may leave the hours off and may
 // write fewer than three digits of milliseconds; SubRip may not.
 func srtStamp(s string) string {
-	m := vttTime.FindStringSubmatch(s)
-	if m == nil {
+	t, ok := parseVTTTime(s)
+	if !ok {
 		return "00:00:00,000"
 	}
-	h, _ := strconv.Atoi(m[1])
-	mm, _ := strconv.Atoi(m[2])
-	ss, _ := strconv.Atoi(m[3])
-	ms := (m[4] + "000")[:3]
-	return fmt.Sprintf("%02d:%02d:%02d,%s", h, mm, ss, ms)
+	return strings.Replace(formatVTTTime(t), ".", ",", 1)
 }

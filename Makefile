@@ -39,7 +39,8 @@ run: build
 	./mediator -listen :8080 $(DIRS)
 
 clean:
-	rm -rf mediator media web/dist web/node_modules
+	rm -f mediator media
+	rm -rf web/dist web/node_modules
 
 # What in the tracked files could be a real name, for a reader to judge —
 # see CLAUDE.md, "Writing about this project". Runs on the host: grep only.

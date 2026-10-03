@@ -33,6 +33,11 @@ func TestValidateRoots(t *testing.T) {
 			t.Fatal("an empty list should be refused")
 		}
 	})
+	t.Run("empty path is refused", func(t *testing.T) {
+		if _, err := validateRoots([]string{""}); err == nil {
+			t.Fatal("an empty path silently scans the working directory")
+		}
+	})
 	t.Run("a file is not a directory", func(t *testing.T) {
 		if _, err := validateRoots([]string{file}); err == nil {
 			t.Fatal("a file should be refused")

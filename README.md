@@ -4,6 +4,11 @@ A fast, self-contained web media browser: point it at your directories and get
 a slick, responsive UI for your videos, photos and music — served from a single
 Go binary with the TypeScript frontend embedded.
 
+[Quick start](#quick-start) · [Docker](#docker) ·
+[Playing to a television](#playing-to-a-television) ·
+[Restricted views](#one-library-several-faces) ·
+[Troubleshooting](#troubleshooting) · [Development](#development) · [API](#api)
+
 ## Features
 
 - **Play on a TV, the way that actually reaches one** — the button in the
@@ -859,9 +864,21 @@ first run's, at least: once directories are chosen in the preferences those
 are what is indexed, and the command line is only the seed. `-lock` keeps the
 command line in charge.
 
+Exclusions apply when restoring the saved index as well as when scanning: a
+new `-exclude` rule takes effect before the server starts serving cached items.
+Empty paths in directory preferences are rejected.
+
 Only regular files are indexed. Named pipes, devices and links to directories
 are skipped, including subtitle and archive names, so they cannot stall a scan
 or appear as playable items. Rescans remove entries replaced by such files.
+
+Archive readers validate record boundaries and required ZIP64 fields. ZIP
+directories are read incrementally, with the entry limit checked against actual
+records as well as the declared count. Unpacking never writes more bytes than
+the member declares; excess output or a bad checksum rejects the cached copy.
+Text subtitle input and extracted output are limited to 16 MiB per track.
+Subtitle ETags follow the converted captions, so editing a sidecar takes effect
+without changing the video's modification time.
 
 Browser requests that change state must come from the same origin. Other sites
 receive 403; command-line clients without browser origin headers still work.
@@ -971,6 +988,11 @@ replacement for the password in front; it is a way for the things that
 cannot answer one to fetch what they were pointed at. The key lives in the
 blob database, so links survive a restart and deleting the database
 invalidates all of them.
+
+New database files are created with owner-only permissions (`0600` on Unix).
+Existing files retain their permissions; when upgrading, use
+`chmod 600 data/media.db` (or your `-db` path) if other local users should not
+read the library state and signing key. Protect database backups the same way.
 
 The service's debug access log redacts tokens from request and redirect paths.
 Configure proxy access logs with the same care: a signed URL is a credential.
@@ -1141,6 +1163,12 @@ of the cache key, in the server's own caches and in the `ETag` it sends, so a
 client that changes faces — or a shared cache serving two of them — cannot be
 handed the wrong library.
 
+Media responses also advertise both restriction headers in `Vary`. Each HLS
+segment, child playlist and subtitle request rechecks the current item and
+request scope, including signed links and sessions restored after a restart.
+Collection ETags change across server restarts to prevent old version counters
+from validating a different listing.
+
 Note what this is not: the header is the whole of the permission, so anything
 that can set it can see anything. It restricts a *face*, in the same way and
 with the same trust model as the content header.
@@ -1294,7 +1322,7 @@ All build/check targets run inside Docker as well:
 ```sh
 make generate   # regenerate web/src/types.gen.ts from the Go API types
 make test       # frontend tests/build + go vet + go test -race ./...
-make vet        # go vet only
+make vet        # frontend tests/build + go vet (no Go test run)
 cd web && npm test      # just the frontend tests (Node 24 or newer; run npm ci first)
 cd web && npm run dev   # Vite on :5173, proxies /api to :8080 (Node 24 or newer)
 ```
@@ -1306,12 +1334,32 @@ copy only serves the `npm run dev` flow. Shared playback thresholds are
 also generated from Go, keeping the grid, resume prompt and server filters
 in agreement.
 
-The Docker test stage includes ffmpeg and ffprobe, so media integration tests
-run alongside the unit tests. With Go and those tools installed locally,
-`go test -coverprofile=/tmp/mediator-coverage.out ./...` measures backend coverage; run
+The Docker test stage runs as an unprivileged user and includes ffmpeg and
+ffprobe, so filesystem permissions and media integration tests run alongside
+the unit tests. With Go and those tools installed locally,
+build `web/dist` first with `cd web && npm ci && npm run build`, then return to
+the repository root. `go test -coverprofile=/tmp/mediator-coverage.out ./...` measures backend coverage; run
 coverage and race detection separately because combining both adds substantial
 cost to audio fingerprint tests. `npm test` covers parsing, playback decisions,
-media-buffer cancellation, API helpers and asynchronous listing updates.
+media-buffer cancellation, API helpers, asynchronous listing updates, casting
+races and media-key ownership. Startup tests exercise saved directory choices,
+locked roots and graceful cancellation through a live HTTP listener.
+
+Additional checks from the repository root (Go required):
+
+```sh
+go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go test ./internal/library -run '^$' -fuzz FuzzMediaBoxBounds -fuzztime 30s
+go test ./internal/library -run '^$' -fuzz FuzzZipDirectory -fuzztime 30s
+cd web && npm audit
+```
+
+The fuzz targets use synthetic input and check media-box boundaries and ZIP
+directory limits. DLNA tests use local simulated devices; hardware playback
+and discovery still need checking on the receivers a deployment uses.
+`make clean` removes generated files and dependencies and refuses to recursively
+remove a directory named `media` or `mediator`.
 
 Listing pages are kept in one library generation: a newer answer cancels older
 requests, so late pages cannot restore deleted rows or roll back counts. A

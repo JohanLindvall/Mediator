@@ -23,9 +23,6 @@ func (l *Library) SetLike(id string, like int) {
 	}
 }
 
-// likeOf reports the verdict on one item: 1, -1, or 0.
-func (l *Library) likeOf(id string) int { return l.likes.get(id) }
-
 // likesSnapshot copies the whole map, for the passes that would otherwise
 // take the lock once per item.
 func (l *Library) likesSnapshot() map[string]int {

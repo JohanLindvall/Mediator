@@ -94,17 +94,11 @@ func (r *psFix) Close() error { return r.src.Close() }
 func (r *psFix) Seek(off int64, whence int) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	switch whence {
-	case io.SeekStart:
-		r.pos = off
-	case io.SeekCurrent:
-		r.pos += off
-	case io.SeekEnd:
-		r.pos = r.size + off
+	pos, err := seekPosition(r.pos, r.size, off, whence)
+	if err != nil {
+		return r.pos, err
 	}
-	if r.pos < 0 {
-		return 0, fmt.Errorf("negative position")
-	}
+	r.pos = pos
 	return r.pos, nil
 }
 
@@ -123,16 +117,19 @@ func (r *psFix) Read(p []byte) (int, error) {
 // covers. A request rarely lands on a sector boundary, so the enclosing
 // sectors are read whole, corrected, and the wanted part sliced out of them.
 func (r *psFix) ReadAt(p []byte, off int64) (int, error) {
+	if off < 0 {
+		return 0, fmt.Errorf("negative offset")
+	}
 	if len(p) == 0 {
 		return 0, nil
 	}
-	lo := off - off%psSector
-	hi := off + int64(len(p))
-	if rem := hi % psSector; rem != 0 {
-		hi += psSector - rem
+	if off >= r.size {
+		return 0, io.EOF
 	}
-	if hi > r.size {
-		hi = r.size
+	lo := off - off%psSector
+	hi := off + min(int64(len(p)), r.size-off)
+	if rem := hi % psSector; rem != 0 {
+		hi += min(psSector-rem, r.size-hi)
 	}
 	buf := make([]byte, hi-lo)
 	n, err := r.src.ReadAt(buf, lo)

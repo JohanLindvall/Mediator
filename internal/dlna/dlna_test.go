@@ -63,7 +63,10 @@ func TestOutArgsReadsResponse(t *testing.T) {
 		`<TrackURI>http://192.0.2.9:8080/api/stream/abc</TrackURI>` +
 		`<TrackMetaData>&lt;DIDL-Lite&gt;&lt;RelTime&gt;lies&lt;/RelTime&gt;&lt;/DIDL-Lite&gt;</TrackMetaData>` +
 		`</u:GetPositionInfoResponse></s:Body></s:Envelope>`)
-	out := outArgs(doc)
+	out, err := outArgs(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if out["TrackDuration"] != "0:59:57" || out["RelTime"] != "0:00:16" {
 		t.Fatalf("times not read: %v", out)
 	}
@@ -83,7 +86,10 @@ func TestOutArgsReadsFault(t *testing.T) {
 		`<UPnPError xmlns="urn:schemas-upnp-org:control-1-0"><errorCode>701</errorCode>` +
 		`<errorDescription>Transition not available</errorDescription></UPnPError>` +
 		`</detail></s:Fault></s:Body></s:Envelope>`)
-	out := outArgs(doc)
+	out, err := outArgs(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if out["errorCode"] != "701" || !strings.Contains(out["errorDescription"], "Transition") {
 		t.Fatalf("fault not read: %v", out)
 	}

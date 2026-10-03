@@ -42,21 +42,21 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 	if n, err := strconv.Atoi(chosen); err == nil && n >= 0 && n < len(subs) {
 		def = n
 	}
-	seen := map[string]int{}
+	seen := map[string]bool{}
+	next := map[string]int{}
 	for i, sub := range subs {
 		// NAME must be unique within the group or players collapse them.
-		base := strings.ReplaceAll(sub.Label, `"`, "'")
+		base := hlsAttribute(sub.Label)
 		if base == "" {
 			base = fmt.Sprintf("Track %d", i+1)
 		}
 		name := base
-		// Counted under the name as it will be written, or three tracks
-		// labelled alike came out as one name twice and the player folded
-		// them into one entry.
-		if n := seen[base]; n > 0 {
-			name = fmt.Sprintf("%s %d", base, n+1)
+		// Generated suffixes can also be real labels on a different track.
+		for n := max(2, next[base]); seen[name]; n++ {
+			name = fmt.Sprintf("%s %d", base, n)
+			next[base] = n + 1
 		}
-		seen[base]++
+		seen[name] = true
 		// DEFAULT and AUTOSELECT only on the viewer's own choice: with
 		// AUTOSELECT on everything, a player picks by system language and
 		// subtitles appear that nobody asked for — the menu is the offer.
@@ -66,7 +66,7 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 		}
 		lang := ""
 		if sub.Lang != "" {
-			lang = fmt.Sprintf(`LANGUAGE="%s",`, strings.ReplaceAll(sub.Lang, `"`, ""))
+			lang = fmt.Sprintf(`LANGUAGE="%s",`, hlsAttribute(sub.Lang))
 		}
 		fmt.Fprintf(&b,
 			"#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"text\",NAME=\"%s\",%s%s,URI=\"%s/sub%d.m3u8\"\n",
@@ -103,6 +103,20 @@ func masterPlaylist(sid string, it library.Item, subs []library.Subtitle, chosen
 	}
 	fmt.Fprintf(&b, "#EXT-X-STREAM-INF:BANDWIDTH=%d,SUBTITLES=\"text\"\n%s/%s\n", bw, sid, media)
 	return []byte(b.String())
+}
+
+// An HLS quoted string cannot contain quotes or line breaks. Labels and
+// language tags originate in media files and must stay inside one attribute.
+func hlsAttribute(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '"' {
+			return '\''
+		}
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 var hlsSubPattern = regexp.MustCompile(`^sub([0-9]{1,3})\.(m3u8|vtt)$`)
@@ -181,6 +195,15 @@ func (s *Server) handleHLSChild(w http.ResponseWriter, r *http.Request, sess *hl
 	http.ServeContent(w, r, name, time.Now(), strings.NewReader(string(vtt)))
 }
 
+// itemID is the converted item's identity, including sessions adopted from disk.
+func (sess *hlsSession) itemID() string {
+	if sess.item.ID != "" {
+		return sess.item.ID
+	}
+	id, _, _ := strings.Cut(sess.key, "|")
+	return id
+}
+
 // hlsSessionItem is the film a session converts and where it started.
 //
 // A session made this run carries a snapshot. One adopted from a previous
@@ -189,22 +212,20 @@ func (s *Server) handleHLSChild(w http.ResponseWriter, r *http.Request, sess *hl
 // table starts nowhere in particular: its clock is the film's own, and the
 // cues need no rebasing at all.
 func (s *Server) hlsSessionItem(r *http.Request, sess *hlsSession) (library.Item, float64, bool) {
-	it, start := sess.item, sess.start
-	if it.ID == "" {
+	// A snapshot describes the conversion, not this caller's permission.
+	// Always resolve the live item, including sessions created this run.
+	it, ok := s.item(r, sess.itemID())
+	if !ok {
+		return library.Item{}, 0, false
+	}
+	start := sess.start
+	if sess.item.ID == "" {
 		parts := strings.Split(sess.key, "|")
 		if len(parts) < 4 {
 			return it, 0, false
 		}
-		// Through the face, as every by-id route is: the token is
-		// unguessable, but a session kept across a restart is the one path
-		// where the item was resolved before this request's face was known.
-		got, ok := s.item(r, parts[0])
-		if !ok {
-			return it, 0, false
-		}
-		it = got
 		if parts[3] != hlsVODField {
-			start, _ = strconv.ParseFloat(parts[3], 64)
+			start = mediaSeconds(parts[3])
 		}
 	}
 	// The embedded tracks come from the probe; a session resumed after a

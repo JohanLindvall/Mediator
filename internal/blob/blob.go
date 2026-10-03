@@ -83,7 +83,8 @@ func Open(path string) (*DB, error) {
 	}
 	// Timeout so a second instance pointed at the same file fails fast
 	// instead of blocking forever on the file lock.
-	db, err := bolt.Open(path, 0o644, &bolt.Options{Timeout: time.Second})
+	// This file also holds the secret used to sign playable links.
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
 	if err != nil {
 		if errors.Is(err, berrors.ErrTimeout) {
 			// The bare "timeout" from the lock says nothing about what to
@@ -712,7 +713,7 @@ func putJSON(b *bolt.Bucket, id string, v any) error {
 func (s *DB) Prune(live map[string]struct{}) (int, error) {
 	n := 0
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, featBucket, skipBucket, printBucket, tempoBucket} {
+		for _, name := range [][]byte{itemBucket, metaBucket, thumbBucket, cropBucket, featBucket, skipBucket, printBucket, tempoBucket} {
 			b := tx.Bucket(name)
 			var stale [][]byte
 			err := b.ForEach(func(k, _ []byte) error {

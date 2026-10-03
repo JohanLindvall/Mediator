@@ -574,13 +574,14 @@ func qualifySegments(body []byte, id string) []byte {
 
 // handleHLSFile serves one file of a conversion.
 func (s *Server) handleHLSFile(w http.ResponseWriter, r *http.Request) {
-	if s.hls == nil {
+	it, ok := s.item(r, r.PathValue("id"))
+	if !ok || it.Kind != library.KindVideo || s.hls == nil {
 		http.NotFound(w, r)
 		return
 	}
 	name := r.PathValue("file")
 	sess := s.hls.byToken(r.PathValue("sid"))
-	if sess == nil {
+	if sess == nil || sess.itemID() != it.ID {
 		// Reaped, evicted, or never ours. A player that comes back to a
 		// session that has gone is told so plainly rather than being handed
 		// somebody else's segments.

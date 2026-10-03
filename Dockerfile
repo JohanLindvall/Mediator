@@ -10,7 +10,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 # Explicit copies so frontend edits don't bust the Go layer cache.
 # A new top-level Go package needs a COPY line here.
-COPY main.go ./
+COPY main*.go ./
 COPY cmd/ cmd/
 COPY internal/ internal/
 
@@ -58,6 +58,10 @@ FROM vet AS test
 # Include the runtime's media tools so integration tests exercise conversions
 # and analysis rather than skipping them because ffmpeg is absent.
 RUN apk add --no-cache gcc musl-dev ffmpeg
+# Filesystem permission checks should run as an ordinary user. A distinct UID
+# also avoids sharing the host root user's inotify-instance allowance.
+RUN adduser -D -u 10001 test
+USER test
 RUN CGO_ENABLED=1 go test -race ./...
 
 # --- BuildKit --output targets: `make build` / `make generate` ----------------

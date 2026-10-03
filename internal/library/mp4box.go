@@ -62,8 +62,11 @@ func SampleInfo(it Item) (video string, width, height int, audio string, fps flo
 // walk rather than being guessed at: this is used to decide whether a copy
 // will help, and a wrong answer is worse than no answer.
 func eachBox(f io.ReaderAt, pos, end int64, fn func(typ string, start, stop int64) bool) {
+	if pos < 0 || end < pos {
+		return
+	}
 	var hdr [16]byte
-	for pos+8 <= end {
+	for end-pos >= 8 {
 		if _, err := f.ReadAt(hdr[:8], pos); err != nil {
 			return
 		}
@@ -74,6 +77,9 @@ func eachBox(f io.ReaderAt, pos, end int64, fn func(typ string, start, stop int6
 		case 0: // to the end of the enclosing space
 			boxSize = end - pos
 		case 1: // 64-bit size follows the header
+			if end-pos < 16 {
+				return
+			}
 			if _, err := f.ReadAt(hdr[8:16], pos+8); err != nil {
 				return
 			}
@@ -81,7 +87,7 @@ func eachBox(f io.ReaderAt, pos, end int64, fn func(typ string, start, stop int6
 			payload = pos + 16
 			minSize = 16
 		}
-		if boxSize < minSize || pos+boxSize > end {
+		if boxSize < minSize || boxSize > end-pos {
 			return
 		}
 		if !fn(string(hdr[4:8]), payload, pos+boxSize) {
@@ -155,7 +161,7 @@ func sampleInfo(f io.ReaderAt, size int64) (video string, width, height int, aud
 // then comes out at its average, which is the only single number there is.
 func trakFPS(f io.ReaderAt, mdiaS, mdiaE, stblS, stblE int64) float64 {
 	mdhdS, mdhdE, ok := child(f, mdiaS, mdiaE, "mdhd")
-	if !ok || mdhdS+20 > mdhdE {
+	if !ok || mdhdE-mdhdS < 20 {
 		return 0
 	}
 	var head [20]byte
@@ -165,8 +171,15 @@ func trakFPS(f io.ReaderAt, mdiaS, mdiaE, stblS, stblE int64) float64 {
 	// mdhd: version+flags (4), then two times and the timescale — four bytes
 	// each at version 0, eight at version 1.
 	scaleAt := int64(12)
-	if head[0] == 1 {
+	switch head[0] {
+	case 0:
+	case 1:
 		scaleAt = 20
+	default:
+		return 0
+	}
+	if mdhdE-mdhdS < scaleAt+4 {
+		return 0
 	}
 	var sc [4]byte
 	if _, err := f.ReadAt(sc[:], mdhdS+scaleAt); err != nil {
@@ -226,8 +239,8 @@ func trakInfo(f io.ReaderAt, pos, end int64) (kind, format string, width, height
 	if !ok {
 		return "", "", 0, 0, 0
 	}
-	hdlrS, _, ok := child(f, mdiaS, mdiaE, "hdlr")
-	if !ok {
+	hdlrS, hdlrE, ok := child(f, mdiaS, mdiaE, "hdlr")
+	if !ok || hdlrE-hdlrS < 12 {
 		return "", "", 0, 0, 0
 	}
 	// hdlr: version+flags (4), pre_defined (4), then the handler type.
@@ -253,14 +266,21 @@ func trakInfo(f io.ReaderAt, pos, end int64) (kind, format string, width, height
 	}
 	// stsd: version+flags (4), entry_count (4), then entries, each of which
 	// begins with its own size and four-character format.
-	if stsdS+16 > stsdE {
+	if stsdE-stsdS < 16 {
 		return "", "", 0, 0, 0
 	}
 	var b [8]byte
-	if _, err := f.ReadAt(b[:], stsdS+8); err != nil {
+	if _, err := f.ReadAt(b[:], stsdS); err != nil || binary.BigEndian.Uint32(b[4:]) == 0 {
 		return "", "", 0, 0, 0
 	}
-	format = string(b[4:8])
+	var entryS, entryE int64
+	eachBox(f, stsdS+8, stsdE, func(t string, s, e int64) bool {
+		format, entryS, entryE = t, s, e
+		return false
+	})
+	if format == "" {
+		return "", "", 0, 0, 0
+	}
 	if kind != "vide" {
 		return kind, format, 0, 0, 0
 	}
@@ -269,10 +289,10 @@ func trakInfo(f io.ReaderAt, pos, end int64) (kind, format string, width, height
 	// then two pre-defined, two reserved and three more pre-defined — and
 	// then the picture's size, sixteen bits each.
 	var d [4]byte
-	if stsdS+8+36 > stsdE {
+	if entryE-entryS < 28 {
 		return kind, format, 0, 0, 0
 	}
-	if _, err := f.ReadAt(d[:], stsdS+8+32); err != nil {
+	if _, err := f.ReadAt(d[:], entryS+24); err != nil {
 		return kind, format, 0, 0, 0
 	}
 	return kind, format, int(binary.BigEndian.Uint16(d[0:2])), int(binary.BigEndian.Uint16(d[2:4])), trakFPS(f, mdiaS, mdiaE, stblS, stblE)

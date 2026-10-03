@@ -66,6 +66,18 @@ func TestParseVTTTimeHoursOptional(t *testing.T) {
 	}
 }
 
+func TestParseVTTTimeRejectsInvalidClocks(t *testing.T) {
+	for _, in := range []string{
+		"9223372036854775807:00:00.000", "999999999999999999999:00:00.000",
+		"01:60:00.000", "01:00:60.000", "60:00.000",
+		"prefix 00:00:01.000", "00:00:01.0000", "-00:00:01.000",
+	} {
+		if got, ok := parseVTTTime(in); ok {
+			t.Errorf("parseVTTTime(%q) accepted %v", in, got)
+		}
+	}
+}
+
 func TestFormatVTTTimeRoundTrip(t *testing.T) {
 	for _, want := range []string{"00:00:00.000", "00:02:26.136", "01:59:59.999"} {
 		v, ok := parseVTTTime(want)

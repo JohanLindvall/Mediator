@@ -81,8 +81,10 @@ func TestFilterListIsReadOnceAndSilenceIsNotRemembered(t *testing.T) {
 		t.Errorf("%d readings for two asks after a failure; each deserves its own", runs)
 	}
 	answer = true
-	if !haveFilter("/nowhere/ffmpeg", "zscale") || !haveFilter("/nowhere/ffmpeg", "zscale") {
-		t.Fatal("the answer that was read is not being served")
+	for range 2 {
+		if !haveFilter("/nowhere/ffmpeg", "zscale") {
+			t.Fatal("the answer that was read is not being served")
+		}
 	}
 	if runs != 3 {
 		t.Errorf("%d readings; an answer is read once and remembered", runs)

@@ -1,7 +1,9 @@
 package library
 
 import (
+	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 )
@@ -11,6 +13,25 @@ import (
 type File interface {
 	io.ReadSeekCloser
 	io.ReaderAt
+}
+
+// seekPosition validates a seek before an archive or DVD reader changes its
+// position. Seeking beyond EOF is allowed; wrapping an int64 is not.
+func seekPosition(pos, size, offset int64, whence int) (int64, error) {
+	var base int64
+	switch whence {
+	case io.SeekStart:
+	case io.SeekCurrent:
+		base = pos
+	case io.SeekEnd:
+		base = size
+	default:
+		return 0, fmt.Errorf("invalid whence %d", whence)
+	}
+	if base < 0 || offset < -base || offset > math.MaxInt64-base {
+		return 0, fmt.Errorf("seek position out of range")
+	}
+	return base + offset, nil
 }
 
 // OpenItem opens an item's content for reading, whether it is a plain file,

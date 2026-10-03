@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -61,6 +62,9 @@ type Server struct {
 	remux  *Remuxer
 	hls    *HLS
 	log    *slog.Logger
+	// Library versions restart at zero. Validators from an earlier process
+	// must not validate a different library with the same version number.
+	cacheEpoch string
 	// sign mints and checks the links that carry their own permission, for
 	// the things that fetch media without a browser behind them (sign.go).
 	sign *signer
@@ -145,6 +149,7 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 		lib: lib, st: st, thumbs: thumbs, remux: remux, hls: hls, log: log,
 		sign: newSigner(keys, log),
 		mux:  http.NewServeMux(), transSem: make(chan struct{}, 2),
+		cacheEpoch: rand.Text(),
 	}
 	if ls, ok := keys.(LinkStore); ok {
 		s.links = newLinks(ls, log)
@@ -586,7 +591,7 @@ func (s *Server) versionTag(w http.ResponseWriter, r *http.Request) (int64, bool
 	// The watch version rides in the tag as well: the matching counts these
 	// answers carry include what has been started and finished, which a
 	// saved position changes without moving either library version.
-	tag := fmt.Sprintf(`W/"v%d.%d-%s"`, version, s.lib.WatchVersion(), faceTag(r))
+	tag := fmt.Sprintf(`W/"%s-v%d.%d-%s"`, s.cacheEpoch, version, s.lib.WatchVersion(), faceTag(r))
 	w.Header().Set("ETag", tag)
 	w.Header().Set("Cache-Control", "no-cache")
 	// And said out loud, so a shared cache keeps the answers apart rather
@@ -1310,101 +1315,6 @@ func (f *flushWriter) Write(p []byte) (int, error) {
 		fl.Flush()
 	}
 	return n, err
-}
-
-// handleSubs lists a video's subtitles: the sidecar files found next to it,
-// and the text streams carried inside it, as one list under one numbering.
-func (s *Server) handleSubs(w http.ResponseWriter, r *http.Request) {
-	it, ok := s.item(r, r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	// The embedded tracks come from the probe that runs when a video is
-	// opened; this listing is part of that opening, so it is the moment the
-	// probe exists for — and without it a film asked about cold would deny
-	// the captions it carries.
-	it = s.probed(r.Context(), it)
-	subs := s.lib.Subtitles(it)
-	if subs == nil {
-		subs = []library.Subtitle{}
-	}
-	writeJSON(w, SubtitlesResponse{Subs: subs})
-}
-
-// subtitleData reads one of an item's subtitles by its combined index: the
-// bytes of a sidecar as they are on disk, or an embedded stream already
-// extracted to WebVTT. The name that comes back is what the converters key
-// their decoding on — a sidecar's own, or a .vtt name for the extraction,
-// which has nothing left to decode.
-func (s *Server) subtitleData(ctx context.Context, it library.Item, index int) (data []byte, name string, err error) {
-	if path, ok := s.lib.SubtitlePath(it, index); ok {
-		data, err = os.ReadFile(path)
-		return data, path, err
-	}
-	if stream, ok := s.lib.EmbeddedSubStream(it, index); ok {
-		data, err = s.extractEmbSub(ctx, it, stream)
-		return data, "embedded.vtt", err
-	}
-	return nil, "", fmt.Errorf("no subtitle %d", index)
-}
-
-// handleSubFile serves one subtitle converted to WebVTT, the only format
-// <track> accepts.
-func (s *Server) handleSubFile(w http.ResponseWriter, r *http.Request) {
-	it, ok := s.item(r, r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	index, err := strconv.Atoi(r.PathValue("index"))
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	it = s.probed(r.Context(), it)
-	// Resolved through the index, so a subtitle outside the roots is not
-	// reachable even if something odd is sitting in the directory list.
-	// Past the sidecars the index names a stream inside the file itself,
-	// which is served extracted (embsubs.go) through the same conversions
-	// and the same ?shift= as a sidecar — one list, one numbering, and
-	// nothing downstream knows which kind it picked.
-	data, path, err := s.subtitleData(r.Context(), it, index)
-	if err != nil {
-		if r.Context().Err() == nil {
-			s.log.Debug("subtitle unavailable", "path", it.Rel, "index", index, "err", err)
-		}
-		http.NotFound(w, r)
-		return
-	}
-	// A television reads the sidecar itself and wants SubRip; the browser
-	// takes only WebVTT. Same file, same list, one parameter apart.
-	if r.URL.Query().Get("format") == "srt" {
-		srt, err := ToSRT(path, data)
-		if err != nil {
-			s.log.Debug("subtitle conversion failed", "path", path, "err", err)
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/x-subrip; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		_, _ = w.Write(srt)
-		return
-	}
-	vtt, err := ToVTT(path, data)
-	if err != nil {
-		s.log.Debug("subtitle conversion failed", "path", path, "err", err)
-		http.NotFound(w, r)
-		return
-	}
-	// ?shift= rebases the cues onto a transcoded stream, whose clock starts at
-	// the keyframe it was opened at rather than at the start of the film.
-	if shift := mediaSeconds(r.URL.Query().Get("shift")); shift > 0 {
-		vtt = shiftVTT(vtt, shift)
-	}
-	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-cache")
-	http.ServeContent(w, r, "subtitles.vtt", time.UnixMilli(it.ModTime), bytes.NewReader(vtt))
 }
 
 func (s *Server) handleThumb(w http.ResponseWriter, r *http.Request) {

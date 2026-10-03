@@ -70,12 +70,12 @@ func (r *Renderer) call(ctx context.Context, service, action string, args ...arg
 		return nil, err
 	}
 	defer resp.Body.Close()
-	answer, err := io.ReadAll(io.LimitReader(resp.Body, describeMax))
+	answer, err := readXMLResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	out := outArgs(answer)
-	if resp.StatusCode != http.StatusOK {
+	out, parseErr := outArgs(answer)
+	if resp.StatusCode != http.StatusOK || out["faultcode"] != "" || out["errorCode"] != "" {
 		// A refusal carries its reason in the same envelope; saying which
 		// code came back is the difference between a fault we can look up
 		// and "it did not work".
@@ -89,6 +89,9 @@ func (r *Renderer) call(ctx context.Context, service, action string, args ...arg
 			}
 		}
 		return nil, f
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("dlna: %s returned an invalid %s response: %w", r.Name, action, parseErr)
 	}
 	return out, nil
 }
@@ -133,21 +136,36 @@ func Refused(err error, code int) bool {
 // the containers around them hold nothing but whitespace. Metadata comes
 // back as escaped text rather than as elements, so a document inside a value
 // cannot be mistaken for the values themselves.
-func outArgs(doc []byte) map[string]string {
+func outArgs(doc []byte) (map[string]string, error) {
 	out := map[string]string{}
 	dec := xml.NewDecoder(bytes.NewReader(doc))
 	var text strings.Builder
+	depth, roots := 0, 0
 	for {
 		tok, err := dec.Token()
+		if err == io.EOF && roots == 1 && depth == 0 {
+			return out, nil
+		}
 		if err != nil {
-			return out
+			return nil, err
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:
+			if depth == 0 {
+				roots++
+				if roots != 1 || t.Name.Local != "Envelope" {
+					return nil, errors.New("expected one SOAP Envelope")
+				}
+			}
+			depth++
 			text.Reset()
 		case xml.CharData:
+			if depth == 0 && strings.TrimSpace(string(t)) != "" {
+				return nil, errors.New("text outside SOAP Envelope")
+			}
 			text.Write(t)
 		case xml.EndElement:
+			depth--
 			if v := strings.TrimSpace(text.String()); v != "" {
 				out[t.Name.Local] = v
 			}

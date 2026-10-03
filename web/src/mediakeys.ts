@@ -35,7 +35,7 @@ function apply(): void {
   // something the viewer cannot see.
   set('play', top && (() => top.play()));
   set('pause', top && (() => top.pause()));
-  set('stop', top && (() => (top.stop ?? top.pause)()));
+  set('stop', top && (() => top.stop ? top.stop() : top.pause()));
   set('previoustrack', top?.previous && (() => top.previous?.()));
   set('nexttrack', top?.next && (() => top.next?.()));
 }

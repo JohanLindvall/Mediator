@@ -141,7 +141,9 @@ export class Cast {
 
   /** Where it says it has got to, or null when it cannot be reached. */
   async status(): Promise<CastStatus | null> {
-    const res = await fetch(`/api/renderers/${this.renderer.id}`).catch(() => null);
+    const res = await fetch(`/api/renderers/${this.renderer.id}`, {
+      signal: AbortSignal.timeout(30_000),
+    }).catch(() => null);
     if (!res || !res.ok) return null;
     return (await res.json().catch(() => null)) as CastStatus | null;
   }
@@ -182,7 +184,7 @@ export function fillReceiverMenu(
     const rid = el.dataset.rid ?? '';
     el.classList.toggle('on', rid === o.currentId);
     el.addEventListener('click', () => {
-      const target = knownRenderers().find((r) => r.id === rid);
+      const target = found.find((r) => r.id === rid);
       if (target) o.onPick(target);
     });
   }

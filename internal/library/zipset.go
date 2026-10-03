@@ -29,6 +29,7 @@ package library
 // archives keep it.
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -58,9 +59,8 @@ var (
 // zipMaxParts bounds how many files one set may span, as rarMaxVolumes does.
 const zipMaxParts = 1000
 
-// zipMaxDirectory bounds what is read of an archive's directory into memory
-// at once: a directory of a quarter of a million names is twenty megabytes,
-// and one claiming more than this is not a directory worth believing.
+// zipMaxDirectory bounds the bytes scanned in an archive's directory. Records
+// are streamed through a small buffer; the member cap also bounds their count.
 const zipMaxDirectory = 512 << 20
 
 // isZipContainer says whether a file is the one a zip set is known by: an
@@ -540,13 +540,16 @@ func (z *zipSet) directory(end zipEndRecord) ([]zipDirEntry, error) {
 			z.base = base
 		}
 	}
-	cd := make([]byte, end.cdSize)
-	if err := z.readAt(d, off, cd); err != nil {
+	if _, err := z.span(d, off, end.cdSize); err != nil {
 		return nil, verdictOf(err)
 	}
-	out, err := readZipDirectory(cd)
+	// Stream directory records instead of allocating the archive's declared
+	// size. Enforce the entry budget against records actually read as well as
+	// the untrusted count in the end record.
+	reader := io.NewSectionReader(zipPartAt{z, d}, off, end.cdSize)
+	out, err := readZipDirectory(bufio.NewReaderSize(reader, 64<<10), archiveMax.Load())
 	if err != nil {
-		return nil, zipShape{err}
+		return nil, err
 	}
 	// The count is sixteen bits wide outside zip64, and an archiver past it
 	// that wrote no zip64 record leaves the low bits; the zip package
@@ -558,18 +561,37 @@ func (z *zipSet) directory(end zipEndRecord) ([]zipDirEntry, error) {
 }
 
 // readZipDirectory parses a central directory.
-func readZipDirectory(cd []byte) ([]zipDirEntry, error) {
+func readZipDirectory(r io.Reader, memberLimit int64) ([]zipDirEntry, error) {
 	var out []zipDirEntry
-	for len(cd) > 0 {
-		if len(cd) < 46 || zle.Uint32(cd) != 0x02014b50 {
-			return nil, errors.New("not a directory entry")
+	var header [46]byte
+	var fields []byte
+	for {
+		if _, err := io.ReadFull(r, header[:]); err != nil {
+			if err == io.EOF {
+				return out, nil
+			}
+			if err == io.ErrUnexpectedEOF {
+				return nil, broken("a directory entry runs past the directory")
+			}
+			return nil, verdictOf(err)
 		}
+		if zle.Uint32(header[:]) != 0x02014b50 {
+			return nil, broken("not a directory entry")
+		}
+		if memberLimit > 0 && int64(len(out))/zipEntriesPerMember >= memberLimit {
+			return nil, tooManyMembers{n: int64(len(out)) + 1, max: memberLimit}
+		}
+		cd := header[:]
 		n, m, k := int(zle.Uint16(cd[28:])), int(zle.Uint16(cd[30:])), int(zle.Uint16(cd[32:]))
-		if 46+n+m+k > len(cd) {
-			return nil, errors.New("a directory entry runs past the directory")
+		fields = slices.Grow(fields[:0], n+m+k)[:n+m+k]
+		if _, err := io.ReadFull(r, fields); err != nil {
+			if err == io.EOF || err == io.ErrUnexpectedEOF {
+				return nil, broken("a directory entry runs past the directory")
+			}
+			return nil, verdictOf(err)
 		}
 		e := zipDirEntry{
-			raw:    string(cd[46 : 46+n]),
+			raw:    string(fields[:n]),
 			flags:  zle.Uint16(cd[8:]),
 			method: zle.Uint16(cd[10:]),
 			crc:    zle.Uint32(cd[16:]),
@@ -581,7 +603,7 @@ func readZipDirectory(cd []byte) ([]zipDirEntry, error) {
 		// Sizes, the place and the part outgrow their fields in that order,
 		// and a zip64 field carries those that did, in that order.
 		wantSize, wantPacked, wantOff, wantDisk := e.size == 0xFFFFFFFF, e.packed == 0xFFFFFFFF, e.off == 0xFFFFFFFF, e.disk == 0xFFFF
-		for extra := cd[46+n : 46+n+m]; len(extra) >= 4; {
+		for extra := fields[n : n+m]; len(extra) >= 4; {
 			id, sz := zle.Uint16(extra), int(zle.Uint16(extra[2:]))
 			if 4+sz > len(extra) {
 				break
@@ -590,18 +612,25 @@ func readZipDirectory(cd []byte) ([]zipDirEntry, error) {
 				b := extra[4 : 4+sz]
 				if wantSize && len(b) >= 8 {
 					e.size, b = int64(zle.Uint64(b)), b[8:]
+					wantSize = false
 				}
 				if wantPacked && len(b) >= 8 {
 					e.packed, b = int64(zle.Uint64(b)), b[8:]
+					wantPacked = false
 				}
 				if wantOff && len(b) >= 8 {
 					e.off, b = int64(zle.Uint64(b)), b[8:]
+					wantOff = false
 				}
 				if wantDisk && len(b) >= 4 {
 					e.disk = int(zle.Uint32(b))
+					wantDisk = false
 				}
 			}
 			extra = extra[4+sz:]
+		}
+		if wantSize || wantPacked || wantOff || wantDisk || e.size < 0 || e.packed < 0 || e.off < 0 || e.disk < 0 {
+			return nil, broken("missing or overflowing ZIP64 field")
 		}
 		// A directory, by its name or by its attributes as the system that
 		// wrote it keeps them — the zip package's reading of the same.
@@ -614,9 +643,7 @@ func readZipDirectory(cd []byte) ([]zipDirEntry, error) {
 		}
 		e.dir = e.dir || strings.HasSuffix(e.raw, "/")
 		out = append(out, e)
-		cd = cd[46+n+m+k:]
 	}
-	return out, nil
 }
 
 // dataStart is where a member's bytes begin, read off its own header — which
@@ -639,6 +666,9 @@ func (z *zipSet) dataStart(e zipDirEntry) (int, int64, error) {
 	n, m := int(zle.Uint16(h[26:])), int64(zle.Uint16(h[28:]))
 	if n != len(e.raw) || string(h[30:]) != e.raw {
 		return 0, 0, errors.New("the header there names another member")
+	}
+	if zle.Uint16(h[6:]) != e.flags || zle.Uint16(h[8:]) != e.method {
+		return 0, 0, errors.New("local header flags or compression method disagree with the directory")
 	}
 	return d, off + 30 + int64(n) + m, nil
 }

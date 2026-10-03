@@ -3,9 +3,51 @@ package blob
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestNewDatabaseIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix file permissions")
+	}
+	path := filepath.Join(t.TempDir(), "media.db")
+	db, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode&0o077 != 0 {
+		t.Errorf("database contains a signing key but is accessible to other users: %o", mode)
+	}
+}
+
+func TestPruneCrops(t *testing.T) {
+	db, err := Open(filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, id := range []string{"present", "gone"} {
+		if err := db.PutCrop(id, 1, 2, []byte("crop")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := db.Prune(map[string]struct{}{"present": {}}); err != nil || n != 1 {
+		t.Fatalf("Prune = %d, %v; want one removed crop", n, err)
+	}
+	if _, ok := db.GetCrop("gone", 1, 2); ok {
+		t.Error("deleted file's crop survived pruning")
+	}
+	if data, ok := db.GetCrop("present", 1, 2); !ok || string(data) != "crop" {
+		t.Error("live file's crop was pruned")
+	}
+}
 
 func TestThumbRoundtrip(t *testing.T) {
 	db, err := Open(filepath.Join(t.TempDir(), "sub", "media.db"))

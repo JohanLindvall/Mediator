@@ -31,8 +31,8 @@ func (l *Library) LoadFromDB(db *blob.DB) int {
 	defer l.mu.Unlock()
 	n := 0
 	for _, r := range recs {
-		if !l.UnderRoots(r.Path) {
-			continue // roots changed since the record was written
+		if !l.UnderRoots(r.Path) || l.excluded(r.Path) {
+			continue // roots or exclusions changed since this record was written
 		}
 		name := filepath.Base(r.Path)
 		firstSeen := r.FirstSeen

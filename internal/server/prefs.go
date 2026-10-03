@@ -135,6 +135,9 @@ func validateRoots(in []string) ([]string, error) {
 	out := make([]string, 0, len(in))
 	seen := map[string]struct{}{}
 	for _, raw := range in {
+		if raw == "" {
+			return nil, errors.New("directory paths must not be empty")
+		}
 		abs, err := filepath.Abs(raw)
 		if err != nil {
 			return nil, fmt.Errorf("%s: not a usable path", raw)

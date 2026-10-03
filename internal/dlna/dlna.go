@@ -285,7 +285,8 @@ type xmlDevice struct {
 }
 
 type xmlRoot struct {
-	Device xmlDevice `xml:"device"`
+	URLBase string    `xml:"URLBase"`
+	Device  xmlDevice `xml:"device"`
 }
 
 // Describe is describe for a location learnt some other way than a search:
@@ -297,10 +298,6 @@ func Describe(ctx context.Context, location string) (*Renderer, error) {
 // describe fetches a device description and turns it into a Renderer, or
 // nothing where the device has no transport to drive.
 func describe(ctx context.Context, loc string) (*Renderer, error) {
-	base, err := url.Parse(loc)
-	if err != nil {
-		return nil, err
-	}
 	ctx, cancel := context.WithTimeout(ctx, describeTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, loc, nil)
@@ -315,7 +312,7 @@ func describe(ctx context.Context, loc string) (*Renderer, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("dlna: describe %s: %s", loc, resp.Status)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, describeMax))
+	body, err := readXMLResponse(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -323,13 +320,36 @@ func describe(ctx context.Context, loc string) (*Renderer, error) {
 	if err := xml.Unmarshal(body, &root); err != nil {
 		return nil, err
 	}
+	// Relative control URLs use URLBase when supplied, or the description's
+	// final URL after redirects (UPnP Device Architecture, control section).
+	base := resp.Request.URL
+	if raw := strings.TrimSpace(root.URLBase); raw != "" {
+		base, err = url.Parse(raw)
+		if err != nil || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
+			return nil, fmt.Errorf("dlna: invalid URLBase %q", raw)
+		}
+	}
 	r := rendererFrom(root.Device, base)
 	if r == nil {
 		return nil, nil
 	}
-	r.Host = base.Host
+	control, _ := url.Parse(r.control[avTransport])
+	r.Host = control.Host
 	r.sinks = protocolSinks(ctx, r)
 	return r, nil
+}
+
+// Refuse an oversized response instead of treating a truncated document as
+// the complete answer. Descriptions and SOAP share the same byte budget.
+func readXMLResponse(r io.Reader) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, describeMax+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > describeMax {
+		return nil, fmt.Errorf("dlna: response exceeds %d bytes", describeMax)
+	}
+	return body, nil
 }
 
 // rendererFrom walks the description for the device that holds an
@@ -338,7 +358,11 @@ func describe(ctx context.Context, loc string) (*Renderer, error) {
 func rendererFrom(d xmlDevice, base *url.URL) *Renderer {
 	control := map[string]string{}
 	for _, svc := range d.Services {
-		if u, err := base.Parse(svc.ControlURL); err == nil {
+		raw := strings.TrimSpace(svc.ControlURL)
+		if raw == "" {
+			continue
+		}
+		if u, err := base.Parse(raw); err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") {
 			control[svc.Type] = u.String()
 		}
 	}

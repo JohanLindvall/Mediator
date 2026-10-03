@@ -201,7 +201,8 @@ func (s *Server) runEmbSub(ctx context.Context, it library.Item, stream int) ([]
 	)
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	cmd.Stdin = stdin
-	var out, errBuf bytes.Buffer
+	out := boundedBuffer{max: subtitleMaxBytes}
+	errBuf := boundedBuffer{max: 64 << 10}
 	cmd.Stdout = &out
 	cmd.Stderr = &errBuf
 	cmd.WaitDelay = 5 * time.Second

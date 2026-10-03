@@ -3,6 +3,7 @@ package library
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -346,11 +347,81 @@ func TestADirectoryEntryReadsItsZip64Field(t *testing.T) {
 	le.PutUint16(e[30:], uint16(len(extra)))
 	le.PutUint16(e[34:], 0xFFFF)
 	le.PutUint32(e[42:], 0xFFFFFFFF)
-	got, err := readZipDirectory(slices.Concat(e, []byte(name), extra))
+	got, err := readZipDirectory(bytes.NewReader(slices.Concat(e, []byte(name), extra)), 0)
 	if err != nil || len(got) != 1 {
 		t.Fatal(got, err)
 	}
 	if g := got[0]; g.raw != name || g.size != 6<<30 || g.packed != 5<<30 || g.off != 7<<30 || g.disk != 3 || g.method != 8 {
 		t.Errorf("read %+v", g)
+	}
+}
+
+func TestZipDirectoryRequiresCompleteZip64Fields(t *testing.T) {
+	for _, field := range []int{20, 24, 42} {
+		entry := make([]byte, 46)
+		zle.PutUint32(entry, 0x02014b50)
+		zle.PutUint32(entry[field:], 0xFFFFFFFF)
+		if _, err := readZipDirectory(bytes.NewReader(entry), 0); err == nil {
+			t.Errorf("accepted unresolved ZIP64 field at %d", field)
+		}
+	}
+}
+
+func TestZipDirectoryCountsActualRecords(t *testing.T) {
+	entry := make([]byte, 46)
+	zle.PutUint32(entry, 0x02014b50)
+	for _, n := range []int{zipEntriesPerMember, zipEntriesPerMember + 1} {
+		got, err := readZipDirectory(bytes.NewReader(bytes.Repeat(entry, n)), 1)
+		if n == zipEntriesPerMember {
+			if err != nil || len(got) != n {
+				t.Fatalf("directory at the cap: %d entries, %v", len(got), err)
+			}
+		} else {
+			var over tooManyMembers
+			if !errors.As(err, &over) {
+				t.Fatalf("directory beyond the cap: %d entries, %v", len(got), err)
+			}
+		}
+	}
+}
+
+func FuzzZipDirectory(f *testing.F) {
+	entry := make([]byte, 46)
+	zle.PutUint32(entry, 0x02014b50)
+	f.Add(entry)
+	f.Fuzz(func(t *testing.T, data []byte) {
+		entries, err := readZipDirectory(bytes.NewReader(data), 1)
+		if err != nil {
+			return
+		}
+		if len(entries) > zipEntriesPerMember {
+			t.Fatalf("read %d entries past the budget", len(entries))
+		}
+		for _, e := range entries {
+			if e.size < 0 || e.packed < 0 || e.off < 0 || e.disk < 0 {
+				t.Fatalf("overflowed ZIP entry: %+v", e)
+			}
+		}
+	})
+}
+
+func TestZipLocalHeaderMustMatchTheDirectoryMethodAndFlags(t *testing.T) {
+	for _, field := range []int{6, 8} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "sample.zip")
+		data := zipBytes(t, zipMember{name: "clip.mp4", data: []byte("content"), method: zip.Store})
+		// Turn on encryption, or change the compression method, only in the
+		// local header. The directory alone must not authorize these bytes.
+		data[field] ^= 1
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		members, _, _, err := parseZip(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(members) != 0 {
+			t.Errorf("accepted a member with mismatched field %d", field)
+		}
 	}
 }

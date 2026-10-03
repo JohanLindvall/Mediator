@@ -23,7 +23,7 @@ func TestAMisreadNameIsPutBack(t *testing.T) {
 		// Whole names in other alphabets.
 		{"æ\u009d±ã\u0081®æµ·.mp4", "東の海.mp4"},
 		{"Ð¢Ð¸Ñ…Ð¸Ð¹_Ð±ÐµÑ€ÐµÐ³.mp4", "Тихий_берег.mp4"},
-		{"Ø¨Ø­Ø± Ù‡Ø§Ø¯Ø¦.mp4", "بحر هادئ.mp4"},
+		{"Ø¨Ø\u00adØ± Ù‡Ø§Ø¯Ø¦.mp4", "بحر هادئ.mp4"},
 		// Misread twice, and put back twice.
 		{"ItÃ¢â‚¬â„¢s here.mp4", "It’s here.mp4"},
 		// TIS-620 Thai read as Latin-1 and stored: the tags' old trouble,

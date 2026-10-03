@@ -33,7 +33,7 @@ class Lightbox {
   /** What is on screen, for the things that ask about it after it is drawn. */
   private shown: Item | null = null;
   private nav = 0; // navigation token to drop stale loads
-  /** Drops a step whose search was overtaken by a later one. */
+  /** Drops an initial load or search overtaken by a later navigation. */
   private stepGen = 0;
   private rotation = 0; // quarter turns, viewing aid only — never persisted
 
@@ -236,14 +236,16 @@ class Lightbox {
   }
 
   private async show(index: number): Promise<void> {
+    const gen = ++this.stepGen;
     const it = await this.src.item(index);
-    if (this.closed) return;
+    if (this.closed || gen !== this.stepGen) return;
     if (it && it.kind === 'image') {
       this.render(it);
       return;
     }
     const found = (await this.findImage(index + 1, 1)) ?? (await this.findImage(index - 1, -1));
-    if (found && !this.closed) {
+    if (this.closed || gen !== this.stepGen) return;
+    if (found) {
       this.index = found.index;
       this.render(found.item);
     } else {
@@ -252,6 +254,8 @@ class Lightbox {
   }
 
   private render(it: Item): void {
+    // A swipe commits here too, superseding any pending keyboard search.
+    ++this.stepGen;
     this.shown = it;
     const nav = ++this.nav;
     this.root.classList.add('loading');
@@ -275,8 +279,9 @@ class Lightbox {
   }
 
   private async preload(dir: 1 | -1): Promise<void> {
+    const nav = this.nav;
     const found = await this.findImage(this.index + dir, dir);
-    if (found && !this.closed) new Image().src = streamUrl(found.item.id);
+    if (found && !this.closed && nav === this.nav) new Image().src = streamUrl(found.item.id);
   }
 
   private close(): void {

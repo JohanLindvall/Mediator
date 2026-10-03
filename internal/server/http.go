@@ -27,6 +27,9 @@ func protect(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		// Streams and subtitles are cacheable too. A cached success must
+		// never satisfy a caller whose proxy restrictions would deny it.
+		w.Header().Set("Vary", ContentHeader+", "+PathsHeader)
 		if err := guard.Check(r); err != nil {
 			http.Error(w, "cross-origin writes are not allowed", http.StatusForbidden)
 			return
