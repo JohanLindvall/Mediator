@@ -15,7 +15,7 @@ import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { singleAudioElement } from './playback.ts';
 import { REPORT_CAP, REPORT_QUIET_MS, shouldReport } from './report.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, sourceStart, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -862,4 +862,14 @@ test('report: a fault is sent once, and a page in a loop is not', () => {
   // And a page that never stops is stopped.
   assert.equal(shouldReport(t0, REPORT_CAP, undefined), false);
   assert.equal(shouldReport(t0, REPORT_CAP - 1, undefined), true);
+});
+
+test('a source that names no start position starts at its own beginning', () => {
+  // A conversion's clock begins at nought: left unsaid, WebKit carried the
+  // last source's start over, and 7:26 read as 14:53 and was saved as such.
+  assert.equal(sourceStart(), 0);
+  assert.equal(sourceStart(0), 0);
+  assert.equal(sourceStart(-3), 0);
+  assert.equal(sourceStart(Number.NaN), 0);
+  assert.equal(sourceStart(446.661), 446.661);
 });

@@ -1377,9 +1377,7 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 	}
 	var times []float64
 	if !tb.grid {
-		for j := r.fileStart + 1; j < r.until; j++ {
-			times = append(times, tb.starts[j]-landed-0.0005)
-		}
+		times = runCuts(tb.starts, r.fileStart, r.until, landed)
 	}
 	to := 0.0
 	if r.until < tb.n() {
@@ -1395,6 +1393,29 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 		}
 		break
 	}
+}
+
+// runCuts are the cuts a copy run is told to make, as times from where it
+// landed: every boundary after the segment it begins in, up to and
+// including the one it stops at. That last cut is the one that ends the
+// segment before the stop where the table says — what is written past it
+// is the stub hlsRunTail reads for, and is thrown away.
+//
+// It was left out, which went unnoticed wherever a run reached the end of
+// the film, and wherever the picture is not reordered: the segment before
+// the stop then ran on to the run's read-past point, a fifth of a second
+// late and inside the tolerance. A reordered picture carries it further —
+// the muxer takes every packet decoded before that point, and some of them
+// are shown after it — and measured on a film that does, the segment ended
+// 0.374 s past the boundary and the session was given up. A run stops at a
+// boundary wherever an earlier run made what follows, which is every seek
+// backwards on a phone.
+func runCuts(starts []float64, from, until int, landed float64) []float64 {
+	var times []float64
+	for j := from + 1; j <= until && j < len(starts); j++ {
+		times = append(times, starts[j]-landed-0.0005)
+	}
+	return times
 }
 
 // attemptTable is one ffmpeg over a run.

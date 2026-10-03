@@ -805,6 +805,26 @@ func TestRemuxTrackKeepsOneSoundtrackAndItsContainer(t *testing.T) {
 
 // writeMKVKeyed is writeMKV with a keyframe every gop frames, for a clip a
 // segmented conversion can be cut at more than one place.
+// writeMKVReordered is writeMKVKeyed with its pictures reordered: two
+// B-frames between references, always, so a packet is decoded a fifth of a
+// second before it is shown.
+func writeMKVReordered(t *testing.T, path string, seconds, gop int) {
+	t.Helper()
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration="+strconv.Itoa(seconds),
+		"-f", "lavfi", "-i", "sine=frequency=440:duration="+strconv.Itoa(seconds),
+		"-c:v", "libx264", "-preset", "veryfast", "-bf", "2", "-x264-params", "b-adapt=0", "-pix_fmt", "yuv420p",
+		"-g", strconv.Itoa(gop), "-keyint_min", strconv.Itoa(gop), "-sc_threshold", "0",
+		"-c:a", "aac", "-shortest", "-y", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not build a reordered matroska test clip: %v: %s", err, out)
+	}
+}
+
 func writeMKVKeyed(t *testing.T, path string, seconds, gop int) {
 	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")

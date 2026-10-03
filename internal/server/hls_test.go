@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math"
 	"bytes"
 	"io"
 	"net/http"
@@ -533,6 +534,87 @@ func TestHLSMakesSegmentsOnRequest(t *testing.T) {
 	}
 	if len(fetch(names[1])) < 188 {
 		t.Error("the middle segment is not a transport stream")
+	}
+}
+
+// A run that stops where an earlier run began cuts the segment before the
+// stop at the boundary, and not at the point it reads to: its pictures are
+// reordered, so packets decoded before that point are shown after it, and a
+// segment ending there was judged cut where the table did not say and the
+// session given up — every seek backwards, on a phone. The clip before this
+// one has no reordering, which is how the fault got past it. Both runs here
+// begin past the opening, whose reordered first packets the muxer shifts.
+func TestHLSARunStoppingAtAnEarlierRunCutsAtTheBoundary(t *testing.T) {
+	dir := t.TempDir()
+	// Sixteen seconds with a keyframe every second: four segments of four.
+	writeMKVReordered(t, filepath.Join(dir, "clip.mkv"), 16, 10)
+	ts, _ := flagServer(t, dir)
+	id := library.PathID(filepath.Join(dir, "clip.mkv"))
+
+	res, err := http.Get(ts.URL + "/api/hls/" + id + "/index.m3u8?mode=audio&t=13")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get(hlsTimelineHeader); got != "film" {
+		t.Skipf("no table for the test clip (timeline %q)", got)
+	}
+	var names []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+			names = append(names, strings.TrimSpace(line))
+		}
+	}
+	if len(names) != 4 {
+		t.Fatalf("want four segments of a sixteen-second clip:\n%s", body)
+	}
+	fetch := func(name string) {
+		t.Helper()
+		sres, err := http.Get(res.Request.URL.ResolveReference(&url.URL{Path: name}).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(sres.Body)
+		sres.Body.Close()
+		if sres.StatusCode != http.StatusOK {
+			t.Fatalf("%s answered %d: %s", name, sres.StatusCode, b)
+		}
+	}
+	fetch(names[3]) // the seek: a run from the last segment to the end
+	fetch(names[1]) // back: a second run, stopping where the first began
+	fetch(names[2]) // made by the second run, and given up with it where it ended late
+}
+
+// The cuts a copy run is told to make run up to and including the boundary
+// it stops at, so the segment before the stop ends there; a run to the end
+// has no boundary past the last segment to cut at.
+func TestARunCutsAtTheBoundaryItStopsAt(t *testing.T) {
+	starts := []float64{0, 4, 8, 12}
+	for _, c := range []struct {
+		from, until int
+		landed      float64
+		want        []float64
+	}{
+		{0, 2, 0, []float64{3.9995, 7.9995}},
+		{0, 4, 0, []float64{3.9995, 7.9995, 11.9995}},
+		{1, 2, 3.9, []float64{4.0995}},
+		{3, 4, 12, nil},
+	} {
+		got := runCuts(starts, c.from, c.until, c.landed)
+		if len(got) != len(c.want) {
+			t.Errorf("from %d until %d: %v, want %v", c.from, c.until, got, c.want)
+			continue
+		}
+		for i := range got {
+			if math.Abs(got[i]-c.want[i]) > 1e-9 {
+				t.Errorf("from %d until %d: %v, want %v", c.from, c.until, got, c.want)
+				break
+			}
+		}
 	}
 }
 

@@ -346,6 +346,17 @@ export interface Resume {
 }
 
 /**
+ * Where a new source starts on the element's own clock: where it was asked
+ * to, or its own beginning. Never left unsaid — WebKit carries the last
+ * source's start position over to a source given none, so a conversion whose
+ * clock begins at nought read as being that far in, the player's clock with
+ * it, and the resume point saved from it was the two added together.
+ */
+export function sourceStart(at?: number): number {
+  return at !== undefined && Number.isFinite(at) && at > 0 ? at : 0;
+}
+
+/**
  * Where a file should start, from what was saved for it.
  *
  * Two things are refused. A position in the first few seconds is not worth

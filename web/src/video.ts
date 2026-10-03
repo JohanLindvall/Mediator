@@ -70,6 +70,7 @@ import {
   plannedRoute,
   readFault,
   resumeStart,
+  sourceStart,
   playsOnReceiver,
   qualityChoices,
   qualityLabel,
@@ -1004,8 +1005,14 @@ class VideoOverlay {
       this.checkAt = (o.at ?? 0) + o.settle;
     }
     // Before metadata arrives this is the default playback start position,
-    // which is what makes it survive the load the new source just started.
-    if (o.at !== undefined && o.at > 0) this.video.currentTime = o.at;
+    // which is what makes it survive the load the new source just started —
+    // and a source that names none starts from its own beginning, said out
+    // loud: WebKit carries the last source's start position over, and a
+    // conversion whose clock begins at nought then read as being that far
+    // in. Measured on a phone: a segmented stream opened at 7:26 failed over
+    // to the pipe, the clock read 14:53, and that was the resume point
+    // saved.
+    this.video.currentTime = sourceStart(o.at);
     void this.video.play().catch(() => this.showControls());
   }
 

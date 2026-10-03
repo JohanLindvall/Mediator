@@ -2964,6 +2964,13 @@ Frontend (`web/src`, no framework, no runtime deps):
   It also means a converted file honours its resume point, which it never did
   before — the conversion started whenever the element said, which for a
   fresh player was zero.
+  **A source that names no start position is told to start at nought**
+  (`sourceStart`, tested). Set before metadata, `currentTime` is the default
+  playback start position, and that survives a change of source until some
+  source's metadata consumes it — so a segmented stream opened at 7:26 that
+  failed before its metadata arrived left 7:26 standing, the pipe that took
+  over (whose clock begins at nought) read as 7:26 in, the clock showed
+  14:53 and that was the resume point saved.
 - `resumeStart` (`playback.ts`, tested) decides that position: nothing in the
   first few seconds, and nothing at or past the end — judged against the
   length stored with the record *or*, when that is missing, the one the
@@ -5338,6 +5345,25 @@ Serving details worth knowing before "fixing" them:
   allocate memory" at the end of a run whose every segment was whole), and
   writing the hardware off for that would send every later run of the film
   to the processor.
+  **A run that stops at an earlier run's segment cuts at that boundary too**
+  (`runCuts`, tested end to end on a reordered clip). A run is planned up to
+  the first segment already made (`until`) and reads `hlsRunTail` past it,
+  so that the segment before the stop is cut where the table says and the
+  stub after it is thrown away — but the cut at `until` itself was left out
+  of the list, so that segment ran on to the read-past point instead. A
+  picture that is not reordered overshoots by the tail alone, inside the
+  tolerance, which is how the test clip (no B-frames) let it through; a
+  reordered one carries the muxer further, every packet decoded before the
+  point being taken and some of them shown after it. Measured on a film that
+  does: the segment ended 0.374 s past the boundary, the cut was judged
+  wrong and the session given up — which is every seek backwards on a
+  phone, a run from the start of a film stopping where the opening run
+  began. **A run from the very start of a reordered file is a different
+  matter, and is left as it is**: its first packets decode before nought,
+  `make_non_negative` shifts the whole run by that much, and the cuts come
+  out late by the reorder delay — under the start tolerance for an ordinary
+  film (two frames at 24 fps is 0.083 s against 0.1), over it for a low
+  frame rate or a deep reordering. It wants its own measurement first.
   Which conversion is needed is decided from the file's codecs, not from what
   was decoded: a container the browser will not open decodes nothing, so
   there is no black picture or silent soundtrack to go on. H.264 is decoded
