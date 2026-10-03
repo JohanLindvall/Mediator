@@ -357,7 +357,12 @@ Go binary with the TypeScript frontend embedded.
   copied conversion falls back to a playlist that grows with it, and the
   player is told which it got (`X-Media-Timeline`). Everything else is
   streamed straight from the converter as before, and seeking reopens it at
-  the new position. Where the
+  the new position — on the keyframe at or before it, where a copied picture
+  has to begin, with the sound and the subtitles starting there too: the
+  server reads where that keyframe is and what it is, and cuts both streams
+  at it, so a seek no longer leaves the sound and the subtitles running
+  seconds ahead of the picture. That holds for films inside archives as
+  well, which are measured through the server's own stream. Where the
   film has subtitles the playlist is a master carrying them as renditions —
   which is what puts them on an **AirPlay receiver**, that route handing
   over a URL and nothing else, and gives Safari one native subtitle menu
@@ -1433,14 +1438,14 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/thumb/{id}?w=360`               | Cached JPEG thumbnail                    |
 | `GET /api/item/{id}`                      | One item, with its metadata read first if it has not been |
 | `GET /api/remux/{id}?a=&mode=`            | The same streams in a container the browser opens, served as an ordinary seekable file, keeping soundtrack `a`; `mode=audio` copies the picture and converts the soundtrack instead; 404 when copying would not help |
-| `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
+| `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video, and where t is a keyframe both streams begin on it; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
 | `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays: the whole film as a VOD playlist beginning at `t`, its segments made as they are asked for, one session per film, mode, soundtrack and rung; `X-Media-Timeline: film` says so, `session` that the older growing playlist from the seek is being served |
 | `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
 | `GET /api/skip/{id}`                      | Where a video's intro and credits are, as found from the sound (`introStart`, `introEnd`, `outro` in seconds, the last counted back from the end); all nought where nothing has been found. Asking puts the episode's season at the front of the search |
 | `POST /api/delete/plan`                   | What deleting something would remove — `{kind: item\|album\|series\|season, id, season}` — worked out and nothing removed: the folders and files, counts, size, and a token. JSON body only; refused (403) for a face, a confined caller or `-lock` |
 | `POST /api/delete`                        | Delete exactly what a plan listed, named by its token (`{token}`); once, within ten minutes, and each file only while it is still the one shown. 410 for a token that is used, unknown or too old |
 | `POST /api/log`                           | One fault the page reports — a conversion whose connection came apart, a request that never arrived, an error the page raised — so it lands in the server's log beside the requests that explain it. Bounded per process; answers 204 whether it recorded it or not |
-| `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins |
+| `GET /api/keyframe/{id}?t=` | Where a copied conversion seeking to t really begins (measured; a disc title is answered with t) |
 | `GET /api/crop/{id}`                      | Where the picture sits inside the file's own black borders, measured once and remembered. The samples are fractions of the running time, so a film the library has not measured yet is probed first rather than answered without a look — and an answer nothing looked at is not stored as "no borders here" |
 | `GET /api/albums/{id}/zip`                | The release as one download                |
 | `GET /api/sprite/{id}`                    | Scrub sheet: ten frames across a video, taken by ten seeks (3.5 s for an 87-minute film) |

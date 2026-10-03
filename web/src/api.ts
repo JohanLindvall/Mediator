@@ -546,8 +546,19 @@ export function transcodeUrl(id: string, t = 0, mode: 'full' | 'audio' = 'full',
   const m = mode === 'audio' ? '&mode=audio' : '';
   return (
     signed(`/api/transcode/${encodeURIComponent(id)}`) +
-    `?t=${t.toFixed(2)}${m}${audioParam(audio)}${qualityParam(quality)}`
+    `?t=${seekTime(t)}${m}${audioParam(audio)}${qualityParam(quality)}`
   );
+}
+
+/**
+ * A conversion's start time as the URL carries it: to the millisecond, as
+ * /api/keyframe answers it. It was written to the hundredth, which moves a
+ * keyframe at 38.892 s to 38.89 — 2 ms before it, where the server's search
+ * for that keyframe (landCopy) allows 5 ms and its first seek a millisecond,
+ * so the seek landed on the keyframe before it, seconds early.
+ */
+export function seekTime(t: number): string {
+  return t.toFixed(3);
 }
 
 /** A rung of the bitrate ladder, where the viewer chose one; nothing for the original. */
@@ -616,7 +627,7 @@ export function hlsUrl(
   const c = sub >= 0 ? `&sub=${sub}` : '';
   return (
     signed(`/api/hls/${encodeURIComponent(id)}/index.m3u8`) +
-    `?t=${t.toFixed(2)}${m}${audioParam(audio)}${c}${qualityParam(quality)}`
+    `?t=${seekTime(t)}${m}${audioParam(audio)}${c}${qualityParam(quality)}`
   );
 }
 

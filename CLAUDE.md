@@ -2525,8 +2525,9 @@ Change propagation is the core loop:
   and the segmented converter share — the seek with `-copyts`, the hardware
   decision, the picture copied or encoded, the soundtrack — and each adds
   only its delivery; the two used to spell all of it out separately, and the
-  two diverging once is how a fault got in. It is tested on its own. `handleKeyframe` needs no change — it already answers with the
-  time asked for whenever the content is inside another file.
+  two diverging once is how a fault got in. It is tested on its own. `handleKeyframe` needs no change — a title is
+  read by position, so `timeSeekInput` refuses it and the answer is the
+  time asked for.
   What the disc does **not** record is where one episode ends and the next
   begins: a measured TV release is one title of 2h39m with thirty chapter
   stops about five minutes apart, and both its part-of-title table and the
@@ -5552,6 +5553,59 @@ Serving details worth knowing before "fixing" them:
   Both converters also pass `-copyts` with `-avoid_negative_ts make_zero`,
   which shifts every stream by the same amount instead of rebasing each to
   zero on its own — the belt for a seek whose keyframe could not be measured.
+  **Asking for the keyframe was not enough on its own**, and for a while it
+  made things worse (`landCopy`, `convert.go`, tested against a clip that
+  reproduces each fault below). ffmpeg takes `hlsSeekLead` off every input
+  seek in a stream that reorders its frames, so a seek to exactly a
+  keyframe lands on the one *before* it: the picture began a whole keyframe
+  interval early while the sound, trimmed by ffmpeg to the seek, began where
+  it was asked. The fragmented MP4 the pipe carries cannot say that a track
+  begins late — its muxer stretches the first sample over the hole — and a
+  browser plays decoded sound back to back, so the sound and the subtitles
+  ran that far ahead of the picture for as long as the conversion played.
+  Measured on a film with B-frames, a seek to its keyframe at 56.515 s began
+  the picture at 49.925. The piped conversion and the segmented one without
+  a table (`HLS.attempt`) now land both streams on the keyframe instead:
+  - **Whether the time is a keyframe, and its times, are read, not
+    predicted** (`keyframeSeek`, one packet copied out through `landsAt`,
+    the framecrc reader the grid seek already used). Predicting failed at
+    once: ffmpeg adds the file's start time to a seek, and a soundtrack an
+    encoder primed starts a file a few milliseconds below zero — every Opus
+    WebM — which pushes a seek made a millisecond past a keyframe back
+    before it. The seek is therefore made on the film's clock
+    (`-seek_timestamp 1`, which leaves the start time out), where the
+    keyframe answer is. Where nothing lands on the time asked — one nothing
+    measured, a container whose seeks land elsewhere — the run is left
+    exactly as it was planned, and says so at debug.
+  - **Both streams are cut on the output side**, at the keyframe's
+    *decode* time: an input seek at the keyframe on the film's clock lands
+    on it or on the one before, with ffmpeg's own trim of the decoded sound
+    off (`-noaccurate_seek`, as that trim works on another clock), and an
+    output `-ss` drops every picture packet before the keyframe and trims
+    the sound to the same instant. The decode time, because a reordered
+    stream decodes its keyframe a frame or two before showing it and the
+    output's clock starts there: cut at the presentation time, the sound
+    began 70 ms after the picture on the film above — the same hole, small,
+    and enough to see on a face. Reading from the keyframe before is what
+    supplies the sound ahead of the keyframe at all: in that film's
+    container it begins 8 ms after the keyframe's own cluster does.
+  - **Half a frame under that decode time**, because it is not a fixed
+    property of the file: Matroska stores none, ffmpeg makes one up from the
+    presentation times, and the answer depends on where reading began —
+    56.432 s read from the keyframe, 56.431 read into it from the keyframe
+    before, which is what the conversion does. A cut half a millisecond
+    under dropped the keyframe and began the picture at the next one, five
+    seconds on. Half the probed packet's duration lands between the packet
+    decoded before the keyframe and the keyframe itself, whatever the
+    rounding; `landingSlack` stands in where the container gives none.
+  What is left is that the very first frame is shown a few tens of
+  milliseconds early — the muxer moves the first sample of the later track
+  to zero — and that the stream's clock starts half a frame and a decode
+  delay before the keyframe the client was told, so the subtitles lead by
+  about a tenth of a second. Both were judged not worth a second mechanism.
+  The client sends the time to the millisecond (`seekTime` in `api.ts`):
+  rounded to the hundredth, a keyframe at 38.892 s was asked for at 38.89,
+  before it, and no seek landed there.
 - **The converted stream does not start where you asked.** With the video
   copied, ffmpeg can only begin on a keyframe, so it begins at the last one
   at or before `t` — ten seconds early is ordinary for a 4K release. The
@@ -5560,7 +5614,16 @@ Serving details worth knowing before "fixing" them:
   every subtitle cue by that much. `/api/keyframe/{id}?t=` answers where it
   will really begin, and the player makes that answer its `tcOffset`.
   The answer is measured, not predicted: it runs the same seek with the same
-  tool (`-copyts`, one packet, first pts). A keyframe listing looks like it
+  tool (`-copyts`, one packet, first pts), **through the same input the
+  conversion reads** (`timeSeekInput`, pinned to `convertInput` by
+  `TestKeyframeInputIsTheConversions`) — which for content inside another
+  file is this server's own stream. It used to answer such content with the
+  time asked for, unmeasured, from when it reached ffmpeg only through a
+  pipe; once the conversion read it over the loopback stream and really
+  seeked, the answer and the conversion disagreed, and a film inside a rar
+  set was told its conversion began at 59.917 s when it began at 56.515. A
+  title read by position, and content with nothing but a pipe to be read
+  through, are still answered with the time asked for. A keyframe listing looks like it
   would do and does not — ffmpeg's seek is conservative in ways an index scan
   does not reproduce (a time a few ms past a keyframe rewinds to the one
   before), and it is an order of magnitude slower to obtain. Do not "simplify"

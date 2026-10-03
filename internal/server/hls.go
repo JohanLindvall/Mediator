@@ -1700,12 +1700,8 @@ func gridSeek(point float64, land func(float64) (float64, error)) (float64, erro
 	}
 }
 
-// seekLanding asks ffmpeg where an input seek lands: the time of the first
-// packet of the picture it copies out after the same seek a conversion
-// makes. Read from a framecrc listing, which prints every packet's time
-// whatever the codec — the transport stream probe cannot see a WMV picture
-// at all, which becomes a stream of private data there, and those are the
-// files this is for.
+// seekLanding asks ffmpeg where an input seek lands, for the same seek a
+// conversion makes (landsAt).
 func (h *HLS) seekLanding(ctx context.Context, it library.Item, seek float64) (float64, error) {
 	input, _, err := convertInput(it, 0)
 	if err != nil {
@@ -1715,27 +1711,25 @@ func (h *HLS) seekLanding(ctx context.Context, it library.Item, seek float64) (f
 		_ = input.pipe.Close()
 		return 0, errors.New("content read through a pipe cannot be seeked")
 	}
-	ctx, cancel := context.WithTimeout(ctx, hlsProbeBudget)
-	defer cancel()
-	args := append(ffmpegBase(), "-ss", strconv.FormatFloat(seek, 'f', 3, 64), "-copyts")
-	args = append(args, input.args...)
-	args = append(args, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "framecrc", "pipe:1")
-	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
-	cmd.WaitDelay = 2 * time.Second
-	out, err := cmd.Output()
-	if pts, ok := framecrcFirstPTS(out); ok {
-		return pts, nil
-	}
-	if err != nil {
-		return 0, err
-	}
-	return 0, errors.New("the probe read no packet")
+	at, err := landsAt(ctx, h.ffmpeg, []string{"-ss", strconv.FormatFloat(seek, 'f', 3, 64)}, input.args)
+	return at.pts, err
 }
 
 // framecrcFirstPTS reads the first packet's presentation time, in seconds,
-// out of a framecrc listing: "#tb <stream>: <num>/<den>" lines give each
-// stream's time base, and then a line a packet, "stream, dts, pts, ...".
+// out of a framecrc listing (framecrcFirst).
 func framecrcFirstPTS(out []byte) (float64, bool) {
+	p, ok := framecrcFirst(out)
+	return p.pts, ok
+}
+
+// packetTimes are a packet's decode and presentation times and how long it
+// lasts, in seconds.
+type packetTimes struct{ dts, pts, dur float64 }
+
+// framecrcFirst reads the first packet's times out of a framecrc listing:
+// "#tb <stream>: <num>/<den>" lines give each stream's time base, and then a
+// line a packet, "stream, dts, pts, ...".
+func framecrcFirst(out []byte) (packetTimes, bool) {
 	tbs := map[string]float64{}
 	for _, line := range strings.Split(string(out), "\n") {
 		line = strings.TrimSpace(line)
@@ -1757,13 +1751,20 @@ func framecrcFirstPTS(out []byte) (float64, bool) {
 			continue
 		}
 		tb, ok := tbs[strings.TrimSpace(f[0])]
-		pts, err := strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
-		if !ok || err != nil {
-			return 0, false
+		dts, err1 := strconv.ParseFloat(strings.TrimSpace(f[1]), 64)
+		pts, err2 := strconv.ParseFloat(strings.TrimSpace(f[2]), 64)
+		if !ok || err1 != nil || err2 != nil {
+			return packetTimes{}, false
 		}
-		return pts * tb, true
+		at := packetTimes{dts: dts * tb, pts: pts * tb}
+		if len(f) > 3 {
+			if dur, err := strconv.ParseFloat(strings.TrimSpace(f[3]), 64); err == nil && dur > 0 {
+				at.dur = dur * tb
+			}
+		}
+		return at, true
 	}
-	return 0, false
+	return packetTimes{}, false
 }
 
 // probe copies one packet out from a seek and reads its time.
@@ -1895,6 +1896,9 @@ func (h *HLS) attempt(ctx context.Context, s *hlsSession, it library.Item, t flo
 	// next attempt must not run beside this one's repair copy, which would
 	// otherwise sit blocked on an unread pipe for the whole of it.
 	defer plan.close()
+	// A copied picture begins on the keyframe the player was told it begins
+	// on, and the sound with it, as the pipe's does (landCopy).
+	plan.landCopy(ctx, h.ffmpeg, it, t, h.log)
 	args := append(plan.args, hlsOutputArgs(s.dir)...)
 
 	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)

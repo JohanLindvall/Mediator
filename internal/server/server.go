@@ -1169,10 +1169,10 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	}
 	defer s.lib.StartStream()()
 
-	// Copying the video means ffmpeg can only start on a keyframe, and it
-	// picks the last one at or before this time. The seek must stay exactly
-	// as asked: /api/keyframe measured where this very seek lands, and the
-	// client has arranged its timeline around that answer.
+	// Copying the video means ffmpeg can only start on a keyframe. The client
+	// asks for the conversion at the keyframe /api/keyframe told it the seek
+	// lands on, and has arranged its timeline around that answer — so both
+	// streams are made to begin exactly there (landCopy, below).
 	copyVideo := r.URL.Query().Get("mode") == "audio"
 	// A rung on the bitrate ladder, where the viewer chose one. A rung is a
 	// re-encode whatever the mode asked for, since a copied picture is the
@@ -1219,6 +1219,7 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "file unavailable: "+openFault(err), http.StatusServiceUnavailable)
 			return
 		}
+		plan.landCopy(r.Context(), ffmpeg, it, start, s.log)
 		args := append(plan.args,
 			"-movflags", "+frag_keyframe+empty_moov+default_base_moof",
 			"-f", "mp4", "pipe:1",

@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
+	"math"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/JohanLindvall/Mediator/internal/library"
 )
@@ -103,6 +107,13 @@ type conversion struct {
 	hardware bool
 	args     []string
 	stdin    io.ReadCloser // nil where the input is a path or a URL
+	// seekArg is where the input seek's time sits in args, 0 where there is
+	// none — from the top, a disc title read by position, a pipe. Kept so
+	// landCopy can move it without searching for it.
+	seekArg int
+	// copied says the picture is copied rather than re-encoded, which is
+	// what makes where the run begins the demuxer's choice (landCopy).
+	copied bool
 }
 
 // close lets go of the pipe, where there was one.
@@ -155,7 +166,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		input = convertSource{args: []string{"-i", "pipe:0"}, pipe: pipe}
 		byPosition = true
 	}
-	c := &conversion{stdin: input.pipe}
+	c := &conversion{stdin: input.pipe, copied: copyVideo}
 
 	// Where this conversion runs. Decided before anything else, because it
 	// changes the arguments on both sides of the input.
@@ -167,6 +178,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		args = append(args, hw.input()...)
 	}
 	if t > 0 && !byPosition {
+		c.seekArg = len(args) + 1
 		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 3, 64))
 	}
 	if (t > 0 && !byPosition) || absolute {
@@ -279,6 +291,143 @@ func (c *conversion) trimTo(t float64, sound bool) {
 			return
 		}
 	}
+}
+
+// landCopy makes a conversion that copies the picture begin both its streams
+// on the keyframe at k — the one /api/keyframe told the client the
+// conversion begins at — and says whether it could.
+//
+// The client asks /api/keyframe where a seek to its target lands, and then
+// asks for the conversion *at that keyframe*, its clock and its subtitles
+// counting from there. Asked for exactly a keyframe, ffmpeg lands on the one
+// before it: it takes hlsSeekLead off every input seek in a stream that
+// reorders its frames. The copied picture then began a keyframe interval
+// early while the re-encoded soundtrack, trimmed by ffmpeg to the seek,
+// began where it was told — and the fragmented MP4 a pipe carries cannot say
+// that a track begins late: its muxer stretches the first sample over the
+// hole instead, and a browser plays decoded sound back to back, so the sound
+// ran that much ahead of the picture, the subtitles with it. Measured on a
+// film with B-frames: a seek to its keyframe at 56.515 s began the picture at
+// 49.925, the sound 6.6 s ahead of it for as long as the conversion played.
+//
+// So both streams are cut on the output side, at the keyframe's *decode*
+// time: a reordered stream decodes its keyframe a frame or two before it
+// shows it, and the output's clock starts at that decode time. Cut at the
+// presentation time, the sound began that much after the picture — the same
+// hole, only small: 70 ms on the film above, enough to see on a face. The
+// copy's first packet kept is the keyframe itself, everything before it
+// dropped, and the sound is trimmed to the same instant. The input seek
+// before the cut is made on the film's clock (-seek_timestamp, which leaves
+// the file's start time out) at the keyframe's presentation time, which
+// lands on it or on the one before — the one before being what reaches the
+// sound decoded ahead of the keyframe, which in that film's container begins
+// 8 ms after the keyframe's own cluster does. ffmpeg's own trim of the
+// decoded sound to the input seek is turned off: it trims on another clock.
+//
+// The keyframe's decode time is read rather than assumed, and so is that k is
+// a keyframe at all (keyframeSeek). Predicting it is not enough, which the
+// test of this found at once: ffmpeg adds the file's start time to a seek,
+// and a soundtrack whose encoder primed it a few milliseconds early starts a
+// file below zero — every Opus WebM, a priming encoder in a Matroska file.
+//
+// Where nothing lands on k — a time nothing measured, a container whose
+// seeks land elsewhere — the conversion is left exactly as it was planned.
+// A re-encode needs none of this, seeking accurately, and a run with no seek
+// by time has nothing to move.
+func (c *conversion) landCopy(ctx context.Context, ffmpeg string, it library.Item, k float64, log *slog.Logger) bool {
+	if !c.copied || c.seekArg < 1 || c.seekArg >= len(c.args) {
+		return false
+	}
+	in, ok := timeSeekInput(it, k)
+	if !ok {
+		return false
+	}
+	landed, ok := keyframeSeek(ctx, ffmpeg, in, k)
+	if !ok {
+		if ctx.Err() == nil {
+			log.Debug("convert: no seek lands on the keyframe asked for; seeking as asked", "path", it.Rel, "t", k)
+		}
+		return false
+	}
+	c.landOn(landed)
+	return true
+}
+
+// landOn makes the run begin both its streams at the keyframe whose times
+// are at: the input seek moved to its presentation time on the film's clock,
+// with ffmpeg's trim of the decoded streams off, and everything before its
+// decode time cut away on the output side.
+//
+// The cut is half a frame under the decode time — after the packet decoded
+// before the keyframe, and safely before the keyframe itself — because that
+// time is not a fixed property of the file. Matroska stores none; ffmpeg
+// makes one up from the presentation times, and the answer depends on where
+// the reading began: measured on the film above, 56.432 s read from the
+// keyframe and 56.431 read into it from the keyframe before, which is what a
+// conversion does. A cut half a millisecond under dropped the keyframe, and
+// the picture began at the next one, five seconds on.
+func (c *conversion) landOn(at packetTimes) {
+	if c.seekArg < 1 || c.seekArg >= len(c.args) {
+		return
+	}
+	i := c.seekArg - 1 // "-ss"
+	c.args = slices.Replace(c.args, i, i+2,
+		"-seek_timestamp", "1", "-ss", strconv.FormatFloat(at.pts, 'f', 6, 64), "-noaccurate_seek")
+	c.seekArg = i + 3
+	half := at.dur / 2
+	if half <= 0 {
+		half = landingSlack // a frame of 120 a second, or slower
+	}
+	c.args = append(c.args, "-ss", strconv.FormatFloat(at.dts-half, 'f', 6, 64))
+}
+
+// landingSlack is how far under a keyframe's decode time the cut goes when the
+// container gives the keyframe no duration: half a frame at 120 frames a
+// second, and more than the millisecond two readings of one Matroska decode
+// time differ by.
+const landingSlack = 0.004
+
+// keyframeSeek reads the times of the keyframe at k, and that there is one:
+// a seek made to land on it is tried, first past the lead ffmpeg takes off,
+// which is where a reordered stream in most containers needs asking, then a
+// hair past k, which is where a container that seeks by presentation time
+// (MP4) lands on it when another keyframe follows within the lead. Made on
+// the film's clock, where k is.
+func keyframeSeek(ctx context.Context, ffmpeg string, input []string, k float64) (packetTimes, bool) {
+	for _, s := range []float64{k + hlsSeekLead + 0.001, k + 0.0005} {
+		at, err := landsAt(ctx, ffmpeg, []string{"-seek_timestamp", "1", "-ss", strconv.FormatFloat(s, 'f', 6, 64)}, input)
+		if err != nil {
+			return packetTimes{}, false
+		}
+		if math.Abs(at.pts-k) <= hlsLandTol {
+			return at, true
+		}
+	}
+	return packetTimes{}, false
+}
+
+// landsAt asks ffmpeg where an input seek lands: the times of the first
+// packet of the picture it copies out after that seek, on the film's own
+// clock. Read from a framecrc listing, which prints every packet's times
+// whatever the codec — the transport stream probe cannot see a WMV picture at
+// all, which becomes a stream of private data there.
+func landsAt(ctx context.Context, ffmpeg string, seek, input []string) (packetTimes, error) {
+	ctx, cancel := context.WithTimeout(ctx, hlsProbeBudget)
+	defer cancel()
+	args := append(ffmpegBase(), seek...)
+	args = append(args, "-copyts")
+	args = append(args, input...)
+	args = append(args, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "framecrc", "pipe:1")
+	cmd := exec.CommandContext(ctx, ffmpeg, args...)
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if at, ok := framecrcFirst(out); ok {
+		return at, nil
+	}
+	if err != nil {
+		return packetTimes{}, err
+	}
+	return packetTimes{}, errors.New("the probe read no packet")
 }
 
 // gridKeyframeExpr makes the encoder put a keyframe on the first frame at

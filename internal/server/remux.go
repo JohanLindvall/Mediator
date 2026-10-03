@@ -803,6 +803,26 @@ func convertInput(it library.Item, t float64) (in convertSource, byPosition bool
 	return in, byPosition, nil
 }
 
+// timeSeekInput is the input a conversion seeks by time, where it does:
+// the file itself, or this server's own stream for content inside another
+// file — convertInput's choice, without opening anything. A disc title read
+// by position and content with only a pipe to be read through are not
+// seeked by time, and answer false. /api/keyframe measures its landing
+// through this, so the two must agree (TestKeyframeInputIsTheConversions).
+func timeSeekInput(it library.Item, t float64) ([]string, bool) {
+	if !it.Archived() {
+		return []string{"-i", it.Path}, true
+	}
+	url := library.LoopbackURL(it)
+	if url == "" {
+		return nil, false
+	}
+	if _, ok := library.SeekByte(it, t); ok {
+		return nil, false
+	}
+	return []string{"-headers", library.LoopbackWholeHeaderArg(), "-i", url}, true
+}
+
 // convertSource is an ffmpeg input: the arguments that name it, and the
 // reader to hand it on stdin where that is the route. The caller closes it.
 type convertSource struct {

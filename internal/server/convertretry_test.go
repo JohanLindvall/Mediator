@@ -16,12 +16,15 @@ import (
 // fakeConverter writes a stand-in converter: it fails while the marker file is
 // absent and behaves once it appears — which is what a transient failure is.
 // The last argument is the output path for both converters (the remuxer's
-// .part file, the segmenter's playlist), so one script serves both.
+// .part file, the segmenter's playlist), so one script serves both. A probe
+// writes to its standard output instead, and is answered with nothing: there
+// is no film here to read a packet of, and the run is left as planned.
 func fakeConverter(t *testing.T, dir, marker string, sleep time.Duration) string {
 	t.Helper()
 	script := filepath.Join(dir, "ffmpeg")
 	body := fmt.Sprintf(`#!/bin/sh
 for a; do out="$a"; done
+case "$out" in pipe:*) exit 0 ;; esac
 sleep %.2f
 if [ ! -e %q ]; then
   echo "refusing, as instructed" >&2

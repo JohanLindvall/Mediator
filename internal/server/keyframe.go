@@ -37,7 +37,7 @@ import (
 //
 // t is returned unchanged when there is nothing better to say: no ffmpeg or
 // ffprobe, an unreadable file, or an answer that makes no sense.
-func streamStart(ctx context.Context, ffmpegBin, path string, t float64) float64 {
+func streamStart(ctx context.Context, ffmpegBin string, input []string, t float64) float64 {
 	probe := library.FFprobePath()
 	if ffmpegBin == "" || probe == "" || t <= 0 {
 		return max(t, 0)
@@ -45,11 +45,12 @@ func streamStart(ctx context.Context, ffmpegBin, path string, t float64) float64
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	ff := exec.CommandContext(ctx, ffmpegBin,
-		"-hide_banner", "-loglevel", "error", "-nostdin",
-		"-copyts", "-ss", strconv.FormatFloat(t, 'f', 3, 64), "-i", path,
-		"-map", "0:v:0", "-c:v", "copy", "-frames:v", "1",
+	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
+		"-copyts", "-ss", strconv.FormatFloat(t, 'f', 3, 64)}
+	args = append(args, input...)
+	args = append(args, "-map", "0:v:0", "-c:v", "copy", "-frames:v", "1",
 		"-f", "matroska", "pipe:1")
+	ff := exec.CommandContext(ctx, ffmpegBin, args...)
 	ff.WaitDelay = 2 * time.Second
 	out, err := ff.StdoutPipe()
 	if err != nil {
@@ -95,9 +96,18 @@ func firstPTS(out string, t float64) (float64, bool) {
 }
 
 // handleKeyframe answers where a copy-mode transcode of ?t= would begin.
-// Content inside an archive is fed to ffmpeg through a pipe, which cannot be
-// seeked by timestamp, so there is nothing to look up: the answer is the
-// request, and the client corrects nothing.
+//
+// Measured through the very input the conversion reads (timeSeekInput):
+// the file itself, or this server's own stream for content inside another
+// file. Such content used to be answered with the time asked for, unmeasured
+// — written when it reached ffmpeg only through a pipe, which cannot be
+// seeked by time — and once it was read over the loopback stream, with real
+// seeking, the answer and the conversion disagreed: a film inside a rar set
+// told its player a conversion began at 59.917 s that began at 56.515, and
+// the sound and the subtitles ran 3.4 s ahead of the picture. A disc title,
+// read by position, and content with only a pipe to be read through are
+// still answered with the time asked for, there being no seek by time to
+// measure.
 func (s *Server) handleKeyframe(w http.ResponseWriter, r *http.Request) {
 	it, ok := s.item(r, r.PathValue("id"))
 	if !ok || it.Kind != library.KindVideo {
@@ -106,8 +116,8 @@ func (s *Server) handleKeyframe(w http.ResponseWriter, r *http.Request) {
 	}
 	t := mediaSeconds(r.URL.Query().Get("t"))
 	start := t
-	if !it.Archived() {
-		start = streamStart(r.Context(), s.thumbs.FFmpegPath(), it.Path, t)
+	if in, ok := timeSeekInput(it, t); ok {
+		start = streamStart(r.Context(), s.thumbs.FFmpegPath(), in, t)
 	}
 	// A property of the file and the time asked for, not of the session, so
 	// repeating a seek — or reloading the page on one — is free.

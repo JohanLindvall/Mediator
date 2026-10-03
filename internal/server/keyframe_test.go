@@ -36,11 +36,11 @@ func TestFirstPTS(t *testing.T) {
 func TestStreamStartWithoutTools(t *testing.T) {
 	// No ffmpeg: the caller must be told to assume an accurate seek rather
 	// than be handed a made-up offset.
-	if got := streamStart(t.Context(), "", "/nonexistent.mkv", 601.7); got != 601.7 {
+	if got := streamStart(t.Context(), "", []string{"-i", "/nonexistent.mkv"}, 601.7); got != 601.7 {
 		t.Fatalf("streamStart without ffmpeg = %v; want the time asked for", got)
 	}
 	// Seeking to the start needs no probe at all.
-	if got := streamStart(t.Context(), "/nonexistent/ffmpeg", "/nonexistent.mkv", 0); got != 0 {
+	if got := streamStart(t.Context(), "/nonexistent/ffmpeg", []string{"-i", "/nonexistent.mkv"}, 0); got != 0 {
 		t.Fatalf("streamStart at zero = %v; want 0", got)
 	}
 }
