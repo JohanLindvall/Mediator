@@ -3378,6 +3378,16 @@ Frontend (`web/src`, no framework, no runtime deps):
   `remote.watchAvailability`), since a button that opens an empty picker is
   worse than none. `watchRemoteState` merges the two connection events for
   the same reason.
+  **And it is asked only while the page can be seen.** WebKit turns the
+  system's route detection on for as long as any listener for that event is
+  attached, which Apple documents as costing significant power and says to
+  turn off when not needed; the bar's decks held theirs for the life of the
+  page, through a phone locked in a pocket playing over Bluetooth in a car,
+  where nobody can press the button. `watchAirPlay` now attaches the
+  listener while the document is visible and takes it off when it is not —
+  WebKit answers at once from what it last knew when it is attached again —
+  and puts Chrome's watch down and up the same way. A route already chosen
+  is untouched by this, that being `watchRemoteState`.
   The two availability questions are not the same question, which matters.
   WebKit says whether *any* target is on the network, once it has looked;
   Chrome says whether one can play **what this element is holding**, which is
@@ -3944,6 +3954,52 @@ set that has gone away should be given up on in seconds, and no more than
   swap and fading it would open a hole, and a deck left holding a third of
   the volume is the one that plays the next track, quietly, for no reason
   anybody could see.
+  **And it is skipped where nobody can hear it** (`fadeHeard`). iOS does not
+  let a page set an element's volume — it reads 1 whatever is written
+  (`volumeSettable`, probed once) — so there the ramp was silence and then a
+  delay; and a page nobody is looking at runs no frames and throttles the
+  timeout that finishes the ramp. So a pause pressed on a locked phone's
+  screen landed late, a play pressed in between was ignored because the deck
+  had not stopped yet, and the late pause then stopped the music the listener
+  had just asked for. Where it cannot be heard, a pause is a pause at once.
+  A play pressed **during** a fade out is a play wherever it is pressed
+  (`fadingOut`): the early return that asked only whether the deck had
+  paused made the reversal the comment promised unreachable.
+- **The sounding deck is never let end** (`wrappedAround` in `queue.ts`,
+  tested; `checkWrap`, `loadDecks`). WebKit gives up a page's audio session
+  the moment an element plays to its natural end with nothing else playing
+  (`sessionWillEndPlayback`, iOS 17 on), and a page in the background cannot
+  get it back: the next track's `play()` then waits, silent, until the app is
+  opened. Seen in the server's log from a phone in a car: an album's second
+  track ended with the page in the background, and its third was not asked
+  for until nearly seven minutes later, after the page had been brought back
+  to the front. So the sounding deck **loops**, and the jump back to its
+  start is where the bar moves on — the `ended` listener stays as the
+  fallback for an engine that ends a looping element. The jump is told apart
+  from a seek by the clock the bar keeps (`lastPos`), which every seek it
+  makes moves with it (`seekDeck`: the seek bar, previous, the end of a cast,
+  and the lock screen's scrubber, now claimed as `seekto` for exactly this);
+  what is left is a jump nobody here asked for, backwards, into the opening
+  seconds, from the closing stretch — the loop and nothing else. The next
+  track goes on the **other** deck whether or not the preloader got there
+  first, and that deck is asked to play **before** the old one is stopped
+  (`loadDecks`), so something is playing at every instant: re-pointing the
+  sounding deck stops it first, which in a pocket is the session gone.
+  Checked in Chromium against generated tracks: an album played through,
+  each track once and never two decks sounding together, the queue parked
+  at its end; seeking about, from the closing seconds straight back to the
+  start included, stayed on the track; a seek into the last second moved on;
+  previous restarted. What could not be checked here is iOS itself — the
+  next drive is the trial, and the reports below are what it will say.
+  **What a listener hears and nothing recorded now reaches the server's
+  log**: a deck that ran dry, as one line per track when it is left
+  (`audio-stalls`: how many, how long in all, how many with the page out of
+  sight — a wait during a seek or under 50 ms is not one), and a play the
+  browser refused without a gesture (`audio-refused`, with whether the page
+  was visible). Stutter with no stalls reported is past the element — the
+  radio or the car — and stutter with them is the network; the server alone
+  cannot tell, the proxy in front of it taking each file whole in under half
+  a second and feeding the phone from its own buffer.
 - **The player has the spectrum too**, on the film's own soundtrack, and it
   is the same `Visualizer` — `attach` takes media elements rather than audio
   ones, which is the whole of what that needed — inside the same
@@ -4673,7 +4729,9 @@ Serving details worth knowing before "fixing" them:
   decode, refused source, which is the distinction every route turns on),
   every give-up with the sentence the viewer was shown, a feed that stopped
   and a feed that was picked up again, every failed API request by endpoint
-  and status, and uncaught errors and rejections. Each carries the film, the
+  and status, uncaught errors and rejections, and from the music bar the
+  stalls of each track and any play the browser refused (see the never-ended
+  deck above). Each carries the film, the
   position and the route in use (`routeName`), so a line explains the
   requests around it.
   **Everything about it is bounded, because this is the one route where a

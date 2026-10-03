@@ -14,12 +14,18 @@ export interface MediaKeys {
   stop?(): void;
   previous?(): void;
   next?(): void;
+  /**
+   * The lock screen's scrubber. Claimed where the claimant needs to know of
+   * every seek — the music bar reads a jump it did not make as its looping
+   * deck going round (wrappedAround) — and left to the browser elsewhere.
+   */
+  seek?(to: number): void;
 }
 
 /** Innermost last: the top of the stack is whoever is in front. */
 const claims: MediaKeys[] = [];
 
-function set(name: MediaSessionAction, fn: (() => void) | undefined): void {
+function set(name: MediaSessionAction, fn: MediaSessionActionHandler | undefined): void {
   try {
     navigator.mediaSession.setActionHandler(name, fn ?? null);
   } catch {
@@ -38,6 +44,13 @@ function apply(): void {
   set('stop', top && (() => top.stop ? top.stop() : top.pause()));
   set('previoustrack', top?.previous && (() => top.previous?.()));
   set('nexttrack', top?.next && (() => top.next?.()));
+  set(
+    'seekto',
+    top?.seek &&
+      ((d: MediaSessionActionDetails) => {
+        if (typeof d.seekTime === 'number' && Number.isFinite(d.seekTime)) top.seek?.(Math.max(0, d.seekTime));
+      }),
+  );
 }
 
 /** Take the keys. The returned function gives them back. */

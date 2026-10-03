@@ -25,6 +25,7 @@ import {
   runsHours,
   shuffleInPlace,
   windowRows,
+  wrappedAround,
 } from './queue.ts';
 
 test('added tracks follow everything already queued, in the order they came', () => {
@@ -92,6 +93,37 @@ test('resumable: loaded, not failed, not played out, and not parked on the final
   assert.ok(resumable({ ...ok, ended: true }), 'a boundary with more to come');
   assert.ok(!resumable({ ...ok, ended: true, atLast: true }), 'the final boundary restarts from zero');
   assert.ok(resumable({ ...ok, ended: true, atLast: true, repeat: true }), 'unless repeat wraps it');
+});
+
+test('the loop going round is told apart from playing and from seeking', () => {
+  // The closing stretch of a five-minute track jumping to its opening: the loop.
+  assert.equal(wrappedAround(299.8, 0.05, 300), true);
+  // Timeupdates a second apart, as a throttled page may see them.
+  assert.equal(wrappedAround(299, 0.4, 300), true);
+  // A seek the bar made moves `last` with it, so its seeking event jumps nowhere.
+  assert.equal(wrappedAround(0, 0, 300), false);
+  assert.equal(wrappedAround(120, 120, 300), false);
+  // Playing on: forward, or a clock a few milliseconds behind itself.
+  assert.equal(wrappedAround(10, 10.25, 300), false);
+  assert.equal(wrappedAround(0.04, 0.03, 300), false);
+  assert.equal(wrappedAround(150.2, 150.19, 300), false);
+  // Back into the opening from the middle is not the end going round.
+  assert.equal(wrappedAround(150, 1, 300), false);
+  // Back from the closing stretch to somewhere past the opening is not either.
+  assert.equal(wrappedAround(299, 40, 300), false);
+  // A track of two seconds goes round from wherever its clock last was.
+  assert.equal(wrappedAround(1.9, 0.02, 2), true);
+  // With no length known, the jump back into the opening is enough.
+  assert.equal(wrappedAround(212, 0.1, NaN), true);
+  assert.equal(wrappedAround(212, 0.1, Infinity), true);
+  assert.equal(wrappedAround(212, 30, NaN), false);
+  // Nothing known about where it was says nothing.
+  assert.equal(wrappedAround(NaN, 0.1, 300), false);
+  // A jitter in the first moments says nothing either, length known or not.
+  assert.equal(wrappedAround(0.15, 0.05, NaN), false);
+  assert.equal(wrappedAround(0.3, 0.25, NaN), false);
+  // A track shorter than a second still goes round.
+  assert.equal(wrappedAround(0.38, 0.01, 0.4), true);
 });
 
 test('one song is one key, whatever file and whatever take it is in', () => {

@@ -86,17 +86,41 @@ export function watchRemoteState(el: HTMLMediaElement, onChange: () => void): vo
  * WebKit only tells a page whether *any* target exists, and only after it
  * has looked — so a button shown before the first event would be a button
  * that does nothing on a network with no Apple TV in it.
+ *
+ * **Only while the page can be seen.** Looking is not free: WebKit turns the
+ * system's route detection on for as long as any listener for the event is
+ * attached, which Apple documents as costing significant power and says to
+ * turn off when it is not needed. The bar's decks held one for the life of
+ * the page — through a phone locked in a pocket, playing over Bluetooth in a
+ * car, where nobody can press the button and the radios are already busy
+ * with the music. So the listener is attached while the page is visible and
+ * taken off when it is not; attached again, WebKit answers at once from what
+ * it last knew. Chrome's watch is put down and taken up the same way. A route
+ * already chosen is not touched by any of this — that is watchRemoteState.
  */
 export function watchAirPlay(
   el: HTMLMediaElement,
   onChange: (available: boolean) => void,
 ): () => void {
+  const seen = (): boolean => document.visibilityState === 'visible';
   if (airPlaySupported(el)) {
     const onAvailability = (ev: Event): void => {
       onChange((ev as Event & { availability?: string }).availability === 'available');
     };
-    el.addEventListener('webkitplaybacktargetavailabilitychanged', onAvailability);
-    return () => el.removeEventListener('webkitplaybacktargetavailabilitychanged', onAvailability);
+    let listening = false;
+    const sync = (): void => {
+      if (seen() === listening) return;
+      listening = !listening;
+      if (listening) el.addEventListener('webkitplaybacktargetavailabilitychanged', onAvailability);
+      else el.removeEventListener('webkitplaybacktargetavailabilitychanged', onAvailability);
+    };
+    sync();
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      document.removeEventListener('visibilitychange', sync);
+      if (listening) el.removeEventListener('webkitplaybacktargetavailabilitychanged', onAvailability);
+      listening = false;
+    };
   }
   // Chrome's version of the same question, and it is not quite the same
   // question: it answers for **this element's current media**, so a watch
@@ -115,10 +139,15 @@ export function watchAirPlay(
   // Without this the first watch is never put down and goes on answering
   // about a file that is gone.
   let armed = 0;
-  const arm = () => {
+  const disarm = (): void => {
+    armed++; // a resolve still in flight sees a newer generation and stands down
     if (watch !== undefined) void remote.cancelWatchAvailability(watch).catch(() => {});
     watch = undefined;
-    const gen = ++armed;
+  };
+  const arm = (): void => {
+    disarm();
+    if (!seen()) return;
+    const gen = armed;
     remote.watchAvailability(onChange).then(
       (id) => {
         // A newer arm already superseded this one: cancel what this call
@@ -137,16 +166,17 @@ export function watchAirPlay(
       () => onChange(true),
     );
   };
+  const onVisibility = (): void => (seen() ? arm() : disarm());
   arm();
   el.addEventListener('loadedmetadata', arm);
+  document.addEventListener('visibilitychange', onVisibility);
   // Returned so a viewer can put the watch down when it closes, as it does
   // every other listener it armed: the element goes with the viewer, but a
   // watch left armed on it is still a watch.
   return () => {
     el.removeEventListener('loadedmetadata', arm);
-    armed++; // a resolve still in flight sees a newer generation and stands down
-    if (watch !== undefined) void remote.cancelWatchAvailability(watch).catch(() => {});
-    watch = undefined;
+    document.removeEventListener('visibilitychange', onVisibility);
+    disarm();
   };
 }
 

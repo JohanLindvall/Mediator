@@ -384,7 +384,8 @@ type SkipMarks struct {
 // of them is trimmed and stripped before it reaches the log.
 type ClientFault struct {
 	// What kind of fault, as a short tag the log can be grepped by:
-	// "feed", "feed-recovered", "network", "playback", "script".
+	// "feed", "feed-recovered", "network", "playback", "script", and the
+	// music bar's "audio-stalls" and "audio-refused".
 	What string `json:"what"`
 	// Detail is what the browser said about it.
 	Detail string `json:"detail,omitempty"`

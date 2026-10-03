@@ -13,6 +13,7 @@ import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
 import { CastTransport, type CastHooks } from './casting';
 import type { RendererInfo } from './types.gen';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
+import { reportFault } from './report';
 import { TrackCard } from './trackcard';
 import { playingAudio } from './nowplaying';
 import { clamp, esc, formatDuration, tempoLabel, trackTitle } from './format';
@@ -33,6 +34,7 @@ import {
   runsHours,
   shuffleInPlace,
   windowRows,
+  wrappedAround,
 } from './queue';
 import { sameRelease } from './cover';
 import { shareItem } from './links';
@@ -113,6 +115,22 @@ const MORE_GLYPH = '⋯';
  * reason to spend that.
  */
 const FADE_MS = 150;
+
+/**
+ * Whether this browser lets a page set an element's volume. iOS does not: it
+ * reads 1 whatever is written, the level being the phone's own. A fade there
+ * is silence followed by a delay, and the delay was all anybody got from it
+ * (see fadeHeard).
+ */
+const volumeSettable = ((): boolean => {
+  try {
+    const probe = document.createElement('audio');
+    probe.volume = 0.5;
+    return Math.abs(probe.volume - 0.5) < 0.01;
+  } catch {
+    return false;
+  }
+})();
 
 /**
  * How often a television is actually asked where it has got to, in seconds
@@ -216,6 +234,25 @@ export class AudioPlayer {
   private fadeGen = 0;
   private fadeRaf = 0;
   private fadeEnd = 0;
+  /**
+   * A fade out is under way: the deck is still sounding and will be paused
+   * when it ends. A play pressed meanwhile is a play — it used to be ignored,
+   * the deck not having stopped yet, and the pause then landed anyway.
+   */
+  private fadingOut = false;
+  /**
+   * Where the sounding deck's clock was last seen, moved by every seek the
+   * bar makes — which is what lets a jump backwards that nobody here asked
+   * for be read as the loop going round (wrappedAround).
+   */
+  private lastPos = 0;
+  /**
+   * The sounding deck ran dry: when, and the tally for the track, said in
+   * the server's log when the track is left (reportStalls). A stall is the
+   * one fault a listener hears and nothing on this side used to record.
+   */
+  private stallSince = 0;
+  private stalls = { n: 0, ms: 0, hidden: 0, id: '' };
   private browserReceiver = new Set<HTMLMediaElement>();
   private netReceivers = false;
   /**
@@ -774,7 +811,7 @@ export class AudioPlayer {
   /** Whether sound is coming out of something, here or on a television. */
   private playing(): boolean {
     if (this.tv) return this.tv.playing;
-    return !this.audio.paused;
+    return !this.audio.paused && !this.fadingOut;
   }
 
   /** Carry on from where it is, if there is anything loaded. */
@@ -792,13 +829,18 @@ export class AudioPlayer {
       this.updatePlayState();
       return;
     }
-    if (!this.audio.paused) return;
+    if (!this.audio.paused && !this.fadingOut) return;
     this.spectrum.viz.resume();
+    if (!this.fadeHeard()) {
+      this.cancelFade();
+      this.playDeck();
+      return;
+    }
     // Start silent and climb, so the first sample is not a step up from
     // nothing. If a fade out is still running this simply reverses it from
     // wherever it had got to.
     if (!this.fadeRaf) this.audio.volume = 0;
-    void this.audio.play().catch(() => {});
+    this.playDeck();
     this.fade(true);
   }
 
@@ -811,9 +853,104 @@ export class AudioPlayer {
       return;
     }
     if (this.audio.paused) return;
+    if (!this.fadeHeard()) {
+      this.cancelFade();
+      this.audio.pause();
+      return;
+    }
     // Faded out first, and only actually paused at the end of it — pausing
     // now would cut the waveform and the fade would be of silence.
     this.fade(false);
+  }
+
+  /**
+   * Whether a fade is something anybody would hear. Not on iOS, where a page
+   * cannot set an element's volume (volumeSettable), and not on a page
+   * nobody is looking at, which runs no animation frames and throttles the
+   * timeout that finishes the ramp with every other timer. Either way the
+   * fade was only a delay: a pause pressed on a locked phone's screen landed
+   * late, a play pressed in between was ignored because the deck had not
+   * stopped yet, and the late pause then stopped the music the listener had
+   * just asked for. Where it cannot be heard, a pause is a pause at once.
+   */
+  private fadeHeard(): boolean {
+    return volumeSettable && document.visibilityState === 'visible';
+  }
+
+  /**
+   * Start the sounding deck, and say so in the server's log where the browser
+   * refuses: a refusal to play without a gesture is exactly what a phone in
+   * a pocket meets at a track boundary, and it is otherwise silent — the bar
+   * simply stops.
+   */
+  private playDeck(): void {
+    const deck = this.audio;
+    const id = this.current?.id;
+    void deck.play().catch((e: unknown) => {
+      if (e instanceof DOMException && e.name === 'NotAllowedError') {
+        reportFault({
+          what: 'audio-refused',
+          detail: `${e.message} (${document.visibilityState})`,
+          item: id,
+          at: Math.round(deck.currentTime),
+        });
+      }
+      this.updatePlayState();
+    });
+  }
+
+  /**
+   * Seek the sounding deck, moving the clock the loop check reads with it:
+   * a jump the bar made is never the loop going round.
+   */
+  private seekDeck(to: number): void {
+    this.lastPos = to;
+    this.audio.currentTime = to;
+  }
+
+  /**
+   * Move on where the sounding deck has gone round (wrappedAround), and keep
+   * the clock otherwise. Answers whether it moved on.
+   */
+  private checkWrap(a: HTMLAudioElement): boolean {
+    const now = a.currentTime;
+    if (a.loop && wrappedAround(this.lastPos, now, a.duration)) {
+      this.lastPos = now;
+      this.next(true);
+      return true;
+    }
+    this.lastPos = now;
+    return false;
+  }
+
+  /** Close a stall that is under way into the tally; a blink is not one. */
+  private endStall(): void {
+    if (!this.stallSince) return;
+    const ms = performance.now() - this.stallSince;
+    this.stallSince = 0;
+    if (ms < 50) return;
+    this.stalls.n++;
+    this.stalls.ms += ms;
+    if (document.visibilityState !== 'visible') this.stalls.hidden++;
+  }
+
+  /**
+   * Say in the server's log how often the track being left ran dry, and for
+   * how long, and how much of that was with the page out of sight. Once per
+   * track, and only where it did: the next drive answers whether stutter is
+   * the network or something past the element.
+   */
+  private reportStalls(): void {
+    this.endStall();
+    const s = this.stalls;
+    if (s.n > 0 && s.id) {
+      reportFault({
+        what: 'audio-stalls',
+        detail: `${s.n} stall${s.n === 1 ? '' : 's'}, ${(s.ms / 1000).toFixed(1)} s in all, ${s.hidden} out of sight`,
+        item: s.id,
+      });
+    }
+    this.stalls = { n: 0, ms: 0, hidden: 0, id: this.current?.id ?? '' };
   }
 
   /**
@@ -833,12 +970,14 @@ export class AudioPlayer {
     const from = deck.volume;
     const started = performance.now();
 
+    this.fadingOut = !up;
     const finish = (): void => {
       if (gen !== this.fadeGen) return;
       cancelAnimationFrame(this.fadeRaf);
       window.clearTimeout(this.fadeEnd);
       this.fadeRaf = 0;
       this.fadeEnd = 0;
+      this.fadingOut = false;
       if (up) {
         deck.volume = this.volume;
         return;
@@ -900,7 +1039,7 @@ export class AudioPlayer {
     const at = this.tv ? this.tv.pos : this.audio.currentTime;
     if (at > 3 || this.orderPos <= 0) {
       if (this.tv) this.tv.seek(0);
-      else this.audio.currentTime = 0;
+      else this.seekDeck(0);
       return;
     }
     this.orderPos--;
@@ -908,6 +1047,7 @@ export class AudioPlayer {
   }
 
   close(): void {
+    this.reportStalls();
     this.endCast(false);
     this.cancelFade();
     for (const deck of this.decks) this.stopDeck(deck);
@@ -945,6 +1085,9 @@ export class AudioPlayer {
   private bind(): void {
     for (const deck of this.decks) this.bindDeck(deck);
     this.bindControls();
+    // The track playing when the page goes is reported as any other is when
+    // it is left; keepalive carries the report past the page's end.
+    window.addEventListener('pagehide', () => this.reportStalls());
   }
 
   /**
@@ -974,13 +1117,23 @@ export class AudioPlayer {
       if (mine()) this.updatePlayState();
     });
     a.addEventListener('ended', () => {
+      // Only where a deck was let end: the sounding one loops (wrappedAround),
+      // so this is the fallback for an engine that ends a looping element.
       if (mine()) this.next(true);
     });
+    a.addEventListener('seeking', () => {
+      if (mine()) this.checkWrap(a);
+    });
     a.addEventListener('playing', () => {
-      if (mine()) this.errStreak = 0;
+      if (!mine()) return;
+      this.errStreak = 0;
+      this.endStall();
     });
     a.addEventListener('waiting', () => {
       if (!mine()) return;
+      // Past the opening and not after a seek it is a stall; at the start it
+      // is the track loading, and during a seek it is the seek.
+      if (a.currentTime > 0.5 && !a.seeking && !this.stallSince) this.stallSince = performance.now();
       // The audible track has run out of buffer. Whatever the idle deck was
       // fetching for a boundary that has not arrived yet is not worth the
       // bandwidth now: the two share one connection budget and one disk.
@@ -1012,6 +1165,8 @@ export class AudioPlayer {
     });
     a.addEventListener('timeupdate', () => {
       if (!mine()) return;
+      // An engine that loops without a seeking event is caught here instead.
+      if (this.checkWrap(a)) return;
       this.maybePreloadNext();
       // Counted once per track, and only once it has really played: a queue
       // skipped through is not twenty plays.
@@ -1109,7 +1264,7 @@ export class AudioPlayer {
         this.tv.seek(frac * this.tv.dur);
       } else {
         const d = Number.isFinite(this.audio.duration) ? this.audio.duration : 0;
-        this.audio.currentTime = frac * d;
+        this.seekDeck(frac * d);
       }
       this.seeking = false;
     });
@@ -1129,6 +1284,12 @@ export class AudioPlayer {
       stop: () => this.pausePlayback(),
       previous: () => this.prev(),
       next: () => this.next(),
+      // The lock screen's scrubber, through the bar rather than past it: a
+      // seek the bar did not make is what the loop going round looks like.
+      seek: (to) => {
+        if (this.tv) this.tv.seek(to);
+        else this.seekDeck(to);
+      },
     });
   }
 
@@ -1581,7 +1742,7 @@ export class AudioPlayer {
       // of the session. Autoplay only when picking the film up here; a stop
       // from the set's own remote leaves it paused, ready to resume.
       this.loadDecks(item, resumeHere);
-      this.audio.currentTime = at;
+      this.seekDeck(at);
     }
     this.updatePlayState();
   }
@@ -1599,6 +1760,7 @@ export class AudioPlayer {
     window.clearTimeout(this.fadeEnd);
     this.fadeRaf = 0;
     this.fadeEnd = 0;
+    this.fadingOut = false;
     for (const deck of this.decks) deck.volume = this.volume;
   }
 
@@ -1608,29 +1770,35 @@ export class AudioPlayer {
     // belongs to pausing, not to a boundary — those are gapless by deck
     // swap, and fading one would put a hole between two tracks.
     this.cancelFade();
+    this.reportStalls();
     const url = streamUrl(item.id);
-    if (this.deckUrl[1 - this.deck] === url) {
-      // The preloader already holds this one. Changing decks is the whole
-      // point: no request, no decode, and the silence that used to sit at
-      // every track boundary was both of those.
-      this.stopDeck(this.audio);
+    const was = this.audio;
+    if (this.deckUrl[this.deck] !== url) {
+      // The new track goes on the deck that is not sounding — where the
+      // preloader may well have put it already, which costs no request and
+      // no decode. Never onto the sounding deck: re-pointing that one stops
+      // it first, and a phone in a pocket that stops playing for an instant
+      // has given up its audio session and cannot start the next track at
+      // all. The deck going quiet is stopped only once the new one has been
+      // asked to play (below), so something is playing throughout.
+      if (this.deckUrl[1 - this.deck] !== url) this.setDeckSrc(this.idle, url);
       this.deck = 1 - this.deck;
-    } else if (this.deckUrl[this.deck] !== url) {
-      // Somewhere the preloader did not see coming — a jump in the queue, a
-      // shuffle, the track after a failure. Free the other deck: whatever it
-      // was holding is not what comes next any more.
-      this.stopDeck(this.idle);
-      this.setDeckSrc(this.audio, url);
     }
+    // The sounding deck loops and is never let end (wrappedAround); the
+    // other does not, being silent or on its way out.
+    this.audio.loop = true;
+    if (was !== this.audio) was.loop = false;
+    this.lastPos = this.audio.currentTime;
     // Asked for from the top — but only when it is not there already. A deck
     // the preloader filled has never played and is at zero, and seeking one
     // to where it already is still costs a seek: right at a track boundary
     // that is a hiccup in the place this was supposed to have removed one.
-    if (this.audio.currentTime > 0.01) this.audio.currentTime = 0;
+    if (this.audio.currentTime > 0.01) this.seekDeck(0);
     if (autoplay) {
       this.spectrum.viz.resume();
-      void this.audio.play().catch(() => this.updatePlayState());
+      this.playDeck();
     }
+    if (was !== this.audio) this.stopDeck(was);
   }
 
   private updateMediaSession(item: Item, title: string): void {

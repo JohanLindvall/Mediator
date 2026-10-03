@@ -116,6 +116,43 @@ export function resumable(s: {
 }
 
 /**
+ * The sounding deck is never allowed to end: it loops, and the jump back to
+ * its start is where the bar moves on. iOS gives up a page's audio session
+ * the moment an element plays to its natural end with nothing else playing
+ * (WebKit, since iOS 17), and a locked phone cannot get it back — the next
+ * track's `play()` then waits, silent, until the app is opened. Seen in the
+ * server's log from a phone in a car: an album's second track ended with the
+ * page in the background, and its third was not asked for until nearly seven
+ * minutes later, after the page had been brought back to the front.
+ * A loop never ends, so the session is never given up, and the next track is
+ * started while the last one still holds it.
+ *
+ * This says whether the deck has just gone round. Every seek the bar makes
+ * moves `last` with it, so a jump backwards that nobody here asked for, into
+ * the opening seconds and from the closing stretch of the track, is the loop
+ * and nothing else. Ordinary playback only ever moves forward, and a clock
+ * reading a few milliseconds behind itself is not a jump: the jump has to be
+ * half a second, or half of where the clock was for a track shorter than a
+ * second, and never from the first fifth of a second, where a jitter would
+ * otherwise read as a wrap before the length is even known. Where
+ * the length is unknown the closing stretch cannot be asked about, and the
+ * jump alone decides: a loop left undetected would play the same track for
+ * ever, which is worse than moving on at a seek nobody routed through here.
+ */
+export const WRAP_START_S = 3;
+export const WRAP_BACK_S = 0.5;
+export const WRAP_FROM_S = 0.2;
+export const WRAP_END_S = 5;
+export const WRAP_END_FRACTION = 0.05;
+
+export function wrappedAround(last: number, now: number, duration: number): boolean {
+  if (!Number.isFinite(last) || !Number.isFinite(now)) return false;
+  if (!(last > WRAP_FROM_S) || !(now < WRAP_START_S) || !(last - now > Math.min(WRAP_BACK_S, last / 2))) return false;
+  if (!Number.isFinite(duration) || duration <= 0) return true;
+  return last >= duration - Math.max(WRAP_END_S, duration * WRAP_END_FRACTION);
+}
+
+/**
  * What a ripper or a release writes where a track has no name: "Untitled",
  * "[untitled]", "Track 3", "track01". Such a title names no song, so it
  * makes no recording and no song of one — a performer's untitled pieces are

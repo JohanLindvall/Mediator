@@ -139,7 +139,11 @@ Go binary with the TypeScript frontend embedded.
   and a link to the track — the last four under a "⋯" menu on a phone, so
   the title keeps its room —
   play/pause, stop (which pauses where it is, and resumes when pressed
-  again), previous and next. An album
+  again), previous and next, and the lock screen's scrubber. A queue goes
+  on from track to track on a locked iPhone: a track that plays to its end
+  gives up the phone's audio session, so the bar never lets one end — it
+  loops and moves on as it goes round — and a pause from the lock screen
+  takes effect at once. An album
   or playlist opens as a sheet listing its tracks, numbered once rather than
   twice — the "01." a file carries in its name is dropped, unless the digits
   are the title; because the sheet covers
@@ -1296,6 +1300,16 @@ The server reads the opening of every film when it is opened and, where it
 finds this, has the player convert the film instead of playing the file as it
 is — the log says `picture must be re-encoded rather than copied`. That costs
 a re-encode for exactly those files and nothing for the rest.
+
+**Music stutters or stops on a phone.** The page reports to the server's
+log what a listener hears and nothing else would record: `audio-stalls`, one
+line per track that ran out of data (how many times, for how long in all,
+how many with the page out of sight), and `audio-refused`, a track the
+browser would not start without a tap. Stalls mean the network could not
+keep up; stutter with none reported is past the browser — the Bluetooth
+link or the car. The server's own request log cannot tell the two apart
+behind a reverse proxy, which takes each file whole in a moment and feeds
+the phone from its own buffer.
 
 **A film never starts, and the player says the file cannot be read.** That
 is the disk, not the server: the log carries `stream open failed … err="…:
