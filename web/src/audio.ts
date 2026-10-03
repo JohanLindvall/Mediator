@@ -252,7 +252,18 @@ export class AudioPlayer {
    * one fault a listener hears and nothing on this side used to record.
    */
   private stallSince = 0;
-  private stalls = { n: 0, ms: 0, hidden: 0, id: '' };
+  private stalls = { n: 0, ms: 0, hidden: 0, lag: 0, id: '' };
+  /**
+   * The deck's clock and the wall clock at the last timeupdate while it was
+   * meant to be sounding (trackClock); null across a pause, a seek, a stall
+   * and a new track.
+   */
+  private clockRef: { wall: number; media: number } | null = null;
+  /**
+   * The decks iOS will let start without a tap — see unlockIdle. Per
+   * element, which is the whole of why there are two entries to keep.
+   */
+  private unlocked = new Set<HTMLAudioElement>();
   private browserReceiver = new Set<HTMLMediaElement>();
   private netReceivers = false;
   /**
@@ -886,17 +897,54 @@ export class AudioPlayer {
   private playDeck(): void {
     const deck = this.audio;
     const id = this.current?.id;
-    void deck.play().catch((e: unknown) => {
-      if (e instanceof DOMException && e.name === 'NotAllowedError') {
-        reportFault({
-          what: 'audio-refused',
-          detail: `${e.message} (${document.visibilityState})`,
-          item: id,
-          at: Math.round(deck.currentTime),
-        });
-      }
-      this.updatePlayState();
-    });
+    void deck.play().then(
+      () => {
+        this.unlocked.add(deck);
+      },
+      (e: unknown) => {
+        if (e instanceof DOMException && e.name === 'NotAllowedError') {
+          reportFault({
+            what: 'audio-refused',
+            detail: `${e.message} (${document.visibilityState})`,
+            item: id,
+            at: Math.round(deck.currentTime),
+          });
+        }
+        this.updatePlayState();
+      },
+    );
+    this.unlockIdle();
+  }
+
+  /**
+   * Let the other deck start without a tap when its turn comes. iOS lets an
+   * element begin playback without a user gesture only once a gesture has
+   * started it — per element — and the bar plays every other track on its
+   * other deck. Started by a track boundary with the phone locked, that deck
+   * was refused: "audio-refused … (hidden)" in the server's log, and the
+   * queue stood still until play was pressed on the car's own screen. So
+   * whenever the sounding deck is started the idle one is started and
+   * stopped in the same moment, which inside a gesture is all WebKit asks
+   * and outside one is refused with nothing changed. Nothing is heard:
+   * playback begins asynchronously, and the pause lands first.
+   */
+  private unlockIdle(): void {
+    const idle = this.idle;
+    if (this.unlocked.has(idle)) return;
+    let started: Promise<void>;
+    try {
+      started = idle.play();
+    } catch {
+      return;
+    }
+    idle.pause();
+    started.then(
+      () => this.unlocked.add(idle),
+      (e: unknown) => {
+        // Interrupted by the pause is the answer wanted: it was allowed.
+        if (!(e instanceof DOMException && e.name === 'NotAllowedError')) this.unlocked.add(idle);
+      },
+    );
   }
 
   /**
@@ -905,7 +953,30 @@ export class AudioPlayer {
    */
   private seekDeck(to: number): void {
     this.lastPos = to;
+    this.clockRef = null;
     this.audio.currentTime = to;
+  }
+
+  /**
+   * How far the deck's own clock fell behind the wall clock while it was
+   * meant to be sounding. A hiccup too short to raise `waiting` still costs
+   * time here, where audio lost after the element — on the way to a car's
+   * Bluetooth receiver — costs none: the two are what this tells apart.
+   * Measured between timeupdates, which a throttled page delays for both
+   * clocks alike, and never across a pause, a seek or a counted stall.
+   */
+  private trackClock(a: HTMLAudioElement): void {
+    if (a.paused || a.seeking) {
+      this.clockRef = null;
+      return;
+    }
+    const wall = performance.now() / 1000;
+    const media = a.currentTime;
+    const ref = this.clockRef;
+    this.clockRef = { wall, media };
+    if (!ref) return;
+    const lag = wall - ref.wall - (media - ref.media);
+    if (lag > 0.05 && lag < 60) this.stalls.lag += lag;
   }
 
   /**
@@ -942,15 +1013,18 @@ export class AudioPlayer {
    */
   private reportStalls(): void {
     this.endStall();
+    this.clockRef = null;
     const s = this.stalls;
-    if (s.n > 0 && s.id) {
+    if ((s.n > 0 || s.lag >= 0.5) && s.id) {
       reportFault({
         what: 'audio-stalls',
-        detail: `${s.n} stall${s.n === 1 ? '' : 's'}, ${(s.ms / 1000).toFixed(1)} s in all, ${s.hidden} out of sight`,
+        detail:
+          `${s.n} stall${s.n === 1 ? '' : 's'}, ${(s.ms / 1000).toFixed(1)} s in all, ${s.hidden} out of sight; ` +
+          `its clock fell ${s.lag.toFixed(1)} s behind`,
         item: s.id,
       });
     }
-    this.stalls = { n: 0, ms: 0, hidden: 0, id: this.current?.id ?? '' };
+    this.stalls = { n: 0, ms: 0, hidden: 0, lag: 0, id: this.current?.id ?? '' };
   }
 
   /**
@@ -1114,7 +1188,9 @@ export class AudioPlayer {
       this.updatePlayState();
     });
     a.addEventListener('pause', () => {
-      if (mine()) this.updatePlayState();
+      if (!mine()) return;
+      this.clockRef = null;
+      this.updatePlayState();
     });
     a.addEventListener('ended', () => {
       // Only where a deck was let end: the sounding one loops (wrappedAround),
@@ -1122,11 +1198,14 @@ export class AudioPlayer {
       if (mine()) this.next(true);
     });
     a.addEventListener('seeking', () => {
-      if (mine()) this.checkWrap(a);
+      if (!mine()) return;
+      this.clockRef = null;
+      this.checkWrap(a);
     });
     a.addEventListener('playing', () => {
       if (!mine()) return;
       this.errStreak = 0;
+      this.clockRef = null;
       this.endStall();
     });
     a.addEventListener('waiting', () => {
@@ -1134,6 +1213,7 @@ export class AudioPlayer {
       // Past the opening and not after a seek it is a stall; at the start it
       // is the track loading, and during a seek it is the seek.
       if (a.currentTime > 0.5 && !a.seeking && !this.stallSince) this.stallSince = performance.now();
+      this.clockRef = null;
       // The audible track has run out of buffer. Whatever the idle deck was
       // fetching for a boundary that has not arrived yet is not worth the
       // bandwidth now: the two share one connection budget and one disk.
@@ -1167,6 +1247,7 @@ export class AudioPlayer {
       if (!mine()) return;
       // An engine that loops without a seeking event is caught here instead.
       if (this.checkWrap(a)) return;
+      this.trackClock(a);
       this.maybePreloadNext();
       // Counted once per track, and only once it has really played: a queue
       // skipped through is not twenty plays.

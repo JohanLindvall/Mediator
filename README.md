@@ -142,8 +142,12 @@ Go binary with the TypeScript frontend embedded.
   again), previous and next, and the lock screen's scrubber. A queue goes
   on from track to track on a locked iPhone: a track that plays to its end
   gives up the phone's audio session, so the bar never lets one end — it
-  loops and moves on as it goes round — and a pause from the lock screen
-  takes effect at once. An album
+  loops and moves on as it goes round — and both of the bar's players are
+  readied by the first tap, iOS letting a player start on its own only
+  once a tap has started it. A pause from the lock screen takes effect at
+  once. On a phone the AirPlay button is always offered, its picker listing
+  the phone's own outputs too, and the page never searches for receivers
+  itself. An album
   or playlist opens as a sheet listing its tracks, numbered once rather than
   twice — the "01." a file carries in its name is dropped, unless the digits
   are the title; because the sheet covers
@@ -1303,11 +1307,13 @@ a re-encode for exactly those files and nothing for the rest.
 
 **Music stutters or stops on a phone.** The page reports to the server's
 log what a listener hears and nothing else would record: `audio-stalls`, one
-line per track that ran out of data (how many times, for how long in all,
-how many with the page out of sight), and `audio-refused`, a track the
-browser would not start without a tap. Stalls mean the network could not
-keep up; stutter with none reported is past the browser — the Bluetooth
-link or the car. The server's own request log cannot tell the two apart
+line per track that ran out of data or whose own clock fell behind (how
+many times, for how long in all, how many with the page out of sight, and
+how many seconds its clock lost), and `audio-refused`, a track the browser
+would not start without a tap. A track that played cleanly says nothing.
+Stalls or a lagging clock mean the network or the browser could not keep
+up; stutter with neither is past the browser — the Bluetooth link or the
+car. The server's own request log cannot tell the two apart
 behind a reverse proxy, which takes each file whole in a moment and feeds
 the phone from its own buffer.
 

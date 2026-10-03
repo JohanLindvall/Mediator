@@ -3387,7 +3387,14 @@ Frontend (`web/src`, no framework, no runtime deps):
   listener while the document is visible and takes it off when it is not —
   WebKit answers at once from what it last knew when it is attached again —
   and puts Chrome's watch down and up the same way. A route already chosen
-  is untouched by this, that being `watchRemoteState`.
+  is untouched by this, that being `watchRemoteState`. **A phone or a tablet
+  is not asked at all** (`maxTouchPoints > 1`): its picker is never empty —
+  the device itself and any Bluetooth output are routes in it, a car's
+  stereo among them — so the button is offered without looking, and the
+  system looks for receivers only while the picker is open. Asked, it kept
+  looking for as long as the page was on screen, which is the one thing this
+  page did to the radios while choppy Bluetooth sound was being reported in
+  a car; whether it was the cause is what the next drive says.
   The two availability questions are not the same question, which matters.
   WebKit says whether *any* target is on the network, once it has looked;
   Chrome says whether one can play **what this element is holding**, which is
@@ -3985,6 +3992,22 @@ set that has gone away should be given up on in seconds, and no more than
   first, and that deck is asked to play **before** the old one is stopped
   (`loadDecks`), so something is playing at every instant: re-pointing the
   sounding deck stops it first, which in a pocket is the session gone.
+  **And both decks are unlocked by the first tap** (`unlockIdle`). iOS lets
+  an element start playback without a gesture only once a gesture has
+  started it, and that is per element — the bar plays every other track on
+  its other deck, which no tap had ever started. Seen on the first drive with
+  the loop: the end of the first track was refused (`audio-refused … (hidden)`
+  in the server's log), the queue standing until play was pressed on the
+  car's own screen, which is a gesture; the next boundary, onto the deck the
+  first tap had started, went by itself — its play counted five seconds
+  after the last track's end, where a press would have come later. So whenever the sounding deck is
+  started, the idle one is started and stopped in the same moment: inside a
+  gesture that is all WebKit asks, outside one it is refused with nothing
+  changed, and nothing is heard, the pause landing before playback begins.
+  The same restriction is why the preloader's fetch never appeared in the
+  log before that drive: iOS loads nothing for an element no gesture has
+  started, and from then on the next track arrived fifteen seconds early as
+  it was always meant to.
   Checked in Chromium against generated tracks: an album played through,
   each track once and never two decks sounding together, the queue parked
   at its end; seeking about, from the closing seconds straight back to the
@@ -3994,12 +4017,18 @@ set that has gone away should be given up on in seconds, and no more than
   **What a listener hears and nothing recorded now reaches the server's
   log**: a deck that ran dry, as one line per track when it is left
   (`audio-stalls`: how many, how long in all, how many with the page out of
-  sight — a wait during a seek or under 50 ms is not one), and a play the
-  browser refused without a gesture (`audio-refused`, with whether the page
-  was visible). Stutter with no stalls reported is past the element — the
-  radio or the car — and stutter with them is the network; the server alone
-  cannot tell, the proxy in front of it taking each file whole in under half
-  a second and feeding the phone from its own buffer.
+  sight — a wait during a seek or under 50 ms is not one — and how far the
+  deck's own clock fell behind the wall clock while it was meant to sound,
+  `trackClock`, which a hiccup too short to raise `waiting` still shows), and
+  a play the browser refused without a gesture (`audio-refused`, with
+  whether the page was visible). A track is reported only where something
+  happened, so silence in the log is a clean track. Stutter with neither
+  stalls nor a lagging clock is past the element — the Bluetooth link, the
+  car — and stutter with them is the network; the server alone cannot tell,
+  the proxy in front of it taking each file whole in under half a second and
+  feeding the phone from its own buffer. The first drive with these reports:
+  a track heard as choppy over a car's Bluetooth from its first seconds, and
+  not one stall recorded in it or in the track after.
 - **The player has the spectrum too**, on the film's own soundtrack, and it
   is the same `Visualizer` — `attach` takes media elements rather than audio
   ones, which is the whole of what that needed — inside the same

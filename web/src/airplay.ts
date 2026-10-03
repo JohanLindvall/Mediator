@@ -103,6 +103,18 @@ export function watchAirPlay(
   onChange: (available: boolean) => void,
 ): () => void {
   const seen = (): boolean => document.visibilityState === 'visible';
+  if (airPlaySupported(el) && navigator.maxTouchPoints > 1) {
+    // A phone or a tablet is not asked at all. Its picker is never empty —
+    // the device itself and any Bluetooth output are routes in it, the car's
+    // stereo among them — so the button is worth offering whatever is on
+    // the network, and the system then looks for receivers only while the
+    // picker is open. Asked, it kept looking for as long as the page was on
+    // screen — a cost Apple documents, paid in a car playing over Bluetooth
+    // for a receiver that is never there, and the one thing this page did to
+    // the radios while choppy sound was being reported there.
+    onChange(true);
+    return () => {};
+  }
   if (airPlaySupported(el)) {
     const onAvailability = (ev: Event): void => {
       onChange((ev as Event & { availability?: string }).availability === 'available');
