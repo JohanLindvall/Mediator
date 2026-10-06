@@ -1257,7 +1257,8 @@ A published image is built by GitHub Actions on every push to main
 (`.github/workflows/docker.yml`) — after the Go tests, with the race detector
 and ffmpeg present, and the frontend's type check and tests have passed — as
 `ghcr.io/johanlindvall/mediator:latest`, plus `:sha-<commit>` for each commit
-and the version for a `vX.Y.Z` tag. It is built for amd64, the runtime
+and for a `vX.Y.Z` tag `:vX.Y.Z` (the release's own name), `:X.Y.Z` and
+`:X.Y`. It is built for amd64, the runtime
 carrying the Intel driver that hardware conversion needs. Or build it here:
 
 ```sh

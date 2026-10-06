@@ -26,7 +26,8 @@ make vet              # go vet only
 
 CI (`.github/workflows/docker.yml`) builds the `test` stage (`make test`) on
 every push and PR; a push to main publishes `ghcr.io/johanlindvall/mediator`
-(`:latest`, `:sha-<commit>`, and the version for a `vX.Y.Z` tag), stamped with
+(`:latest`, `:sha-<commit>`; a `vX.Y.Z` tag adds `:vX.Y.Z`, `:X.Y.Z` and `:X.Y`
+but never moves `:latest`), stamped with
 `git describe --tags --always` like local builds, with provenance, SBOM and an
 attestation. amd64 only, deliberately: the runtime's `intel-media-driver` is
 x86-only.

@@ -8,7 +8,8 @@
 # the registry that did not pass them — publishing waits on that job.
 #
 # A push to main publishes the runtime image to GHCR as :latest and as
-# :sha-<commit>; a vX.Y.Z tag publishes that version too. The image is stamped
+# :sha-<commit>; a vX.Y.Z tag publishes :vX.Y.Z, the tag's own name, and
+# :X.Y.Z and :X.Y beside it, but never :latest. The image is stamped
 # with the version a local `make docker` stamps (`git describe --tags
 # --always`), so the about box reads the same wherever the binary came from.
 #
@@ -92,6 +93,7 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha
+            type=semver,pattern=v{{version}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
           labels: |
