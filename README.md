@@ -796,7 +796,11 @@ Go binary with the TypeScript frontend embedded.
   on their name, artist, genre and year, so "melodic death 1993" finds the
   album, and on where the release is kept, so the same query works in either
   view; performers match on the releases and genres they carry as well
-  as on their own name. Results arrive in place: the listing stays up while
+  as on their own name. A release is found by any track on it too, and a
+  performer by any release of theirs that is found, so typing a song's
+  title counts and lists the album it is on and who made it — and the
+  search stays in force as you move between views and drill into a
+  performer, until you clear it. Results arrive in place: the listing stays up while
   the next one is fetched and only what differs is redrawn, so typing narrows
   the grid instead of flashing it, and anything the two searches have in
   common keeps its tile and its loaded thumbnail. Type filter chips (all / videos / images / music /

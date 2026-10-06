@@ -214,6 +214,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	// genre lists, which know nothing of the other narrowing.
 	performers := map[string]struct{}{}
 	genres := map[string]struct{}{}
+	inView := make([]*Album, 0, len(albums))
 	for _, a := range albums {
 		if q.Artist != "" && !strings.EqualFold(a.Artist, q.Artist) {
 			continue
@@ -221,9 +222,10 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 		if q.Genre != "" && !albumInGenre(a, q.Genre) {
 			continue
 		}
-		if !matchWords(a.lower, words) {
-			continue
-		}
+		inView = append(inView, a)
+	}
+	// Found as the listing finds them: by their own text or a track on them.
+	for _, a := range l.albumsAnswering(inView, words, allowed) {
 		if a.Spoken {
 			out.Audiobooks++
 			continue
@@ -255,7 +257,10 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 			if q.Artist != "" && !strings.EqualFold(ar.Name, q.Artist) {
 				continue
 			}
-			if matchWords(ar.lower, words) {
+			// By their own text, or through a release found above — the rule
+			// the listing applies (performersAnswering).
+			_, through := performers[strings.ToLower(ar.Name)]
+			if matchWords(ar.lower, words) || through {
 				out.Artists++
 			}
 		}

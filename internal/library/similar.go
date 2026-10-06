@@ -566,14 +566,17 @@ func (l *Library) SimilarAlbums(id string, q AlbumQuery) []*Album {
 		return nil
 	}
 	words := searchWords(q.Search)
-	var out []*Album
+	var in []*Album
 	for _, a := range l.AllowedAlbums(l.Albums(), q.Paths) {
-		s, ok := snd.albums[a.ID]
-		if !ok || a.ID == id || !matchWords(a.lower, words) {
-			continue
+		if _, ok := snd.albums[a.ID]; ok && a.ID != id {
+			in = append(in, a)
 		}
+	}
+	// Found by the search as the listing finds them (albumsAnswering).
+	var out []*Album
+	for _, a := range l.albumsAnswering(in, words, q.Paths.allower()) {
 		c := *a
-		c.Similarity = dot(seed.vec, s.vec)
+		c.Similarity = dot(seed.vec, snd.albums[a.ID].vec)
 		out = append(out, &c)
 	}
 	nearest(out, func(a *Album) float32 { return a.Similarity }, func(a *Album) string { return a.ID }, q.Desc)
@@ -590,13 +593,14 @@ func (l *Library) SimilarArtists(name, search string, desc bool, f PathFilter) [
 		return nil
 	}
 	words := searchWords(search)
+	theirs := l.performersAnswering(f, words)
 	var out []*Artist
 	// Every performer the caller may see, in no order: the resemblance is
 	// the order, and sorting them by name first was work thrown away.
 	for _, ar := range l.artistsFor(f) {
 		key := strings.ToLower(ar.Name)
 		s, ok := snd.artists[key]
-		if !ok || key == strings.ToLower(name) || !matchWords(ar.lower, words) {
+		if !ok || key == strings.ToLower(name) || !(matchWords(ar.lower, words) || theirs[key]) {
 			continue
 		}
 		c := *ar

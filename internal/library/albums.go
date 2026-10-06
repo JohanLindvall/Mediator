@@ -207,7 +207,7 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 	all := l.AllowedAlbums(l.Albums(), q.Paths)
 	words := searchWords(q.Search)
 	sortKey, desc := q.Sort, q.Desc
-	out := make([]*Album, 0, len(all))
+	in := make([]*Album, 0, len(all))
 	for _, a := range all {
 		if a.Spoken != q.Audiobooks {
 			continue
@@ -218,16 +218,58 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 		if q.Genre != "" && !albumInGenre(a, q.Genre) {
 			continue
 		}
-		if matchWords(a.lower, words) {
-			out = append(out, a)
-		}
+		in = append(in, a)
 	}
+	out := l.albumsAnswering(in, words, q.Paths.allower())
 	orderBy(out, desc,
 		func(a *Album) bool { return albumHasKey(a, sortKey) },
 		func(a, b *Album) int { return compareAlbums(a, b, sortKey) },
 		func(a *Album) string { return a.sortName },
 		func(a *Album) string { return a.ID })
 	return out
+}
+
+// albumsAnswering is the releases a search finds, in the order given: by
+// their own text — the name, the performer, the genre, the year and where
+// they are kept — or by a track on them. One track is enough, matched by the
+// file listing's own rule: every word in that track's own search text, its
+// name, where it is and its tags.
+//
+// A search for a song's title used to find the song and nothing one view
+// across: no release and no performer under the chips, and a drill-down into
+// either from the song's own card came back empty under a search box still
+// saying what had been asked. A show is found through its episodes for the
+// same reason (answering, in series.go); this is the releases' half, and the
+// performers follow from it (performersAnswering). allowed is what the
+// caller may see: a track it may not is no way to the release it is on.
+//
+// The tracks are asked only of a release its own text did not find, so a
+// search for a release or a performer costs what it always did; one that
+// finds a song looks through the music's tracks once, under the read lock.
+func (l *Library) albumsAnswering(albums []*Album, words []string, allowed func(string) bool) []*Album {
+	if len(words) == 0 {
+		return albums
+	}
+	out := make([]*Album, 0, len(albums))
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, a := range albums {
+		if matchWords(a.lower, words) || l.trackAnswers(a, words, allowed) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// trackAnswers says whether a track on the release answers the search.
+// Called with l.mu held for reading.
+func (l *Library) trackAnswers(a *Album, words []string, allowed func(string) bool) bool {
+	for _, id := range a.TrackIDs {
+		if it := l.items[id]; it != nil && allowed(it.Path) && matchWords(it.lower, words) {
+			return true
+		}
+	}
+	return false
 }
 
 // collection is what every grouped thing carries — a release, a performer,

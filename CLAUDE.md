@@ -833,6 +833,24 @@ Change propagation is the core loop:
   separate `sortName`, since sorting must not depend on the search text.
   Artists are deliberately left out of this: a performer is not a place, and
   the albums they group may sit anywhere.
+  **A release is also found by a track on it, and a performer by a release
+  of theirs that is found** (`albumsAnswering`, `performersAnswering`). A
+  search for a song's title used to find the song and nothing one view
+  across: the album and artist chips read nought, and drilling into the
+  performer from the song's own card — the search still in the box, which
+  the page keeps through every change of view and sends with every one of
+  them — listed none of their releases, the server matching each release
+  on its own text alone. One track is enough, matched by the file listing's
+  own rule (every word in that track's own search text), as a show is found
+  through its episodes (`answering`); the tracks are asked only of a release
+  its own text did not find, and only those the caller may see. A
+  performer's own text is unchanged and still holds no place, but a
+  performer is now found through a release found by where it is kept —
+  which is what makes the views agree: the Artists chip says who made the
+  releases the Albums chip counts. The albums and artists listings, the
+  like-this listings, the chips and queue-all all go through the one rule;
+  the genres keep their own text, a genre not having been asked to answer to
+  a song.
 - **A release spread over discs is one release.** A directory named like a
   disc (`CD2`, `disc 3`, `disk-4`, and the common `CD 1-…` form that names
   the disc as well) is folded into the one above it, so five subdirectories

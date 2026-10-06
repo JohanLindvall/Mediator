@@ -616,3 +616,71 @@ func TestCollectionsSortByWhatArrived(t *testing.T) {
 		t.Errorf("the genre's arrival = %v", genres)
 	}
 }
+
+// A search for a song's title finds the release it is on and the performer
+// who made it, not only the song: the albums and the artists answer as the
+// file listing does, through a track. It used to find the song and nothing
+// one view across, and a drill-down into the performer from the song's own
+// card, the search still in the box, listed none of their releases.
+func TestASongsTitleFindsItsReleaseAndPerformer(t *testing.T) {
+	l := libWithTaggedAlbum(t)
+	add := func(path, title, artist, album string) {
+		l.upsert(path, KindAudio, 1000, time.Unix(1, 0), fileKey{}, false)
+		l.setMeta(PathID(path), tagMeta{title: title, artist: artist, album: album, track: 1}, 150_000)
+	}
+	// Another release by the same performer, which the song is not on, and
+	// somebody else's.
+	add("/music/Ashgrove - Grey Harvest/01.mp3", "Salt Road", "Ashgrove", "Grey Harvest")
+	add("/music/Kestrel Vane - Pier Light/01.mp3", "Tide Song", "Kestrel Vane", "Pier Light")
+	l.RefreshCounts()
+
+	names := func(albums []*Album) []string {
+		var out []string
+		for _, a := range albums {
+			out = append(out, a.Name)
+		}
+		return out
+	}
+	if got := names(l.SearchAlbums(AlbumQuery{Search: "autumn comes", Sort: "name"})); !slices.Equal(got, []string{"Under Ashen Skies"}) {
+		t.Errorf("releases found by a song's title: %q, want the one it is on", got)
+	}
+	artists := l.SearchArtists("autumn comes", "name", false, PathFilter{})
+	if len(artists) != 1 || artists[0].Name != "Ashgrove" {
+		t.Errorf("performers found by a song's title: %v, want the one who made it", artists)
+	}
+	if c := l.CountsFor(CountQuery{Search: "autumn comes"}); c.Audio != 1 || c.Albums != 1 || c.Artists != 1 {
+		t.Errorf("the chips for a song's title: %+v, want one track, one release, one performer", c)
+	}
+
+	// Drilling into the performer keeps the search in force: the release the
+	// song is on, and not their other one.
+	in := AlbumQuery{Search: "autumn comes", Artist: "Ashgrove", Sort: "name"}
+	if got := names(l.SearchAlbums(in)); !slices.Equal(got, []string{"Under Ashen Skies"}) {
+		t.Errorf("their releases under the search: %q, want the one the song is on", got)
+	}
+	if c := l.CountsFor(CountQuery{Search: "autumn comes", Artist: "Ashgrove"}); c.Albums != 1 || c.Artists != 1 {
+		t.Errorf("the chips inside the performer under the search: %+v", c)
+	}
+
+	// One track has to answer every word, as in the file listing: words
+	// spread over two songs find neither, nor the release they are on.
+	if got := names(l.SearchAlbums(AlbumQuery{Search: "autumn water", Sort: "name"})); len(got) != 0 {
+		t.Errorf("words from two different songs found %q", got)
+	}
+	// A release's own words still find it, and its performer.
+	if got := names(l.SearchAlbums(AlbumQuery{Search: "pier light", Sort: "name"})); !slices.Equal(got, []string{"Pier Light"}) {
+		t.Errorf("a release's own name found %q", got)
+	}
+
+	// A track the caller may not see is no way to its release.
+	elsewhere := ParsePaths("/music/Kestrel Vane - Pier Light")
+	if got := l.SearchAlbums(AlbumQuery{Search: "autumn comes", Paths: elsewhere}); len(got) != 0 {
+		t.Errorf("a confined caller found %q through a track it may not see", names(got))
+	}
+	if got := l.SearchArtists("autumn comes", "name", false, elsewhere); len(got) != 0 {
+		t.Errorf("a confined caller found performers through a track it may not see: %v", got)
+	}
+	if c := l.CountsFor(CountQuery{Search: "autumn comes", Paths: elsewhere}); c.Albums != 0 || c.Artists != 0 {
+		t.Errorf("a confined caller's chips: %+v", c)
+	}
+}

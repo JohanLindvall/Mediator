@@ -179,13 +179,37 @@ func (l *Library) artistsFor(paths PathFilter) []*Artist {
 	return artistsFrom(l.AllowedAlbums(l.Albums(), paths))
 }
 
+// performersAnswering is the performers a search finds through what they
+// released: those with a release the search finds (albumsAnswering), keyed
+// as the performers are grouped. Their own text — the name, the release
+// titles and the genres — finds them as well; this is the half that reaches
+// a song's title, so the performer of a song a search finds is found with
+// it, and drilling into them from its card lists the release it is on.
+func (l *Library) performersAnswering(paths PathFilter, words []string) map[string]bool {
+	if len(words) == 0 {
+		return nil
+	}
+	var theirs []*Album
+	for _, a := range l.AllowedAlbums(l.Albums(), paths) {
+		if a.Artist != "" && !a.Spoken {
+			theirs = append(theirs, a)
+		}
+	}
+	out := map[string]bool{}
+	for _, a := range l.albumsAnswering(theirs, words, paths.allower()) {
+		out[strings.ToLower(a.Artist)] = true
+	}
+	return out
+}
+
 // SearchArtists filters and sorts the artist list.
 func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFilter) []*Artist {
 	all := l.artistsFor(paths)
 	words := searchWords(search)
+	theirs := l.performersAnswering(paths, words)
 	out := make([]*Artist, 0, len(all))
 	for _, a := range all {
-		if matchWords(a.lower, words) {
+		if matchWords(a.lower, words) || theirs[strings.ToLower(a.Name)] {
 			out = append(out, a)
 		}
 	}
