@@ -7,7 +7,7 @@ import "testing"
 // admit one extraction larger than the whole bound.
 func TestEmbeddedSubtitleCacheIsBounded(t *testing.T) {
 	c := &embSubs{}
-	big := make([]byte, 10<<20)
+	big := make([]byte, embSubCacheMax/2+1) // two cannot fit
 	c.admit("a", big)
 	c.admit("b", big)
 	if _, ok := c.cache["a"]; ok {
@@ -15,6 +15,12 @@ func TestEmbeddedSubtitleCacheIsBounded(t *testing.T) {
 	}
 	if _, ok := c.cache["b"]; !ok || c.total != len(big) {
 		t.Errorf("the newer extraction was not admitted, total %d", c.total)
+	}
+	// One read admits every track of a file, so a track already held is
+	// admitted again: it replaces itself rather than counting twice.
+	c.admit("b", big)
+	if c.total != len(big) {
+		t.Errorf("a track admitted twice is counted %d, want %d", c.total, len(big))
 	}
 	c.admit("c", make([]byte, embSubCacheMax+1))
 	if _, ok := c.cache["c"]; ok {

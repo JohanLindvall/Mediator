@@ -1023,6 +1023,16 @@ func (s *Server) handleConvertProgress(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// A cast waiting on a subtitle is counted by that read and nothing else:
+	// the set is handed nothing until the subtitle it will ask for exists,
+	// and the film may meanwhile be converting for the browser, whose
+	// percentage would describe somebody else's wait.
+	if r.URL.Query().Get("for") == "cast" && s.cast.onCaption(it.ID) {
+		if p, active := s.embsubs.progress(it.ID); active {
+			writeJSON(w, ConvertProgress{Active: true, Percent: int(p * 100), Kind: "subtitles"})
+			return
+		}
+	}
 	if s.remux != nil {
 		if p, active := s.remux.Progress(it.ID); active {
 			writeJSON(w, ConvertProgress{Active: true, Percent: int(p * 100), Kind: "rewrap"})

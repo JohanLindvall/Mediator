@@ -18,12 +18,23 @@ import (
 // here open behind it.
 const callTimeout = 8 * time.Second
 
-// setURITimeout is the exception, and it is not a small one. A set handed a
-// URL goes and opens it before it answers — measured against a television on
-// the same wire, that is several seconds for a file it takes to at once, and
-// the answer is what says it worked. Timing out at the ordinary budget
-// reported a failure for a film that was already playing.
-const setURITimeout = 45 * time.Second
+// openTimeout is the exception, and it is not a small one. A set opens the
+// file it has been handed before it answers, and which call it answers late
+// depends on the set: one answers SetAVTransportURI only once it has the
+// file open, another answers that at once and holds Play until the picture
+// is up — measured on an LG, Play took 1.4 to 7 s across ordinary films and
+// past the ordinary budget for a 4K one. The answer is what says it worked,
+// so timing out at the ordinary budget reports a failure for a film that is
+// about to play, and the page then stops it.
+const openTimeout = 45 * time.Second
+
+// budgetFor is how long one action may take to be answered.
+func budgetFor(action string) time.Duration {
+	if action == "SetAVTransportURI" || action == "Play" {
+		return openTimeout
+	}
+	return callTimeout
+}
 
 // arg is one SOAP argument. Order is not decoration: UPnP matches arguments
 // by position within the action, so a map would break every call.
@@ -43,10 +54,7 @@ func (r *Renderer) call(ctx context.Context, service, action string, args ...arg
 	if control == "" {
 		return nil, fmt.Errorf("dlna: %s has no %s", r.Name, service)
 	}
-	budget := callTimeout
-	if action == "SetAVTransportURI" {
-		budget = setURITimeout
-	}
+	budget := budgetFor(action)
 
 	var body bytes.Buffer
 	body.WriteString(`<?xml version="1.0" encoding="utf-8"?>`)

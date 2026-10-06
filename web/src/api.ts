@@ -670,8 +670,13 @@ export function playsHLS(): boolean {
  * How far a conversion of this item has reached. Asked while the player is
  * waiting on one, so the wait can say what it is doing instead of spinning.
  */
-export function convertProgress(id: string): Promise<ConvertProgress> {
-  return getJSON<ConvertProgress>(`/api/convert/${encodeURIComponent(id)}`);
+/**
+ * How far a conversion of the item has got. forCast asks on behalf of a cast
+ * being prepared, which a subtitle read out of the file holds up before
+ * anything is converted (kind "subtitles").
+ */
+export function convertProgress(id: string, forCast = false): Promise<ConvertProgress> {
+  return getJSON<ConvertProgress>(`/api/convert/${encodeURIComponent(id)}${forCast ? '?for=cast' : ''}`);
 }
 
 /**

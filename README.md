@@ -1044,21 +1044,26 @@ logo on a black screen.
 Subtitles carried **inside** the file are offered alongside the sidecars —
 one menu, one numbering. That is how a television release ships its
 captions: no `.srt` beside the file, one MKV with the text muxed in. They
-are found by the same probe that lists the soundtracks, extracted once and
+are found by the same probe that lists the soundtracks, extracted and
 cached, and served through the same conversions a sidecar gets. The
 extraction reads the whole container for a hundred kilobytes of text, which
-settles two things about it. It outlives the request that asked for it: the
-player re-points its subtitle track at a new clock offset on every seek, so
-tied to that request each seek threw a whole pass away and began another, and
-a large film seeked through never finished one. And at most two run at once,
-this being the read here that goes through gigabytes.
+settles three things about it. One read takes every text track the file
+carries, so changing language afterwards reads nothing again. It outlives
+the request that asked for it, since the player re-points its subtitle track
+at a new clock offset on every seek. And at most two run at once, this being
+the read here that goes through gigabytes, each given time in proportion to
+the file.
 
 Subtitles go with a film, converted to SubRip on the way out, since that is
 the format sets read and WebVTT is not — sidecars and the tracks inside the
 file alike, under the same numbering the player's menu uses. The set draws
 one or none — it has no menu to choose from — so the one the player is
 showing is the one that is sent, and turning them off in the player sends
-none. The soundtrack choice travels the same way: the one the player is
+none. A set fetches the subtitle as it opens the film and does not start
+until it has it, so one carried inside the file is read out before the set is
+handed anything — for a large film a minute or more, which the player counts
+out as *Reading the subtitles* — and one that cannot be read is left out, with
+a note saying so. The soundtrack choice travels the same way: the one the player is
 using is the one the set is given, as a copy of the film carrying only that
 track, made only when the choice differs from the default the set would
 have picked anyway.
@@ -1444,7 +1449,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET /api/remux/{id}?a=&mode=`            | The same streams in a container the browser opens, served as an ordinary seekable file, keeping soundtrack `a`; `mode=audio` copies the picture and converts the soundtrack instead; 404 when copying would not help |
 | `GET /api/transcode/{id}?t=0[&mode=audio][&q=]` | Live fMP4 conversion from t seconds (`mode=audio` copies the video, and where t is a keyframe both streams begin on it; `q=` a rung of the bitrate ladder in kbit/s, which re-encodes under that ceiling whatever the mode) |
 | `GET /api/hls/{id}/index.m3u8?t=&mode=[&q=]` | The same conversion as HLS — what Safari plays: the whole film as a VOD playlist beginning at `t`, its segments made as they are asked for, one session per film, mode, soundtrack and rung; `X-Media-Timeline: film` says so, `session` that the older growing playlist from the seek is being served |
-| `GET /api/convert/{id}`                   | How far a conversion has reached, while something is waiting on one |
+| `GET /api/convert/{id}?for=`              | How far a conversion has reached, while something is waiting on one; `for=cast` asks for a cast being prepared, which answers kind `subtitles` while a subtitle is read out of the file for it |
 | `GET /api/skip/{id}`                      | Where a video's intro and credits are, as found from the sound (`introStart`, `introEnd`, `outro` in seconds, the last counted back from the end); all nought where nothing has been found. Asking puts the episode's season at the front of the search |
 | `POST /api/delete/plan`                   | What deleting something would remove — `{kind: item\|album\|series\|season, id, season}` — worked out and nothing removed: the folders and files, counts, size, and a token. JSON body only; refused (403) for a face, a confined caller or `-lock` |
 | `POST /api/delete`                        | Delete exactly what a plan listed, named by its token (`{token}`); once, within ten minutes, and each file only while it is still the one shown. 410 for a token that is used, unknown or too old |
@@ -1464,7 +1469,7 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 | `GET/PUT/DELETE /api/state/{id}`, `GET /api/state` | Playback positions, filtered by face and paths like everything else |
 | `GET /api/renderers`                      | The DLNA renderers on the network (`?fresh=1` searches again) |
 | `GET /api/renderers/{rid}`                | Where that set has got to: transport state, position, duration |
-| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one sidecar subtitle (`sub=off` for none) and one soundtrack; 409 where another request has taken that set meanwhile — the newest press drives it and the older one stops talking to it; 422 for a file already found damaged or incomplete. A set that refuses a new file from where it is (UPnP 701) is stopped and asked again |
+| `POST /api/renderers/{rid}/play/{id}?t=&sub=&audio=` | Play an item on it, from t seconds, with one subtitle (`sub=off` for none; one inside the file is read out before the set is handed the film) and one soundtrack; 409 where another request has taken that set meanwhile — the newest press drives it and the older one stops talking to it; 422 for a file already found damaged or incomplete. A set that refuses a new file from where it is (UPnP 701) is stopped and asked again |
 | `POST /api/renderers/{rid}/next/{id}?audio=` | Queue what follows on the set itself, so a track boundary costs no silence; 501 where the renderer will not, 422 for a damaged file |
 | `POST /api/renderers/{rid}/control`       | `{action: play\|pause\|stop\|seek\|volume, seconds, volume}` |
 | `GET /api/events`                         | Server-sent library change events        |

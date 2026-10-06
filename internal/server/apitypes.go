@@ -313,7 +313,9 @@ type ConvertProgress struct {
 	// Percent is 0..100 of the work, not of the watching.
 	Percent int `json:"percent"`
 	// Kind is what is being done: "rewrap" moves the streams into a
-	// container the browser opens, "convert" re-encodes what it cannot play.
+	// container the browser opens, "convert" re-encodes what it cannot play,
+	// and "subtitles" — answered only to ?for=cast — reads a subtitle out of
+	// the file before a television is handed it.
 	Kind string `json:"kind,omitempty"`
 }
 

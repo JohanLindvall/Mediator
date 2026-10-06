@@ -268,3 +268,21 @@ func TestASetStuckPastAStopIsGivenUpOn(t *testing.T) {
 		t.Errorf("asked %s, want %s: a set that will not stop is not asked again", got, want)
 	}
 }
+
+// Both of the calls a set may hold until the film is open get the opening
+// budget. A set that answers the URI at once and holds Play until the picture
+// is up is ordinary, and at the ordinary budget its Play read as a set that
+// had gone quiet: the cast was reported failed and the page stopped a film
+// that was about to start.
+func TestOpeningCallsGetTheOpeningBudget(t *testing.T) {
+	for _, action := range []string{"SetAVTransportURI", "Play"} {
+		if got := budgetFor(action); got != openTimeout {
+			t.Errorf("%s may take %v, want the opening budget %v", action, got, openTimeout)
+		}
+	}
+	for _, action := range []string{"Stop", "Pause", "Seek", "GetTransportInfo", "GetPositionInfo"} {
+		if got := budgetFor(action); got != callTimeout {
+			t.Errorf("%s may take %v, want the ordinary budget %v", action, got, callTimeout)
+		}
+	}
+}

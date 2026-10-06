@@ -2188,12 +2188,13 @@ class VideoOverlay {
    * Count out the wait before a television is handed the film.
    *
    * What the set is given may have to be made first — a copy carrying the
-   * one soundtrack that was chosen, which for a large release is a minute or
-   * two at disk speed — and until it exists there is nothing to hand over.
-   * The label said "Opening" for the whole of it, which is indistinguishable
-   * from a set that is not answering.
+   * one soundtrack that was chosen, or the chosen subtitle read out of the
+   * file, either a minute or two for a large release — and until it exists
+   * there is nothing to hand over. A label saying only "Opening" for the
+   * whole of it is indistinguishable from a set that is not answering.
    *
-   * The same progress the player's own waits read, put into the same label.
+   * The same progress the player's own waits read, asked for on the cast's
+   * behalf so a subtitle read is reported as itself.
    * Returns the way to stop it, which the caller does the moment the set has
    * the URL: a tick still in flight then has to be dropped, or it would put
    * a stale percentage back over the word the label has moved on to.
@@ -2201,10 +2202,16 @@ class VideoOverlay {
   private countCastPreparation(name: string): () => void {
     let done = false;
     const stop = poll(800, () => {
-      void convertProgress(this.item.id)
+      void convertProgress(this.item.id, true)
         .then((p) => {
           if (done || this.closed || !p.active) return;
-          this.onTv.textContent = `Opening on ${name}… ${p.percent}%`;
+          // A subtitle inside the file is read out before the set is given
+          // anything, and for a large film that is the wait: say so, or a
+          // minute of "Opening" reads as a set that is not answering.
+          this.onTv.textContent =
+            p.kind === 'subtitles'
+              ? `Reading the subtitles for ${name}… ${p.percent}%`
+              : `Opening on ${name}… ${p.percent}%`;
         })
         .catch(() => {});
     });

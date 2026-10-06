@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -263,11 +264,19 @@ func TestADamagedFileIsNotHandedToASet(t *testing.T) {
 
 // fakeSet is a television on a port of its own: a device description, and
 // SOAP answered by refuse (a UPnP code, or 0 to answer normally). It records
-// the actions it was asked, in order.
+// the actions it was asked, in order, and the URI it was last handed, which
+// its status reports back with state.
 type fakeSet struct {
 	mu      sync.Mutex
 	actions []string
 	refuse  func(action string, asked []string) int
+	// silent, where it says so, drops the connection instead of answering —
+	// a set that never answered, without a test waiting out the budget.
+	silent func(action string) bool
+	// before sees each action and its body before the set answers.
+	before func(action, body string)
+	state  string // what GetTransportInfo reports
+	uri    string
 }
 
 func (f *fakeSet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -279,10 +288,38 @@ func (f *fakeSet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, action, _ := strings.Cut(strings.Trim(r.Header.Get("SOAPAction"), `"`), "#")
+	raw, _ := io.ReadAll(r.Body)
+	body := html.UnescapeString(string(raw))
 	f.mu.Lock()
 	f.actions = append(f.actions, action)
-	code := f.refuse(action, f.actions)
+	code := 0
+	if f.refuse != nil {
+		code = f.refuse(action, f.actions)
+	}
+	if action == "SetAVTransportURI" && code == 0 {
+		_, after, _ := strings.Cut(body, "<CurrentURI>")
+		f.uri, _, _ = strings.Cut(after, "</CurrentURI>")
+	}
+	silent := f.silent != nil && f.silent(action)
+	before, state, uri := f.before, f.state, f.uri
 	f.mu.Unlock()
+	if before != nil {
+		before(action, body)
+	}
+	if silent {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+		return
+	}
+	out := ""
+	switch action {
+	case "GetTransportInfo":
+		out = "<CurrentTransportState>" + state + "</CurrentTransportState>"
+	case "GetPositionInfo":
+		out = "<TrackURI>" + html.EscapeString(uri) + "</TrackURI>"
+	}
 	if code != 0 {
 		w.WriteHeader(http.StatusInternalServerError)
 		fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault>`+
@@ -291,7 +328,7 @@ func (f *fakeSet) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fmt.Fprintf(w, `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>`+
-		`<u:%sResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1"></u:%sResponse></s:Body></s:Envelope>`, action, action)
+		`<u:%sResponse xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">%s</u:%sResponse></s:Body></s:Envelope>`, action, out, action)
 }
 
 func (f *fakeSet) asked() string {
@@ -307,7 +344,14 @@ func castTo(t *testing.T, set *fakeSet) (int, string) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "clip.mkv")
 	writeMKV(t, path, 2)
-	ts, srv, _ := serverUnderTest(t, dir)
+	ts, _, _, d := castSetUp(t, set, dir)
+	return castPlay(t, ts, d, library.PathID(path), "")
+}
+
+// castSetUp stands a fake set up and a server over dir pointed at it.
+func castSetUp(t *testing.T, set *fakeSet, dir string) (*httptest.Server, *Server, *library.Library, *dlna.Renderer) {
+	t.Helper()
+	ts, srv, lib := serverUnderTest(t, dir)
 	u, _ := url.Parse(ts.URL)
 	port, _ := strconv.Atoi(u.Port())
 	srv.SetLocalPort(port)
@@ -318,7 +362,14 @@ func castTo(t *testing.T, set *fakeSet) (int, string) {
 		t.Fatalf("describing the fake set: %v", err)
 	}
 	srv.cast.discover = func(context.Context, time.Duration) []*dlna.Renderer { return []*dlna.Renderer{d} }
-	res, err := http.Post(ts.URL+"/api/renderers/"+d.ID+"/play/"+library.PathID(path), "", nil)
+	return ts, srv, lib, d
+}
+
+// castPlay asks the server to play one item on the set, answering the status
+// and body.
+func castPlay(t *testing.T, ts *httptest.Server, d *dlna.Renderer, id, query string) (int, string) {
+	t.Helper()
+	res, err := http.Post(ts.URL+"/api/renderers/"+d.ID+"/play/"+id+query, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,5 +414,73 @@ func TestARefusalIsNotWaitedOnAsSilence(t *testing.T) {
 	}
 	if asked := set.asked(); strings.Contains(asked, "GetTransportInfo") || strings.Contains(asked, "Play") {
 		t.Errorf("a set that refused was asked %s: polled as if silent, or played regardless", asked)
+	}
+}
+
+// A set holds Play until the picture is up, and one that never answers it
+// may have started all the same: it is asked, and a set playing what it was
+// handed is a cast that worked — where reporting a failure is what made the
+// page stop a film that was starting.
+func TestASilentPlayIsAskedAbout(t *testing.T) {
+	set := &fakeSet{silent: func(action string) bool { return action == "Play" }, state: "PLAYING"}
+	code, body := castTo(t, set)
+	if code != http.StatusOK {
+		t.Fatalf("the cast answered %d %q", code, body)
+	}
+	if got := set.asked(); !strings.HasPrefix(got, "SetAVTransportURI,Play,GetTransportInfo,GetPositionInfo") {
+		t.Errorf("the set was asked %s; want its silence over Play asked about", got)
+	}
+}
+
+// A refusal of Play is an answer, and is not asked about as silence is.
+func TestARefusedPlayIsNotAskedAbout(t *testing.T) {
+	set := &fakeSet{refuse: func(action string, _ []string) int {
+		if action == "Play" {
+			return 701
+		}
+		return 0
+	}, state: "PLAYING"}
+	code, body := castTo(t, set)
+	if code != http.StatusBadGateway || body != "Sitting Room would not start playing it" {
+		t.Errorf("the cast answered %d %q", code, body)
+	}
+	if asked := set.asked(); strings.Contains(asked, "GetTransportInfo") {
+		t.Errorf("a set that refused Play was asked %s, as if it had gone quiet", asked)
+	}
+}
+
+// A set fetches the subtitle when it opens the film and holds Play until it
+// has it, and reading one out of a large film is a read of the whole film. So
+// the subtitle is read before the set is handed anything: when the set is
+// given the film, the subtitle it names is already there to be served.
+func TestACastReadsItsSubtitleBeforeTheSetIsHandedTheFilm(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "An Episode.mkv")
+	writeSubbedMKV(t, path)
+	set := &fakeSet{}
+	ts, srv, lib, d := castSetUp(t, set, dir)
+	id := library.PathID(path)
+	lib.EnsureCodecs(t.Context(), id)
+	it, _ := lib.Get(id)
+	var ready, named bool
+	set.mu.Lock()
+	set.before = func(action, body string) {
+		if action != "SetAVTransportURI" {
+			return
+		}
+		srv.embsubs.mu.Lock()
+		_, ready = srv.embsubs.cache[embSubKey(embSubFile(it), 0)]
+		srv.embsubs.mu.Unlock()
+		named = strings.Contains(body, "/subs/"+id+"/0?format=srt")
+	}
+	set.mu.Unlock()
+	if code, body := castPlay(t, ts, d, id, "?sub=0"); code != http.StatusOK {
+		t.Fatalf("the cast answered %d %q", code, body)
+	}
+	if !ready {
+		t.Error("the set was handed the film before its subtitle had been read out of it")
+	}
+	if !named {
+		t.Error("the set was not told where the subtitle is")
 	}
 }

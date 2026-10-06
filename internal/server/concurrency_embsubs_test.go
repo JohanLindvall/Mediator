@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 
 	"github.com/JohanLindvall/Mediator/internal/library"
@@ -17,7 +16,7 @@ func newEmbSubs() (*Server, library.Item, string) {
 	s.embsubs.inflight = map[string]*embSub{}
 	s.embsubs.sem = make(chan struct{}, embSubReaders)
 	it := library.Item{ID: "harbourlights", ModTime: 7, Size: 9}
-	return s, it, fmt.Sprintf("%s|%d|%d|%d", it.ID, it.ModTime, it.Size, 0)
+	return s, it, embSubFile(it)
 }
 
 // The reader belongs to no request. The player re-points its <track> at a new
@@ -26,9 +25,9 @@ func newEmbSubs() (*Server, library.Item, string) {
 // nothing carried the work on, so each seek threw away a pass over gigabytes
 // and began another.
 func TestExtractionOutlivesTheRequestThatAskedForIt(t *testing.T) {
-	s, it, key := newEmbSubs()
+	s, it, file := newEmbSubs()
 	e := &embSub{done: make(chan struct{})}
-	s.embsubs.inflight[key] = e
+	s.embsubs.inflight[file] = e
 
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -37,14 +36,14 @@ func TestExtractionOutlivesTheRequestThatAskedForIt(t *testing.T) {
 	}
 
 	s.embsubs.mu.Lock()
-	_, reading := s.embsubs.inflight[key]
+	_, reading := s.embsubs.inflight[file]
 	s.embsubs.mu.Unlock()
 	if !reading {
 		t.Fatal("the asker leaving tore down the read, so the next ask starts again from the first byte")
 	}
 
 	// And what it finally reads answers whoever is there by then.
-	e.data = []byte("WEBVTT\n")
+	e.data = map[int][]byte{0: []byte("WEBVTT\n")}
 	close(e.done)
 	got, err := s.extractEmbSub(context.Background(), it, 0)
 	if err != nil || string(got) != "WEBVTT\n" {
@@ -57,11 +56,11 @@ func TestExtractionOutlivesTheRequestThatAskedForIt(t *testing.T) {
 // remembered: the entry goes, so a later ask is a fresh attempt and not a
 // cached refusal.
 func TestExtractionFailureIsSharedAndNotRemembered(t *testing.T) {
-	s, it, key := newEmbSubs()
+	s, it, file := newEmbSubs()
 	e := &embSub{done: make(chan struct{})}
 	e.err = errors.New("the container would not be read")
 	close(e.done)
-	s.embsubs.inflight[key] = e
+	s.embsubs.inflight[file] = e
 
 	if _, err := s.extractEmbSub(context.Background(), it, 0); err != e.err {
 		t.Fatalf("err = %v, want the reader's own verdict", err)
@@ -69,16 +68,16 @@ func TestExtractionFailureIsSharedAndNotRemembered(t *testing.T) {
 
 	// The next ask reads afresh — here there is no ffmpeg, so it fails at
 	// once — and leaves nothing behind that could answer for it later.
-	delete(s.embsubs.inflight, key)
+	delete(s.embsubs.inflight, file)
 	if _, err := s.extractEmbSub(context.Background(), it, 0); err == nil {
 		t.Fatal("an extraction with no ffmpeg reported success")
 	}
 	s.embsubs.mu.Lock()
 	defer s.embsubs.mu.Unlock()
-	if _, stuck := s.embsubs.inflight[key]; stuck {
+	if _, stuck := s.embsubs.inflight[file]; stuck {
 		t.Error("a finished read stayed in flight")
 	}
-	if _, cached := s.embsubs.cache[key]; cached {
+	if _, cached := s.embsubs.cache[embSubKey(file, 0)]; cached {
 		t.Error("a failure was admitted to the cache")
 	}
 }

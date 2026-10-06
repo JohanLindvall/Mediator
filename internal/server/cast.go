@@ -101,6 +101,10 @@ type casting struct {
 	// sequence, by renderer id (see castClaim), and gen names them in turn.
 	driving map[string]*castDrive
 	gen     uint64
+	// captioning counts the casts waiting, by item id, for a subtitle to be
+	// read out of the file before the set is handed it (castCaption), which
+	// is what the page's count of the wait asks about.
+	captioning map[string]int
 	// searching is held for the length of a search so that several clients
 	// asking at once wait for one answer rather than filling the network
 	// with duplicate M-SEARCHes.
@@ -108,6 +112,32 @@ type casting struct {
 	// discover is the search itself. A test stands in for the network here;
 	// nil is the network.
 	discover func(ctx context.Context, wait time.Duration) []*dlna.Renderer
+}
+
+// waitingOnCaption marks a cast of the item as waiting on its subtitle, and
+// returns the way to say it has stopped: a defer, since a mark left behind
+// would answer the page's count with a subtitle read for good.
+func (c *casting) waitingOnCaption(id string) func() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.captioning == nil {
+		c.captioning = map[string]int{}
+	}
+	c.captioning[id]++
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.captioning[id]--; c.captioning[id] <= 0 {
+			delete(c.captioning, id)
+		}
+	}
+}
+
+// onCaption reports whether a cast of the item is waiting on its subtitle.
+func (c *casting) onCaption(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.captioning[id] > 0
 }
 
 // seenRenderer is a set and when a search last reported it.
@@ -395,7 +425,16 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta := s.castMeta(r, d, it, src, mimeType)
+	// The subtitle the set will ask for is made before the set is told
+	// where it is (castCaption): a television holds Play until it has every
+	// file it was handed, and reading one out of a large film is a read of
+	// the whole film.
+	caption, captionNote := s.castCaption(ctx, d, it, r.URL.Query().Get("sub"))
+	if s.castTaken(ctx, w, r, d, it) {
+		return
+	}
+	note = joinNotes(note, captionNote)
+	meta := s.castMeta(d, it, src, mimeType, caption)
 	// A set busy where it is — the measured one sits in a state whose only
 	// action is Stop — refuses a new file until it is stopped, so it is
 	// stopped and asked again (dlna.SetURIFromAnyState).
@@ -450,9 +489,21 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 		if s.castTaken(ctx, w, r, d, it) {
 			return
 		}
-		s.log.Warn("cast failed to start", "renderer", d.Name, "item", it.Name, "err", err)
-		http.Error(w, castFault(d.Name, "would not start playing it", err), http.StatusBadGateway)
-		return
+		// A refusal is an answer and silence is a question, as with the URI
+		// above. A set holds Play until the picture is up, so one that went
+		// quiet past even the opening budget may have started all the same —
+		// and reporting a failure then is what makes the page stop it.
+		var refusal *dlna.Fault
+		if errors.As(err, &refusal) || !started(ctx, d, src) {
+			if s.castTaken(ctx, w, r, d, it) {
+				return
+			}
+			s.log.Warn("cast failed to start", "renderer", d.Name, "item", it.Name, "err", err)
+			http.Error(w, castFault(d.Name, "would not start playing it", err), http.StatusBadGateway)
+			return
+		}
+		s.log.Debug("cast: set was slow to answer Play but is playing",
+			"renderer", d.Name, "item", it.Name, "err", err)
 	}
 	// Seeking is asked for after playback starts: a set that has not opened
 	// the file yet has nothing to seek in, and answers the request with a
@@ -477,7 +528,7 @@ func (s *Server) handleCast(w http.ResponseWriter, r *http.Request) {
 
 // castMeta describes the file to the set. A television has been handed one
 // file and no library: it shows what this says and nothing else.
-func (s *Server) castMeta(r *http.Request, d *dlna.Renderer, it library.Item, src, mimeType string) string {
+func (s *Server) castMeta(d *dlna.Renderer, it library.Item, src, mimeType, caption string) string {
 	return dlna.Metadata(dlna.Meta{
 		Title:    displayTitle(it),
 		Class:    dlna.UPnPClass(string(it.Kind)),
@@ -491,7 +542,7 @@ func (s *Server) castMeta(r *http.Request, d *dlna.Renderer, it library.Item, sr
 		Year:     it.Year,
 		Track:    it.Track,
 		Size:     it.Size,
-		Caption:  s.castCaption(d, it, r.URL.Query().Get("sub")),
+		Caption:  caption,
 	})
 }
 
@@ -500,8 +551,21 @@ func (s *Server) castMeta(r *http.Request, d *dlna.Renderer, it library.Item, sr
 // something reports the previous track for a moment, and an empty answer
 // while it opens the file.
 func showing(ctx context.Context, d *dlna.Renderer, uri string) bool {
+	return setSays(ctx, d, func(st dlna.Status) bool { return st.URI == uri })
+}
+
+// started reports whether the renderer is playing the URI it was handed —
+// the question after a Play it did not answer, where holding the file is not
+// enough: a set still opening it, or stuck opening it, has not started.
+func started(ctx context.Context, d *dlna.Renderer, uri string) bool {
+	return setSays(ctx, d, func(st dlna.Status) bool { return st.URI == uri && st.State == "PLAYING" })
+}
+
+// setSays asks the set where it has got to, once a second for confirmTries
+// seconds, until its answer is the one wanted.
+func setSays(ctx context.Context, d *dlna.Renderer, want func(dlna.Status) bool) bool {
 	for range confirmTries {
-		if st, err := d.Status(ctx); err == nil && st.URI == uri {
+		if st, err := d.Status(ctx); err == nil && want(st) {
 			return true
 		}
 		select {
@@ -541,7 +605,14 @@ func (s *Server) handleCastNext(w http.ResponseWriter, r *http.Request) {
 		castSourceError(w, err)
 		return
 	}
-	meta := s.castMeta(r, d, it, src, mimeType)
+	// What is queued ahead is the bar's next track, so a subtitle is named
+	// where one was asked for and not waited on: the set reads it when the
+	// boundary comes, and there is no Play here for it to hold up.
+	caption := ""
+	if index, ok := s.captionIndex(it, r.URL.Query().Get("sub")); ok {
+		caption = s.captionURL(d, it, index)
+	}
+	meta := s.castMeta(d, it, src, mimeType, caption)
 	if err := d.SetNextURI(r.Context(), src, meta); err != nil {
 		// Optional in the specification, and plenty of renderers say no.
 		// That is not a failure of the queue: the client goes on sending
@@ -702,33 +773,85 @@ func (s *Server) castArt(d *dlna.Renderer, it library.Item) string {
 // both (see Subtitles), and it is the numbering the player's menu used, so
 // the index the viewer chose there names the same subtitle here.
 //
+// **A track inside the file is read out before the set is told where it
+// is.** A set fetches the subtitle when it opens the film and holds Play
+// until it has it, and reading one out of the file is a read of the whole
+// file — a minute and more for a large film. Handed the URL first, the set
+// sat on the request past every budget, the cast was reported as a set that
+// did not answer, and the page stopped it. Read first, the set's request is
+// answered from the cache at once, and the page counts the read out
+// (?for=cast on /api/convert). A subtitle that cannot be read is left out
+// and the viewer told: the film is worth more than its subtitle.
+func (s *Server) castCaption(ctx context.Context, d *dlna.Renderer, it library.Item, choice string) (uri, note string) {
+	index, ok := s.captionIndex(it, choice)
+	if !ok {
+		return "", ""
+	}
+	if stream, embedded := s.lib.EmbeddedSubStream(it, index); embedded {
+		if err := s.readCaption(ctx, it, stream); err != nil {
+			if ctx.Err() != nil {
+				return "", "" // gone or taken over; the caller says which
+			}
+			s.log.Warn("cast: the subtitle could not be read out of the file",
+				"item", it.Name, "err", err)
+			return "", "The television shows no subtitles: the ones you chose could not be read out of the file"
+		}
+	}
+	return s.captionURL(d, it, index), ""
+}
+
+// readCaption reads an embedded subtitle out of the file, marking the item
+// as one a cast is waiting on for as long as it takes.
+func (s *Server) readCaption(ctx context.Context, it library.Item, stream int) error {
+	defer s.cast.waitingOnCaption(it.ID)()
+	_, err := s.extractEmbSub(ctx, it, stream)
+	return err
+}
+
+// captionIndex resolves the viewer's choice to one of the item's subtitles.
 // A renderer draws one or none: it is handed a URL, not a menu, and knows
 // nothing of the others beside the film. So the viewer's own choice comes
 // with the request (`?sub=`), and where there is none the first is sent —
 // which is what the player itself defaults to. `sub=off` sends nothing,
 // there being no way to turn one off from a television's remote once it has
 // been given one.
-func (s *Server) castCaption(d *dlna.Renderer, it library.Item, choice string) string {
+func (s *Server) captionIndex(it library.Item, choice string) (int, bool) {
 	if it.Kind != library.KindVideo || choice == "off" {
-		return ""
+		return 0, false
 	}
 	subs := s.lib.Subtitles(it)
 	if len(subs) == 0 {
-		return ""
+		return 0, false
 	}
 	index := 0
 	if choice != "" {
 		n, err := strconv.Atoi(choice)
 		if err != nil || n < 0 || n >= len(subs) {
-			return ""
+			return 0, false
 		}
 		index = n
 	}
+	return index, true
+}
+
+// captionURL is where the set fetches one of the item's subtitles, as SubRip.
+func (s *Server) captionURL(d *dlna.Renderer, it library.Item, index int) string {
 	base := s.localBase(d)
 	if base == "" {
 		return ""
 	}
 	return s.mediaURL(base, "subs/"+url.PathEscape(it.ID)+"/"+strconv.Itoa(index)) + "?format=srt"
+}
+
+// joinNotes puts two things the viewer has to be told into one toast.
+func joinNotes(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + ". " + b
 }
 
 // castSourceError answers a castSource failure: a set that cannot play the

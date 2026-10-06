@@ -3570,10 +3570,13 @@ set that has gone away should be given up on in seconds, and no more than
   hostname the page came from may be a tunnel on the other side of the
   world — while the set is in the room with the server. It is signed like
   every other media link, since the set answers no password.
-  **`SetAVTransportURI` gets a budget of its own** (45 s against 8 s for
-  everything else): a set opens the URL before it answers, and timing out at
-  the ordinary budget reported a failure for a film that was already
-  playing.
+  **The calls a set answers only once the film is open get a budget of their
+  own** (`openTimeout`, 45 s against 8 s; `budgetFor`): `SetAVTransportURI`,
+  and `Play`, which an LG holds until the picture is up — 1.4 to 7 s for an
+  ordinary film, past 8 s for a 4K one. A `Play` that goes unanswered even so
+  is asked about (`started`: is the set playing the URI it was handed?) the
+  way a silent `SetAVTransportURI` is (`showing`), since reporting a failure
+  makes the page stop a film that is starting; a refusal is reported at once.
   **A container has more than one name, and a set knows the ones its makers
   chose.** Before anything is copied, `castAlias` looks for another name the
   *same bytes* can honestly be handed over under — not a conversion and not a
@@ -3736,6 +3739,16 @@ set that has gone away should be given up on in seconds, and no more than
   so the viewer's choice travels with the request (`?sub=`, `off` for none)
   rather than the server picking; without a choice it sends the first, which
   is what the player defaults to as well.
+  **A subtitle inside the file is read out before the set is handed
+  anything** (`castCaption`, `readCaption`): a set fetches the subtitle as it
+  opens the film and holds `Play` until it has it, and reading one out is a
+  read of the whole film — a minute and more for a large one, past any budget
+  worth waiting on. The page counts the wait through
+  `/api/convert/{id}?for=cast`, which answers kind `subtitles` while
+  `casting.captioning` marks the item, rather than whatever this film is being
+  converted for in the browser. A subtitle that cannot be read is left out and
+  the viewer told (`CastStatus.Note`). The music queue's `handleCastNext` names
+  a subtitle without waiting, there being no `Play` there for it to hold up.
   **A television's fetch is marked as one** (`tv=1`, minted by `remuxQuery`
   and honoured by `handleRemux`). The rewrap endpoint answers 404 where the
   picture reorders further than it declares — the honest answer to a
@@ -5241,7 +5254,7 @@ Serving details worth knowing before "fixing" them:
   segmented session larger than the budget on its own is left alone rather
   than killed under whoever is watching it, since that is a budget set too
   small for one film and stopping playback is not the way to say so.
-  `/api/convert/{id}` reports how far a conversion has reached, for the item's most recently asked-for conversion, and the
+  `/api/convert/{id}` reports how far a conversion has reached, for the item's most recently asked-for conversion (or, with `?for=cast`, the subtitle read a cast is waiting on), and the
   player polls it **only where there is a wait**: the rewrap writes a whole
   file before a single byte is playable, which for a film is tens of seconds
   of nothing and indistinguishable from a failure. The segmented conversion
@@ -5731,31 +5744,38 @@ Serving details worth knowing before "fixing" them:
   entries that have a path — an embedded one answered `("", true)` for one
   afternoon, which sent the handler off to read a file called nothing —
   and `EmbeddedSubStream` resolves the rest to the stream ordinal.
-  **Extraction reads the whole container** — ffmpeg has to demux everything
-  to collect every cue, a couple of gigabytes for a hundred kilobytes of
-  text — so three things follow. It is **cached** by file identity, because
-  the player re-points its `<track>` at a new `?shift=` on every conversion
-  reopen, which is every seek, and the shift is arithmetic applied to the
-  cached cues. It is **deduplicated**, a second ask waiting on the first
-  rather than reading the film beside it. And it is **counted as
-  streaming**, since the read races the viewer's own playback.
-  Two more follow from the same cost. The read **belongs to no request**: the
-  `<track>` is re-pointed on every seek, so the fetch in flight is abandoned,
-  and tied to that request the whole demux went with it having admitted
-  nothing — each seek threw away a pass over gigabytes and began another, and
-  a large film seeked through never finished one. The ask now starts a reader
-  on a context detached from the requester (the existing `embSubTimeout` still
-  bounds it), the asker waits on it, and the outcome — data or error — is
-  published on the in-flight entry before it is closed, so a waiter can tell a
-  failure from a wait; the entry is still deleted, so a later ask is a fresh
-  attempt rather than a cached refusal. And it **takes a slot of its own**
-  (`embSubReaders`, 2): this is the one ffmpeg in the package that reads the
-  *whole* container and the only one that had no bound of any kind, so two
-  asks for different streams were two unbounded passes over gigabytes at once,
-  beside the playback they are for. Two rather than one so a second viewer
-  does not wait out a 4K demux, and a slot of its own rather than the
-  thumbnailer's, which one extraction could hold for the whole of
-  `embSubTimeout` — four minutes of no tiles and no border detection.
+  **Extraction reads the whole container** — ffmpeg demuxes everything to
+  collect every cue, tens of gigabytes for a hundred kilobytes of text — and
+  everything about it follows from that cost:
+  - **One read takes every text track the file carries**, each written to a
+    file of its own in a temporary directory (one ffmpeg can hand back several
+    outputs no other way), each bounded by `-fs` as a single one is; where
+    that run fails, the asked-for track is read alone. Read one track at a
+    time, a release's dozens of languages would be a whole-file pass apiece,
+    the slots filling with reads for tracks nobody is waiting on.
+  - **Cached per track** by the file's identity (`embSubKey`, 64 MiB in all,
+    a track admitted again replacing itself), because the player re-points
+    its `<track>` at a new `?shift=` on every seek and the shift is
+    arithmetic on the cached cues. **Deduplicated per file** (`embSubFile`):
+    an ask for any track while a read runs waits for that read.
+  - **Counted as streaming**, since it races the viewer's own playback, and
+    **detached from the asker**: the `<track>` is re-pointed on every seek,
+    so a read tied to the abandoned fetch would be thrown away and begun
+    again each time. The outcome, data or error, is published on the
+    in-flight entry before it closes, so a waiter can tell a failure from a
+    wait; the entry is then deleted, so a later ask is a fresh attempt
+    rather than a cached refusal.
+  - **A slot of its own** (`embSubReaders`, 2): the one ffmpeg in the package
+    that reads the whole container, and the thumbnailer's slot would go to
+    one read for minutes. **Bounded by the file** (`embSubBudget`: 4 min, or
+    the file at 64 MiB/s where that is longer) — a fixed bound strands a
+    large film or lets a wedged mount hold the slot for as long as the
+    largest needs.
+  - **It says how far it has got** (`embSubs.progress`): the bytes ffmpeg has
+    read over the file's size, from the kernel's own count (`bytesRead`,
+    `rchar` in `/proc/<pid>/io`, which counts a loopback socket's bytes as
+    readily as a file's; nought where there is no such count), for a cast
+    that waits on it.
   Everything
   downstream is a sidecar's path: the same WebVTT out, the same SRT for a
   television, the same `?shift=` — whose parser takes ffmpeg's hour-less

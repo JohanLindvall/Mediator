@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -217,5 +218,89 @@ func TestHLSMasterCarriesSubtitleRenditions(t *testing.T) {
 	_, direct := get("/api/hls/" + pid + "/index.m3u8?mode=audio")
 	if strings.Contains(direct, "TYPE=SUBTITLES") || !strings.Contains(direct, "#EXTINF") {
 		t.Errorf("a film without subtitles was given a master:\n%s", direct)
+	}
+}
+
+// One read takes every text track. A release carries many languages and the
+// cost of reading one out is a pass over the whole file, so asked for one at
+// a time every language was another pass: asking for the second track leaves
+// the first in the cache as well, and a viewer changing language — or a
+// television asking for another — reads nothing again.
+func TestOneReadTakesEveryTrack(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	if library.FFprobePath() == "" {
+		t.Skip("ffprobe not installed")
+	}
+	cues := func(name, line string) string {
+		p := filepath.Join(t.TempDir(), name)
+		if err := os.WriteFile(p, []byte("1\n00:00:00,500 --> 00:00:01,500\n"+line+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "Two Languages.mkv")
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=2",
+		"-i", cues("one.srt", "A line in the first language"),
+		"-i", cues("two.srt", "A line in the second language"),
+		"-map", "0:v", "-map", "1:s", "-map", "2:s",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+		"-c:s", "srt", "-metadata:s:s:0", "language=eng", "-metadata:s:s:1", "language=swe",
+		"-y", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not mux subtitles: %v: %s", err, out)
+	}
+	ts, srv, lib := serverUnderTest(t, dir)
+	id := library.PathID(path)
+	lib.EnsureCodecs(t.Context(), id)
+
+	res, err := http.Get(ts.URL + "/api/subs/" + id + "/1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(body), "the second language") {
+		t.Fatalf("the second track answered %d %q", res.StatusCode, body)
+	}
+	it, _ := lib.Get(id)
+	file := embSubFile(it)
+	srv.embsubs.mu.Lock()
+	first, cached := srv.embsubs.cache[embSubKey(file, 0)]
+	srv.embsubs.mu.Unlock()
+	if !cached || !strings.Contains(string(first), "the first language") {
+		t.Errorf("the read for the second track left the first out: cached %v, %q", cached, first)
+	}
+}
+
+// A read says how far it has got, by what ffmpeg has read of the file — the
+// whole of what the read costs — and says nothing for an item nobody reads.
+func TestAReadSaysHowFarItHasGot(t *testing.T) {
+	s, it, file := newEmbSubs()
+	if _, active := s.embsubs.progress(it.ID); active {
+		t.Fatal("a read is reported where nothing is reading")
+	}
+	e := &embSub{done: make(chan struct{}), id: it.ID, size: 1}
+	s.embsubs.inflight[file] = e
+	// Waiting for a slot: under way, with nothing read yet.
+	if p, active := s.embsubs.progress(it.ID); !active || p != 0 {
+		t.Errorf("a read waiting for its slot reads %v, %v; want under way at nought", p, active)
+	}
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// This process stands in for the ffmpeg: it has read more than the one
+	// byte the file is said to hold, and a read is never reported finished
+	// while it is still running.
+	e.pid.Store(int64(os.Getpid()))
+	if n, ok := bytesRead(os.Getpid()); !ok || n <= 0 {
+		t.Fatalf("the kernel's count of what this process read: %d, %v", n, ok)
+	}
+	if p, active := s.embsubs.progress(it.ID); !active || p != 0.99 {
+		t.Errorf("progress %v, %v; want under way and held short of done", p, active)
 	}
 }
