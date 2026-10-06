@@ -12,8 +12,8 @@ package library
 //
 // It is deliberately the unglamorous version: pure Go, no model, no
 // dependency, about a tenth of a second per minute of audio. It groups by
-// production, tempo and timbre — which is what it is — and the doc in
-// CLAUDE.md is honest about what that does and does not find.
+// production, tempo and timbre — which is what it is, and all that should
+// be claimed for it.
 
 import (
 	"math"

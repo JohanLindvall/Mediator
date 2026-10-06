@@ -43,6 +43,6 @@ clean:
 	rm -rf web/dist web/node_modules
 
 # What in the tracked files could be a real name, for a reader to judge —
-# see CLAUDE.md, "Writing about this project". Runs on the host: grep only.
+# see AGENTS.md, "Writing about this project". Runs on the host: grep only.
 names:
 	scripts/names.sh

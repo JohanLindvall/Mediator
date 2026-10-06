@@ -6,7 +6,7 @@
  * buffer is full, drops the connection, and reconnects asking for the byte
  * it wants next — which a pipe cannot give it, so it is answered with the
  * conversion from the beginning and discards everything up to where it was.
- * Measured on one viewing (see CLAUDE.md): ten connections, 963 MB across
+ * Measured on one viewing (see AGENTS.md): ten connections, 963 MB across
  * the link to move a 167 MB stream. The waste is not a constant, it grows
  * with the playback position, and on the one link where a lower bitrate is
  * wanted at all — a slow one — it is the whole of the link.

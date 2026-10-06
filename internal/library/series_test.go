@@ -8,7 +8,7 @@ import (
 
 // The names here are invented, the *shapes* are not: each case is a real
 // release-naming habit, written with a made-up show so the test says nothing
-// about anybody's library. See CLAUDE.md on why that rule exists.
+// about anybody's library. See AGENTS.md on why that rule exists.
 func TestParseEpisode(t *testing.T) {
 	for _, c := range []struct {
 		name   string

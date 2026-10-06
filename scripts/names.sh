@@ -3,7 +3,7 @@
 # a performer, a site, a personal path — for a reader to judge. It cannot
 # know a name when it sees one, so it looks for the shapes names take, and
 # a hit is a question, not a verdict: an invented fixture has the shape too,
-# which is the whole point of a fixture. See CLAUDE.md, "Writing about this
+# which is the whole point of a fixture. See AGENTS.md, "Writing about this
 # project". Exit status is 0 whatever it finds; the reading is the check.
 #
 # Usage: scripts/names.sh            (from the repository root, or `make names`)

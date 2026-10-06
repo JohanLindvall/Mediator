@@ -11,7 +11,7 @@ import (
 )
 
 // The names here are invented; the shapes are the ones DVDs actually have.
-// See CLAUDE.md on why that rule exists.
+// See AGENTS.md on why that rule exists.
 
 // isoFile is one file to put in a synthetic image's VIDEO_TS directory.
 type isoFile struct {
