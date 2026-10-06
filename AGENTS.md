@@ -1,7 +1,6 @@
 # AGENTS.md
 
-Guidance for coding agents working in this repository. `CLAUDE.md` only
-imports this file, so Claude Code reads it too: edit this one.
+Guidance for coding agents working in this repository.
 
 ## What this is
 
