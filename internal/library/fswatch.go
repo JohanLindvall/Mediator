@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // What the operating system tells the watcher, in the four words it needs.

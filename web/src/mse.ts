@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * A conversion fed to the element by the page, not fetched by the browser.
  *

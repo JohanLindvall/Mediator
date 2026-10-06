@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /** Keyboard focus follows the top dialog and returns to its opener. */
 const dialogs: HTMLElement[] = [];
 

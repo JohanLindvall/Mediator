@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // How a track sounds, as numbers.

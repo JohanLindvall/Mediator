@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 import { defineConfig } from 'vite';
 
 export default defineConfig({

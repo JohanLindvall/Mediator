@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use Mediator, please cite it as below."
+type: software
+title: Mediator
+abstract: >-
+  A self-hosted media server in one Go binary with its web app embedded:
+  it indexes video, music and pictures, including the contents of RAR and ZIP
+  sets and DVD images, streams them to any browser with on-the-fly conversion
+  and HLS, plays them on DLNA televisions, and analyses how music sounds to
+  find similar tracks.
+authors:
+  - given-names: Johan
+    family-names: Lindvall
+repository-code: "https://github.com/JohanLindvall/Mediator"
+license: MIT
+version: 0.1.0
+date-released: "2026-10-06"
+keywords:
+  - media server
+  - self-hosted
+  - video streaming
+  - HLS
+  - DLNA
+  - ffmpeg
+  - music
+  - Go

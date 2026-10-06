@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Keep the listing's place while something is open over it.
  *

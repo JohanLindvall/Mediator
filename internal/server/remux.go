@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // Rewrapping, for files whose container is the only thing the browser cannot

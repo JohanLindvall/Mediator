@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Audio fingerprints, for finding the sound that recurs.

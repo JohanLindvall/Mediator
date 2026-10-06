@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * AirPlay, where the browser offers it.
  *

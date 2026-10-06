@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package blob is the single-file store (bbolt) for everything the server
 // keeps: generated thumbnails and probed metadata, the mirrored index, and
 // the two things that are the owner's rather than the file's — flags and

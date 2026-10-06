@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Whether two tracks share a sleeve — which is to say, a release.
  *

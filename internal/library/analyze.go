@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Reading how the music sounds, in the background.

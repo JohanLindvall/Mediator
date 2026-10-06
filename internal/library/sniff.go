@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // What a file is when its name will not say.

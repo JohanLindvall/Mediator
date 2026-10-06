@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Zip archives in more than one file, and the directory of any zip.

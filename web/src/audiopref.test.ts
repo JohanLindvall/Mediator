@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The soundtrack memory: this film's choice, and the language for the rest.
  *

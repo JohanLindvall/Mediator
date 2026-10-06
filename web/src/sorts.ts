@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What each view can be sorted on, and the key it opens on.
  *

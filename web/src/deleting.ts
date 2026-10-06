@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What deleting a thing from the disk is, as the page asks for it and says
  * it: which request a card makes, what the offer is called, and how the

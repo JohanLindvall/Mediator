@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Deleting from the disk, asked and confirmed.
  *

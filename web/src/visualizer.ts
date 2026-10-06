@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Spectrum view: what is sounding right now, drawn from the audio itself.
  *

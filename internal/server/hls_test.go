@@ -1,9 +1,11 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 import (
-	"math"
 	"bytes"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"

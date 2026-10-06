@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // LiveIDs is every id the index holds right now, for the stores that keep

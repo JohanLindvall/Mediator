@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // One file reachable by several paths — a hard link, or a symlink beside its

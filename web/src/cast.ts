@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Playing to a television that is not a browser.
  *

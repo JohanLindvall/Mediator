@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Persistent bottom-bar music player: play queue with shuffle/repeat,
  * seek, volume, a queue panel, and OS media-key integration (Media Session).

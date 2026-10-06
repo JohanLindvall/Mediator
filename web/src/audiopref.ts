@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Which soundtrack a viewer wants, remembered.
  *

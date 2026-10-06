@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Command mediator serves a web-based browser for video, image and music
 // collections. Usage:
 //

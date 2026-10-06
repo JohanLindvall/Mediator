@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Packed members unpacked into the scratch space, for playback.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Media inside zip archives, and how much of it one archive may bring in.

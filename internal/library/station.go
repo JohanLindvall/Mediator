@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Artist radio: one performer's tracks, for a radio that plays nobody else.

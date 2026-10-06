@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Data sources: windowed, cached access to the (potentially huge) library.
  * The grid only ever asks for the visible index range; pages are fetched on

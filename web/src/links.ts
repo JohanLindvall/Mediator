@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Shortlinks: handing somebody an address for one place in the library.
  *

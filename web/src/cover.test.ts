@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * When the bar may keep the sleeve it has up, and when it must not.
  *

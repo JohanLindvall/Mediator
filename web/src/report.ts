@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What went wrong here, said where the rest of it is written down.
  *

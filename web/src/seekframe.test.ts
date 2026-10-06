@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { FRAME_CACHE, SETTLE_MS, SeekFrames, momentAt, previewBox, previewLeft } from './seekframe.ts';

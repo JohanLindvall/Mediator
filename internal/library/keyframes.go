@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Where a film can be cut without decoding it: its keyframes, read off the

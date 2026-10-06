@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // The segment table: every cut of a film decided before any of them is made.

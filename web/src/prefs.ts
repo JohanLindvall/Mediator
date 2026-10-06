@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Preferences: which directories the library indexes, and what is running.
  *

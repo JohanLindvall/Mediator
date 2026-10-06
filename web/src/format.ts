@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /** Small formatting helpers. */
 
 /**

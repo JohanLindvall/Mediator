@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: MIT
 # Lists what in the tracked files could be a real name — a file, a release,
 # a performer, a site, a personal path — for a reader to judge. It cannot
 # know a name when it sees one, so it looks for the shapes names take, and

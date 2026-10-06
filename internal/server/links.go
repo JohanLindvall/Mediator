@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // Shortlinks: a small name for somewhere in the app.

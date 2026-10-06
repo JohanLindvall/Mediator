@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The frame under the pointer on the seek bar: where the preview goes, how
  * big it is, and how its frames are fetched without anything waiting on them.

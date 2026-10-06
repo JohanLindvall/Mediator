@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Skipping a show's credits: which marks apply, when a skip is on offer, and
 // where the next episode begins. Each of these is a way to throw a viewer
 // out of a scene they wanted, so each is pinned.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The transport a television is driven through: the clock carried between
  * polls, when the set is asked, and what its answers mean. The music bar

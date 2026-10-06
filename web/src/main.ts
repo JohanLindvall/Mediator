@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /** App entry: header controls, virtual grid, routing between views, SSE. */
 import './style.css';
 import {

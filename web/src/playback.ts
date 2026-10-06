@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What a browser will and will not play.
  *

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * How tall the screen actually is, as a number the overlays can be sized by.
  *

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /** Inline SVG icon set (feather-style, 24px, stroke-based). */
 
 function svg(inner: string, viewBox = '0 0 24 24'): string {

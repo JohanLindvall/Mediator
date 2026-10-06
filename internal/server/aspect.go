@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // A file can declare a pixel aspect ratio that ffmpeg will not accept, and

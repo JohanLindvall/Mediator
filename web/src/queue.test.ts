@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Where an album added to the queue ends up. "At the end" is the whole
  * promise of the button, and with shuffle on it is the promise most easily

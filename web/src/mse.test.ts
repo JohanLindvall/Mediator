@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // The pure half of feeding a conversion to the element: reading the codec
 // string out of the initialisation segment, and finding where that segment
 // ends. Both are exercised against the box layout ffmpeg actually writes

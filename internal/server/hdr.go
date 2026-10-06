@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // Bringing a high-dynamic-range picture back to ordinary colour.

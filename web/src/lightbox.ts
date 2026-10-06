@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Image lightbox: fit-to-screen viewing with keyboard/swipe navigation
  * between the images of the current query, neighbor preloading and download.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package library maintains an in-memory index of media files found under a
 // set of root directories. It supports fast filtered/sorted listing, live
 // updates via fsnotify, and derives music albums from mp3 directories and

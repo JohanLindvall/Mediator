@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Thumbnail loader: small concurrency cap, visible-first, abortable.
  *

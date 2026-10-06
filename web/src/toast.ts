@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /** Minimal toast notifications. */
 
 export function showToast(message: string, ms = 2400): void {

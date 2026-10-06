@@ -2634,6 +2634,16 @@ endpoints, layout) and `AGENTS.md` (how it works and why). A flag without its
 table row, or an endpoint without its API-table line, is unfinished: nobody
 would know it exists.
 
+## License headers
+
+MIT (`LICENSE`). Every source file starts with `SPDX-License-Identifier: MIT`
+in its own comment syntax, a new one included: above a Go file's `//go:build`
+line and kept off its package comment by a blank line, after an HTML doctype or
+a shell script's shebang. `cmd/gen-ts` writes it into `types.gen.ts`.
+`SECURITY.md` sends reports to GitHub's private vulnerability reporting (on for
+the repository); `CITATION.cff` carries the version and date of the latest
+release, so a release updates both.
+
 ## Writing about this project
 
 **Nothing committed may name what the library holds**: not docs, commit

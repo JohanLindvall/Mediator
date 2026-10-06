@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Finding a show's intro and credits, so the player can offer to skip them.

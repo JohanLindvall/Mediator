@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // Members stored compressed in their container: a deflated zip member, and

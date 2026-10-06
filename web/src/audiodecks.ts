@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The music bar's media elements, kept separate from its controls so source
  * changes and play/pause races can be exercised without a browser UI.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // What the rewrapper and the two verdicts beside it promise when more than

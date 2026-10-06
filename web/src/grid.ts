@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Windowed virtual grid: renders only the cells intersecting the viewport
  * (plus overscan), recycling DOM nodes. Handles 10k+ items smoothly.

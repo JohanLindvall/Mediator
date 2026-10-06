@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Swipe and drag recognition shared by the overlays, so a gesture means the
  * same thing whichever viewer is on screen.

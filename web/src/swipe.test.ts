@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What counts as a swipe. The thresholds decide whether a finger stepped
  * between files or merely wandered, so they are pinned here.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package library
 
 // The owner's verdict on each thing: liked, disliked, or neither.

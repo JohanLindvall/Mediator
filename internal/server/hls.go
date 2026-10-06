@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 package server
 
 // Streaming straight from the converter, in the one shape iOS will accept.

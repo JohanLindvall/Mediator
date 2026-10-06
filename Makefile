@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 DOCKER ?= docker
 IMAGE  ?= mediator:latest
 

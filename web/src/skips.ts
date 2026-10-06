@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What to do about the credits.
  *

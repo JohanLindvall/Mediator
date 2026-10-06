@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What a listing query is, and when two of them are about the same things.
  *

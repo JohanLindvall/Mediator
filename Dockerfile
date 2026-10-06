@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 # The entire build runs in here: API model generation, frontend, checks and
 # the Go binary. The host needs Docker (BuildKit), nothing else — no local Go,
 # Node or npm packages are used, and no locally generated files enter the

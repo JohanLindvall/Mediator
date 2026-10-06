@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { AudioDecks } from './audiodecks.ts';

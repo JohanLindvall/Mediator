@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Album detail sheet: cover, metadata, play/shuffle/queue actions and a track list.
  */

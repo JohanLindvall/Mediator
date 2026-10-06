@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Client for the backend JSON API.
  * The data model is generated from the Go types — see types.gen.ts.

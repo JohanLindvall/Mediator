@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * When a new query keeps the rows on screen, and when it must not.
  *

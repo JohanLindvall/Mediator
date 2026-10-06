@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Full-screen video player overlay with custom controls: play/pause, seek with
  * buffer display, ±10s skip, volume/mute, playback rate, PiP, fullscreen and

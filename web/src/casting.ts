@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The transport of a television that is playing something for this page.
  *

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package dlna finds the UPnP/DLNA media renderers on the local network and
 // tells them what to play.
 //

@@ -1,13 +1,33 @@
 # Mediator
 
-A fast, self-contained web media browser: point it at your directories and get
-a slick, responsive UI for your videos, photos and music — served from a single
-Go binary with the TypeScript frontend embedded.
+[![CI](https://github.com/JohanLindvall/Mediator/actions/workflows/docker.yml/badge.svg?branch=main)](https://github.com/JohanLindvall/Mediator/actions/workflows/docker.yml)
+[![Release](https://img.shields.io/github/v/release/JohanLindvall/Mediator)](https://github.com/JohanLindvall/Mediator/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+A self-hosted media server in one Go binary, its web app embedded. Point it at
+your directories and it indexes video, music and pictures — the contents of
+RAR and ZIP sets and DVD images included, with no extraction step — watches
+them so new files appear without a rescan, and plays them in any browser: a
+container the browser will not open is copied losslessly, only what it cannot
+decode is re-encoded (HLS for Safari and iOS, the graphics engine for 4K), and
+a film goes to a DLNA television as the file itself, in HDR where the set
+decodes it. It analyses how every track sounds to find similar music, run a
+radio and keep audiobooks apart from albums. No database server, no account,
+no configuration file; ffmpeg is the one optional dependency.
+
+Try it on a directory of your own:
+
+```sh
+docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
+  -v mediator-data:/data ghcr.io/johanlindvall/mediator
+# then open http://localhost:8080
+```
 
 [Quick start](#quick-start) · [Docker](#docker) ·
 [Playing to a television](#playing-to-a-television) ·
 [Restricted views](#one-library-several-faces) ·
-[Troubleshooting](#troubleshooting) · [Development](#development) · [API](#api)
+[Troubleshooting](#troubleshooting) · [Development](#development) · [API](#api) ·
+[Security](#security) · [License](#license)
 
 ## Features
 
@@ -1425,6 +1445,9 @@ internal/state/       playback positions, held in memory and flushed to the
 internal/rartest/     spec-correct rar fixtures, shared by the tests
 web/                  Vite + vanilla TypeScript frontend (no runtime deps);
                       web/src/*.test.ts run under node's own test runner
+AGENTS.md             how it works and why, for anyone changing it
+LICENSE, SECURITY.md, CITATION.cff
+                      MIT; private vulnerability reporting; citation
 ```
 
 ### API
@@ -1494,3 +1517,20 @@ for a personal server on a network its owner trusts; a face restricted by the
 proxy to some media or to part of the disk cannot delete, and `-lock` turns
 deleting off altogether. Thumbnails for `.avif` fall back to an icon
 (no pure-Go decoder); the full-size view still renders in the browser.
+
+## Security
+
+Mediator has no authentication by design and is meant for a trusted network;
+put it behind an authenticating reverse proxy to reach it from anywhere else.
+Report a vulnerability privately, as [SECURITY.md](SECURITY.md) describes —
+never in a public issue.
+
+## License
+
+[MIT](LICENSE). Every source file carries an `SPDX-License-Identifier: MIT`
+line. To cite the project, use [CITATION.cff](CITATION.cff) (GitHub's *Cite
+this repository*).
+
+## Star history
+
+[![Star history](https://api.star-history.com/svg?repos=JohanLindvall/Mediator&type=Date)](https://www.star-history.com/#JohanLindvall/Mediator&Date)

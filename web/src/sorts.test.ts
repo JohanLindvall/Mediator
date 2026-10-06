@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The key a view opens on, pinned: it is the first thing a viewer sees of a
  * view, and a performer's releases opened by name for as long as the rule

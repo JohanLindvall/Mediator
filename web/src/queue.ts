@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The arithmetic of the play order, kept out of the player so it can be
  * tested: the order is a list of queue indices, and what "after everything

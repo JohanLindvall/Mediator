@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package state keeps playback positions — where the owner got to in each
 // item — and how often each one has been played. They live in the blob database with everything else the server
 // stores, so there is one file to back up and one file to delete for a clean

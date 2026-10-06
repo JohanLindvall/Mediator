@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package rartest writes minimal but spec-correct store-mode rar volume
 // sets for tests. It lives outside the packages that use it because both
 // the library (which indexes and reads such sets) and the server (which

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package browse opens a URL in the user's default browser.
 package browse
 

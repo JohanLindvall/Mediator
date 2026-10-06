@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * Where "queue all" is offered, and what it asks for. A button over a grid
  * of films that queued the odd track among them would be a puzzle, so the

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 // Package server exposes the library over HTTP: JSON APIs, range-request media
 // streaming, thumbnails, server-sent events and the embedded frontend.
 package server

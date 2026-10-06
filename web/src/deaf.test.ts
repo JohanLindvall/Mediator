@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { deafStep, DEAF_AFTER, type DeafState } from './playback.ts';

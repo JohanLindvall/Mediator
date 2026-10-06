@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+
 # Build, test and publish the Docker image.
 #
 # Every push and pull request builds the Dockerfile's test stage: go vet and

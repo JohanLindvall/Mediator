@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * What the tab says: the film in front of everything, else the track the
  * bar holds, else the app.

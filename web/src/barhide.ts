@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * When the top bar may leave the screen, and when it must come back.
  *

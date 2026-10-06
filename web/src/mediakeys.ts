@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+
 /**
  * The keyboard's media keys, and the desktop's own transport controls.
  *
