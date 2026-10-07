@@ -27,7 +27,7 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
 [Playing to a television](#playing-to-a-television) ·
 [Restricted views](#one-library-several-faces) ·
 [Troubleshooting](#troubleshooting) · [Development](#development) · [API](#api) ·
-[Security](#security) · [License](#license)
+[Contributing](#contributing) · [Security](#security) · [License](#license)
 
 ## Features
 
@@ -1449,6 +1449,9 @@ web/                  Vite + vanilla TypeScript frontend (no runtime deps);
 AGENTS.md             how it works and why, for anyone changing it
 LICENSE, SECURITY.md, CITATION.cff
                       MIT; private vulnerability reporting; citation
+CONTRIBUTING.md, CODE_OF_CONDUCT.md, .github/
+                      how to contribute; the Contributor Covenant; CI,
+                      the issue forms and the pull request template
 ```
 
 ### API
@@ -1518,6 +1521,12 @@ for a personal server on a network its owner trusts; a face restricted by the
 proxy to some media or to part of the disk cannot delete, and `-lock` turns
 deleting off altogether. Thumbnails for `.avif` fall back to an icon
 (no pure-Go decoder); the full-size view still renders in the browser.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md)
+says how to build, test and report, and [AGENTS.md](AGENTS.md) how the code
+works. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Security
 

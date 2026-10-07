@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: MIT
+
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/JohanLindvall/Mediator/security/advisories/new
+    about: Privately, through GitHub's private vulnerability reporting — never in a public issue.

@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+
+name: Bug report
+description: Something does not work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please **leave out the names of your files and folders** and describe their shape instead — "an MKV holding HEVC and two soundtracks", "a film split over a multi-part RAR set".
+        A security problem goes through [private reporting](https://github.com/JohanLindvall/Mediator/security/advisories/new), not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: And what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen
+      placeholder: |
+        1. Open a film that …
+        2. Seek to …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The about box at the foot of the preferences sheet shows it, as does `/api/info`.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Browser and device
+      placeholder: Safari on an iPhone, Chrome on Windows, a television over DLNA …
+  - type: textarea
+    id: log
+    attributes:
+      label: Server log
+      description: The lines around the moment, from a server run with `-debug`. Replace file names with their shape.
+      render: text

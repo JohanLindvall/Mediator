@@ -2647,7 +2647,9 @@ line and kept off its package comment by a blank line, after an HTML doctype or
 a shell script's shebang. `cmd/gen-ts` writes it into `types.gen.ts`.
 `SECURITY.md` sends reports to GitHub's private vulnerability reporting (on for
 the repository); `CITATION.cff` carries the version and date of the latest
-release, so a release updates both.
+release, so a release updates both. `CONTRIBUTING.md`, the issue forms and the
+pull request template (`.github/`) repeat a few rules from this file — docs in
+the same commit, the header, no library names — and change when they do.
 
 ## Writing about this project
 

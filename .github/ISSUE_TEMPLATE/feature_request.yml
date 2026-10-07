@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+
+name: Feature request
+description: Something it could do, or do better
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you are trying to do
+      description: The situation rather than the solution — what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+  - type: textarea
+    id: more
+    attributes:
+      label: Anything else
