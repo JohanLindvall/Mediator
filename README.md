@@ -1380,8 +1380,8 @@ All build/check targets run inside Docker as well:
 
 ```sh
 make generate   # regenerate web/src/types.gen.ts from the Go API types
-make test       # frontend tests/build + go vet + go test -race ./...
-make vet        # frontend tests/build + go vet (no Go test run)
+make test       # frontend tests/build + go vet (Linux, macOS, Windows) + go test -race ./...
+make vet        # frontend tests/build + go vet for the three (no Go test run)
 cd web && npm test      # just the frontend tests (Node 24 or newer; run npm ci first)
 cd web && npm run dev   # Vite on :5173, proxies /api to :8080 (Node 24 or newer)
 ```

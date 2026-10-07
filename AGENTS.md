@@ -16,8 +16,8 @@ Every make target builds inside Docker (BuildKit); the host needs only Docker:
 make docker           # runtime image (mediator:latest): gen-ts → npm → go build, all in Docker
 make build            # same build; extracts the static linux binary to ./mediator
 make generate         # regenerate web/src/types.gen.ts via the Docker gen stage
-make test             # go vet + go test -race ./... inside the image build
-make vet              # go vet only
+make test             # go vet (Linux, macOS, Windows) + go test -race ./... inside the image build
+make vet              # go vet only, for the same three platforms
 
 ./mediator -listen :8080 -data data DIR [DIR...]   # run against media directories
 ./mediator -open DIR                            # free loopback port + open a browser
@@ -50,6 +50,11 @@ Dockerfile stage layout and gotchas:
 - Local `go build`/`go test ./...` must run from the repo root with a current
   `web/dist` (`main.go` embeds `all:web/dist`; build it with
   `cd web && npm run build`).
+- `vet` also vets for macOS and Windows, tests included, since nothing runs
+  there to notice a break: what only Linux has (`EUCLEAN`, `/proc`, inotify)
+  lives in a `_linux.go` file with a `!linux` twin (`fsfault`, `procio`,
+  `fswatch`), what only Unix has in a `_unix.go` one (`inode`), and a test
+  needing a FIFO is `//go:build unix`.
 
 ## Generated TypeScript API model — single source of truth
 

@@ -936,7 +936,7 @@ func openFault(err error) string {
 		return "the server is not allowed to read it"
 	case errors.Is(err, syscall.EIO):
 		return "the disk it is on is not answering"
-	case errors.Is(err, syscall.EUCLEAN):
+	case damagedFS(err):
 		return "the filesystem it is on is damaged and needs repair"
 	case errors.Is(err, library.ErrDamagedMember):
 		return "the archive it is in is damaged"

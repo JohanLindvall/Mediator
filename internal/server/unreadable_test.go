@@ -73,7 +73,6 @@ func TestOpenFaultSpeaksTheViewersLanguage(t *testing.T) {
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.ENOENT}, "it is no longer where the library found it"},
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EACCES}, "the server is not allowed to read it"},
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EIO}, "the disk it is on is not answering"},
-		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EUCLEAN}, "the filesystem it is on is damaged and needs repair"},
 		// Anything else is said as it came, without the path.
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.ENXIO}, syscall.ENXIO.Error()},
 	} {

@@ -52,6 +52,11 @@ RUN CGO_ENABLED=0 go build -trimpath \
 # --- checks: `make vet` / `make test` build these targets ---------------------
 FROM build AS vet
 RUN go vet ./...
+# The other platforms the code supports are compiled and vetted too, tests
+# included: nothing here runs on them, so a Linux-only name in shared code
+# (a syscall constant, a /proc read) would otherwise break them unseen.
+# macOS stands for the other Unixes, Windows for everything that is not one.
+RUN for os in darwin windows; do GOOS=$os go vet ./... || exit 1; done
 
 FROM vet AS test
 # The race detector needs cgo, which needs a C toolchain in this stage only.
