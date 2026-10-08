@@ -304,11 +304,15 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
   something outside the directories a caller is confined to — it lands in the
   library and says so, because the filtering is applied where it always is,
   on the request for the thing itself.
-- **Files with no extension are recognised by content** — some downloads
-  arrive with no name to go on, and a few hundred megabytes of plainly MP4
-  bytes should not be invisible. Only files that named nothing at all are
-  opened, and only from a megabyte up, so it costs a few dozen header reads
-  across a whole library rather than one per file.
+- **Files are recognised by content where the name says nothing** — some
+  downloads arrive with no extension, with a dotted name that only looks like
+  one, or with a suffix cut short, and an archive is one whatever it is
+  called. Such a file has its first bytes read and is indexed as what they
+  say: a film, a song or a picture, or a ZIP or RAR archive whose contents
+  join the library as any archive's do. Only files from a megabyte up are
+  opened, and never a download still being written (`.part` and the like),
+  so it costs a few hundred header reads across a whole library rather than
+  one per file.
 - **Plays anything** — a file the browser will not open is converted, and
   how much of it gets converted depends on what is actually in the way.
   A container it cannot open but whose streams it decodes perfectly well

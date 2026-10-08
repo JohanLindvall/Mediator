@@ -196,15 +196,27 @@ derives from `library.AllKinds`.
 
 - `extKind` (`scan.go`) decides what is media, every entry measured. `.ts` is
   in (captures, opening with the TS sync byte; `remuxable` copies their
-  H.264/AAC); deliberately out: `.dat` (VCD MPEG only inside `MPEGAV`) and
-  `.tif` (a decoder dependency for two files).
-- Extensionless files of `sniffMinSize` (1 MiB) or more get their first bytes
-  read (`sniff.go`; downloads can lack an extension); nothing else is opened —
-  an extension (`.nfo`, `.par2`) already answers, and small ones are likelier
-  repository objects or lock files. `kindOfMagic` is a pure, tested table of
-  fixed-offset signatures — no scanning, guessing or statistics, as a wrong
-  answer hands a disk image to the player. Unknown ISO brands read as video
-  (`EnsureCodecs` settles it). `Name` never changes; `opensDirectly` lets
+  H.264/AAC); deliberately out of the table: `.dat` (anything at all by name;
+  sniffing admits the one whose bytes are a VCD's MPEG) and `.tif` (a decoder
+  dependency for two files).
+- **A file whose name says nothing has its first bytes read** (`sniff.go`,
+  `SniffContent`): no extension, or one this library does not know
+  (`nameSaysNothing`: a dotted release name, a suffix a tool cut short, a type
+  it has no use for), from `sniffMinSize` (1 MiB) up. Left alone: a known
+  name, which has answered; an unfinished download (`unfinished`: `.part`,
+  `.crdownload` and kin), renamed to its real name when whole and indexed
+  then, where read now it would show twice; a part of a rar or zip set, which
+  its set's first part answers for; and anything smaller, likelier a
+  repository object or a lock file (measured: 462 of 138,579 files over the
+  floor, 301 of them unfinished). `kindOfMagic` and `archiveOfMagic` are pure,
+  tested tables of fixed-offset signatures — no scanning, guessing or
+  statistics, as a wrong answer hands a program to the player: ISO base media
+  (an unknown brand reads as video; `EnsureCodecs` settles it), EBML, RIFF AVI,
+  WAVE, WebP and CDXA (a VCD), ASF, Ogg, FLAC, ID3, an MPEG program stream's
+  pack header, a transport stream's sync byte three packets running, the
+  pictures, and **ZIP and RAR archives, which are read as any other archive
+  is** (`indexZip`, `indexRarSet` — a single file whatever its name), by the
+  walk and the watcher alike. `Name` never changes; `opensDirectly` lets
   unknown containers try, `mimeFor` falls back on the kind, the mirrored record
   keeps it.
 - `internal/library` holds the index (`map[id]*Item`,

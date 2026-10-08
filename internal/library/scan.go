@@ -79,6 +79,18 @@ func (l *Library) Scan(addWatch func(dir string)) {
 	// every FirstSeen under it, and every cache keyed by the item. Only
 	// what actually failed goes in here, not the root it sits under.
 	failed := make(map[string]struct{})
+	// took records what reading a container indexed: its members are seen,
+	// and a change among them is a change to what the library holds.
+	took := func(paths []string, ch bool) {
+		for _, p := range paths {
+			seen[p] = struct{}{}
+		}
+		if ch {
+			changed = true
+			held = true
+			pending++
+		}
+	}
 
 	// Rebuild the duplicate map from scratch: claims are only reconciled
 	// with the disk at the end of the walk, so a claim left by a path that
@@ -203,10 +215,20 @@ func (l *Library) Scan(addWatch func(dir string)) {
 			}
 			kind := Classify(path)
 			if kind == "" {
-				// A name that said nothing may still be media (sniff.go).
-				// Guarded by the size floor there, which is what keeps this
-				// to a few dozen reads across a whole library.
-				if kind = ClassifyContent(path, info.Size()); kind == "" {
+				// A name that said nothing may still be media, or an archive
+				// of it (sniff.go). Guarded there by the size floor and by
+				// leaving unfinished downloads alone, which keeps this to a
+				// few hundred reads across a whole library.
+				s := SniffContent(path, info.Size())
+				switch s.Archive {
+				case "zip":
+					took(l.indexZip(path))
+					return nil
+				case "rar":
+					took(l.indexRarSet(path))
+					return nil
+				}
+				if kind = s.Kind; kind == "" {
 					return nil
 				}
 			}
@@ -714,8 +736,18 @@ func (l *Library) AddFile(path string) {
 	}
 	kind := Classify(path)
 	if kind == "" {
-		// As in the walk: a nameless file gets its opening read (sniff.go).
-		if kind = ClassifyContent(path, info.Size()); kind == "" {
+		// As in the walk: a file whose name says nothing gets its opening
+		// read (sniff.go), and an archive found there is read as one.
+		s := SniffContent(path, info.Size())
+		switch s.Archive {
+		case "zip":
+			l.reindexZip(path)
+			return
+		case "rar":
+			l.reindexRarSet(path)
+			return
+		}
+		if kind = s.Kind; kind == "" {
 			return
 		}
 	}
