@@ -263,3 +263,27 @@ func TestLowerCaseVariousArtistsIsStillNobody(t *testing.T) {
 		t.Errorf("the untagged track names %q, want nothing: that is not somebody's name", got)
 	}
 }
+
+// A split is performers sharing a record, often one track each, and a tie at
+// the top is a disagreement like any other: it reads "Various Artists", not
+// whichever name sorts first, which is what counting half the tracks as a
+// majority made of a two-track split. A clear lead at half still wins.
+func TestATiedReleaseIsVariousArtists(t *testing.T) {
+	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	add := func(path, artist, album string) {
+		l.upsert(path, KindAudio, 1000, time.Unix(1, 0), fileKey{}, false)
+		l.setMeta(PathID(path), tagMeta{artist: artist, album: album}, 1000)
+	}
+	add("/library/splits/Shared Tide/01 one.mp3", "Tern Signal", "Shared Tide")
+	add("/library/splits/Shared Tide/02 two.mp3", "Kestrel Vane", "Shared Tide")
+	add("/library/splits/Half Gorse/01 one.mp3", "Gorse Beacon", "Half Gorse")
+	add("/library/splits/Half Gorse/02 two.mp3", "Gorse Beacon", "Half Gorse")
+	add("/library/splits/Half Gorse/03 three.mp3", "Tern Signal", "Half Gorse")
+	add("/library/splits/Half Gorse/04 four.mp3", "Kestrel Vane", "Half Gorse")
+	if got := releaseNamed(t, l, "Shared Tide").Artist; got != variousArtists {
+		t.Errorf("a split of one track each is credited to %q", got)
+	}
+	if got := releaseNamed(t, l, "Half Gorse").Artist; got != "Gorse Beacon" {
+		t.Errorf("half the tracks and no rival is credited to %q", got)
+	}
+}

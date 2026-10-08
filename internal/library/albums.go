@@ -792,7 +792,10 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 		a.Name = name
 	}
 	switch artist, n := mostCommon(artistCount); {
-	case n > 0 && n*2 >= len(tracks):
+	// Half the tracks is enough, but only for a name that leads alone: a
+	// split of one track each, or two and two, is a disagreement, and the
+	// name that sorts first is no answer to one.
+	case n > 0 && n*2 >= len(tracks) && !sharedLead(artistCount, n):
 		a.Artist = artist
 	case len(artistCount) == 1:
 		// One name and nothing against it. The majority test above is there
@@ -884,6 +887,17 @@ func byCount(m map[string]int) []string {
 
 // mostCommon returns the most frequent key and its count, ties broken by
 // name so the answer does not change between two builds of the same library.
+// sharedLead reports whether more than one key holds the count n.
+func sharedLead(m map[string]int, n int) bool {
+	at := 0
+	for _, v := range m {
+		if v == n {
+			at++
+		}
+	}
+	return at > 1
+}
+
 func mostCommon(m map[string]int) (string, int) {
 	best, n := "", 0
 	for k, v := range m {

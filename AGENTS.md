@@ -796,7 +796,9 @@ derives from `library.AllKinds`.
   returning the **tagged** spelling, matched case-insensitively (a second
   spelling is a second performer). Separately, **one voice suffices without
   contradiction**: one tagged track among blanks names the release; two names
-  with no majority read "Various Artists".
+  with no majority read "Various Artists". Half the tracks is a majority only
+  for a name that leads alone (`sharedLead`): a split of one track each is a
+  disagreement, and the name that sorts first is no answer to one.
 - **A track naming nobody is credited to its release's performer**
   (`Item.Performer`), so its row says whose it is and the client can strip
   that name from the file name. **Never written into `Artist`**:
