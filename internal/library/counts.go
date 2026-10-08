@@ -174,7 +174,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 	var out Counts
 	l.mu.RLock()
 	for _, it := range l.items {
-		if !allowed(it.Path) {
+		if !it.listed() || !allowed(it.Path) {
 			continue
 		}
 		if !q.Kinds.Has(it.Kind) {

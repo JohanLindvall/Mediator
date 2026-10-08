@@ -213,6 +213,7 @@ type Item struct {
 	enriched bool         // tags and duration have been looked for
 	shape    int          // which reading of the picture's shape this is (shape.go)
 	probed   bool         // ffprobe has run over it (see Probe.Probed)
+	judged   bool         // a track with no length was asked whether it is media, this run (needsEnrich)
 }
 
 // Archived reports whether the item's content is bytes inside another file
@@ -701,9 +702,9 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 		// something else, or a change to what counts as media — moves
 		// between the totals, which are what the chips read.
 		if it.Kind != kind {
-			l.countKind(it.Kind, -1)
-			l.countKind(kind, 1)
+			l.countItem(it, -1)
 			it.Kind = kind
+			l.countItem(it, 1)
 			l.markDirty(id)
 			repaired = true
 		}
@@ -712,7 +713,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 		}
 		it.Size = size
 		it.ModTime = mt
-		it.forgetContent()
+		l.forget(it)
 		l.markDirty(id)
 		// Only the bytes moved, unless something above already changed what
 		// the library holds. A file being written says this many times a
@@ -732,7 +733,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 	if key.valid() {
 		l.byInode[key] = path
 	}
-	l.countKind(kind, 1)
+	l.countItem(it, 1)
 	// The two sets the persist loop reads must never hold one id at once,
 	// and this is the door where a removed id comes back: a file unlinked
 	// and re-created under the same name — the two halves of an atomic
@@ -767,7 +768,35 @@ func (it *Item) forgetContent() {
 	it.Width, it.Height, it.FPS, it.HDR, it.MoovLate = 0, 0, 0, false, false
 	it.Unreadable = false
 	it.Tracks, it.EmbSubs = nil, nil
-	it.enriched, it.probed, it.shape = false, false, 0
+	it.enriched, it.probed, it.shape, it.judged = false, false, 0, false
+}
+
+// forget is forgetContent for an item in the index: what is forgotten includes
+// the verdict that keeps a track out of the listings, so the item is counted
+// out before and back in after. Caller must hold l.mu.
+func (l *Library) forget(it *Item) {
+	l.countItem(it, -1)
+	it.forgetContent()
+	l.countItem(it, 1)
+}
+
+// listed reports whether an item belongs in the listings at all. A track a
+// probe found is not media — a placeholder a download reserved and never
+// wrote, a file of no bytes — has nothing to play, so it is left out of every
+// listing, count and collection: the albums, the performers, the genres, the
+// queues and the radio. It stays in the index, so a change to the file brings
+// it back to be judged again, asking for it by id still answers, and a delete
+// of the folder it is in still finds it.
+func (it *Item) listed() bool { return it.Kind != KindAudio || !it.Unreadable }
+
+// countItem adjusts the running per-kind totals for one item, which count
+// what is listed and nothing else. Every change to an item's kind or verdict
+// goes between a countItem(it, -1) and a countItem(it, 1). Caller must hold
+// l.mu.
+func (l *Library) countItem(it *Item, delta int) {
+	if it.listed() {
+		l.countKind(it.Kind, delta)
+	}
 }
 
 // countKind adjusts the incremental per-kind totals. Caller must hold l.mu.
@@ -807,7 +836,7 @@ func (l *Library) upsertStored(container string, e *storedEntry, modTime time.Ti
 		if changed {
 			it.Size = e.size
 			it.ModTime = mt
-			it.forgetContent()
+			l.forget(it)
 		}
 		// What the container says the content is worth outranks anything
 		// read from it (see declaresDuration), so it is put back after the
@@ -832,7 +861,7 @@ func (l *Library) upsertStored(container string, e *storedEntry, modTime time.Ti
 	setEpisode(it)
 	l.items[id] = it
 	l.byPath[path] = it
-	l.countKind(it.Kind, 1)
+	l.countItem(it, 1)
 	return true
 }
 
@@ -871,7 +900,7 @@ func (l *Library) dropItem(it *Item) {
 	}
 	delete(l.byPath, it.Path)
 	delete(l.items, it.ID)
-	l.countKind(it.Kind, -1)
+	l.countItem(it, -1)
 	l.releaseInode(it)
 	l.markRemoved(it.ID)
 }
@@ -1044,11 +1073,13 @@ func (l *Library) setProbe(id string, p Probe) {
 	// out of the database can only add the mark: it is keyed by this file's
 	// mtime and size, so what it says still applies, but it is not a probe
 	// and must not clear what one established.
+	l.countItem(it, -1)
 	if p.Probed {
 		it.Unreadable = p.Unreadable
 	} else if p.Unreadable {
 		it.Unreadable = true
 	}
+	l.countItem(it, 1)
 	if p.Probed || p.HDR {
 		// A probe that ran is the whole truth about the colour, false
 		// included: a file replaced on disk may be the ordinary-colour
@@ -1466,6 +1497,9 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	l.mu.RLock()
 	entries := make([]sortEntry, 0, len(l.items))
 	for _, it := range l.items {
+		if !it.listed() {
+			continue
+		}
 		if q.Kind != "" && it.Kind != q.Kind {
 			continue
 		}

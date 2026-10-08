@@ -266,7 +266,7 @@ func (l *Library) analysisTodo() []string {
 	defer l.mu.RUnlock()
 	var todo []string
 	for id, it := range l.items {
-		if l.needsAnalysis(it) && readyForAnalysis(it) {
+		if it.listed() && l.needsAnalysis(it) && readyForAnalysis(it) {
 			todo = append(todo, id)
 		}
 	}

@@ -401,6 +401,9 @@ func (l *Library) buildAlbums() []*Album {
 		case KindImage:
 			pictures[filepath.Dir(it.Path)] = true
 		case KindAudio:
+			if !it.listed() {
+				continue // not media: no track of any release (see listed)
+			}
 			dir := filepath.Dir(it.Path)
 			// A copy, not the live pointer: the grouping, the disc sort,
 			// fillAlbum and markSpoken all run after the lock is dropped, and
@@ -926,7 +929,7 @@ func (l *Library) parseM3U(path string) []string {
 	ids := make([]string, 0, len(paths))
 	l.mu.RLock()
 	for _, p := range paths {
-		if it, ok := l.byPath[p]; ok && (it.Kind == KindAudio || it.Kind == KindVideo) {
+		if it, ok := l.byPath[p]; ok && (it.Kind == KindAudio || it.Kind == KindVideo) && it.listed() {
 			ids = append(ids, it.ID)
 		}
 	}

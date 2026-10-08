@@ -331,7 +331,9 @@ func (l *Library) hiddenCounts(version int64) Counts {
 		if !f.Hidden {
 			continue
 		}
-		if it, ok := l.items[id]; ok {
+		// What is not listed is not in the running totals either, so it is
+		// not subtracted from them.
+		if it, ok := l.items[id]; ok && it.listed() {
 			addKind(&c, it.Kind, 1)
 		}
 	}

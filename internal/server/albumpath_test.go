@@ -25,8 +25,8 @@ func TestAReleaseSaysWhereItIsKeptToWhoMaySee(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("Music/Pale Harrow/Saltings/01 - first.mp3", "x")
-	write("Music/Pale Harrow/Saltings/02 - second.mp3", "x")
+	write("Music/Pale Harrow/Saltings/01 - first.mp3", silentMP3())
+	write("Music/Pale Harrow/Saltings/02 - second.mp3", silentMP3())
 	write("Lists/evening.m3u", "#EXTM3U\n../Music/Pale Harrow/Saltings/01 - first.mp3\n")
 	ts, _ := flagServer(t, dir)
 

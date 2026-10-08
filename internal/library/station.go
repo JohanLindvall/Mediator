@@ -154,7 +154,7 @@ func (l *Library) Station(name, seed string, kinds KindSet, f PathFilter) (strin
 	}
 	var cands []candidate
 	for id, it := range l.items {
-		if it.Kind != KindAudio || id == seed || !kinds.Has(it.Kind) || !allowed(it.Path) || st.spoken(id) != spoken {
+		if it.Kind != KindAudio || !it.listed() || id == seed || !kinds.Has(it.Kind) || !allowed(it.Path) || st.spoken(id) != spoken {
 			continue
 		}
 		if strings.ToLower(performerOf(it.Artist, st.performers[id], known)) != want {

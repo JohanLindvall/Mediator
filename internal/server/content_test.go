@@ -104,7 +104,7 @@ func TestContentHeaderFiltersEveryAnswer(t *testing.T) {
 	}
 	videoID := write("Movies/clip.mp4", "video")
 	write("Pictures/pic.jpg", "image")
-	trackID := write("Music/Band - Record/01 song.mp3", "audio")
+	trackID := write("Music/Band - Record/01 song.mp3", silentMP3())
 
 	ts, lib := flagServer(t, dir)
 	lib.Scan(nil)

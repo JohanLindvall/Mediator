@@ -125,7 +125,13 @@ func needsEnrich(it *Item) bool {
 	// several megabytes a photograph is.
 	switch it.Kind {
 	case KindAudio:
-		return !it.enriched
+		// Or a track nothing found a length for, asked once a run whether it
+		// is media at all (judged): a record written before that question
+		// existed says nothing either way, and the answer is what keeps a
+		// placeholder of zeros out of the albums. Kept, it is never asked
+		// again — the verdict is persisted — and a track with a length has
+		// frames and needs no asking.
+		return !it.enriched || (it.Duration == 0 && !it.Unreadable && !it.judged)
 	case KindVideo, KindImage:
 		// Or where the shape has not been looked for. A library examined for
 		// tags before there was anywhere to keep a picture's size comes back
@@ -380,7 +386,7 @@ func (l *Library) keptReading(id string, snap Item) bool {
 		return false
 	}
 	if it.ModTime != snap.ModTime || it.Size != snap.Size {
-		it.forgetContent()
+		l.forget(it)
 		// What the container declares is not the file's to forget:
 		// upsertStored puts it back after its own forgetContent for the same
 		// reason, and neither setMeta nor setProbe may restore it
@@ -432,6 +438,16 @@ func (l *Library) markEnrichedIf(id string, snap Item) {
 	if !it.enriched || it.shape < shapeVersion {
 		it.enriched, it.shape = true, shapeVersion
 		l.markDirty(id)
+	}
+}
+
+// markJudged records that a track has been asked whether it is media, this
+// run, and only for the file that was asked about.
+func (l *Library) markJudged(id string, snap Item) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if it, ok := l.items[id]; ok && it.ModTime == snap.ModTime && it.Size == snap.Size {
+		it.judged = true
 	}
 }
 
@@ -500,6 +516,28 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 			// playing time for the whole length of a probe that is about the
 			// picture's size.
 			if !l.applyReading(id, it, cached, probeOfMeta(m)) {
+				return
+			}
+			// A track with no length may not be media at all, and a record
+			// written before that was asked does not say. Asked once a run;
+			// only a verdict, or a length after all, is written down.
+			if it.Kind == KindAudio && m.Duration == 0 && !m.Unreadable {
+				p := ProbeMedia(ctx, it)
+				cut := p.Interrupted && ctx.Err() == nil
+				if cut {
+					enrichCutShort.note(it)
+				}
+				if interrupted = ctx.Err() != nil || cut; interrupted {
+					return
+				}
+				l.markJudged(id, it)
+				if p.Unreadable || p.DurationMs > 0 {
+					m.Unreadable, m.Duration = p.Unreadable, p.DurationMs
+					if !l.applyReading(id, it, cached, probeOfMeta(m)) {
+						return
+					}
+					l.queueMeta(it.ID, m)
+				}
 				return
 			}
 			// A record written before there was anywhere to keep the shape
@@ -617,6 +655,9 @@ func (l *Library) enrichOne(ctx context.Context, id string) {
 	interrupted = ctx.Err() != nil || cut
 	if !l.applyReading(id, it, tm, p) {
 		return
+	}
+	if it.Kind == KindAudio && !interrupted {
+		l.markJudged(id, it) // the probe above asked the question needsEnrich asks
 	}
 	if interrupted {
 		return

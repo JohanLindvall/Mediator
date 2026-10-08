@@ -864,6 +864,27 @@ derives from `library.AllKinds`.
     loopback not up, HTTP status, killed run) is ever recorded. Persisted,
     cleared by `forgetContent`; the player gives up at once ("This file is
     damaged or incomplete") and Try again re-asks the server.
+  - Two more readings are the same verdict. **A file of no bytes**
+    (`emptyFile`, asked of the disk rather than the index's size) needs no
+    ffprobe, which calls it only "Invalid argument". **A document with no
+    real stream and no length** (sound with no channels and no sample rate,
+    a picture with no size): a download's placeholder of zeros under a media
+    name, which ffprobe takes for the format the extension claims, finds no
+    frame in and exits on without complaint.
+  - **A track found not to be media is not listed** (`Item.listed`): no
+    listing, count, release, performer, genre, queue, station or analysis —
+    it has nothing to play. It stays indexed, so a change to the file brings
+    it back to be judged, by-id requests answer, and a delete of its folder
+    finds it (`leftover` takes it as the folder's junk, or it would hold the
+    folder back). The running totals count listed items only (`countItem`),
+    so every change to a kind or a verdict sits between a count out and a
+    count in (`forget` wraps `forgetContent`; `setProbe`, both upserts,
+    `dropItem`, `LoadFromDB`), and the across-kind totals skip such tracks
+    too. A track with no length is asked once a run whether it is media
+    (`judged`, in memory, reset with the content), since a record written
+    before the question existed comes back examined and would never be
+    asked; only a verdict or a length is written down. Films are left
+    listed: the player says what is wrong with one.
   - A probe killed by its own ceiling (`ffprobeTimeout` 30 s,
     `ffprobePipeTimeout` 60 s) is no answer (`ffprobeResult.cutShort`,
     `Probe.Interrupted`): neither recorded nor marked examined (either would

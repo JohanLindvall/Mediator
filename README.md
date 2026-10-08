@@ -753,8 +753,11 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
 - **A file that is not media is said so** — a download that stopped half way,
   or any container nothing can parse, is recognised when it is first read and
   the player says "this file is damaged or incomplete" instead of trying a
-  copy, a conversion and a pipe in turn and then blaming the browser. The
-  mark goes when the file changes, so finishing the download is all it takes.
+  copy, a conversion and a pipe in turn and then blaming the browser. A song
+  like that is left out altogether — no listing, count, release or queue has
+  it — and so is a file of no bytes, or a placeholder a download reserved and
+  never wrote, which is the right size and nought throughout. The mark goes
+  when the file changes, so finishing the download is all it takes.
 - **Live library** — directories are scanned recursively and watched with
   inotify; new/changed/deleted files stream to the UI over server-sent events.
   A periodic rescan (default 10 min) acts as a safety net. **A file is taken

@@ -71,7 +71,7 @@ func (l *Library) LoadFromDB(db *blob.DB) int {
 		it.lower = itemSearchText(it)
 		l.items[it.ID] = it
 		l.byPath[it.Path] = it
-		l.countKind(it.Kind, 1)
+		l.countItem(it, 1)
 		n++
 	}
 	return n

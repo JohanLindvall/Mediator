@@ -100,7 +100,7 @@ func TestConfinedCallerSeesOnlyItsTracksOfARelease(t *testing.T) {
 			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			if err := os.WriteFile(path, []byte(silentMP3()), 0o644); err != nil {
 				t.Fatal(err)
 			}
 		}

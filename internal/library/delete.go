@@ -449,11 +449,15 @@ func (l *Library) leftover(path string, items map[string]bool) bool {
 	it, indexed := l.byPath[path]
 	var kind Kind
 	var id string
+	listed := true
 	if indexed {
-		kind, id = it.Kind, it.ID
+		kind, id, listed = it.Kind, it.ID, it.listed()
 	}
 	l.mu.RUnlock()
-	if indexed && items[id] {
+	// A file the library found is not media is no release of its own: it is
+	// left out of every collection (listed), so nothing being deleted names
+	// it, and it would otherwise keep the folder it is the junk of.
+	if indexed && (items[id] || !listed) {
 		return true
 	}
 	name := strings.ToLower(filepath.Base(path))

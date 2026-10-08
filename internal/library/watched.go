@@ -161,7 +161,7 @@ func (l *Library) watchTotals() (started, done int) {
 	// the index has the last word on what is still there.
 	l.mu.RLock()
 	for id, st := range states {
-		if _, ok := l.items[id]; !ok {
+		if it, ok := l.items[id]; !ok || !it.listed() {
 			continue
 		}
 		switch st {

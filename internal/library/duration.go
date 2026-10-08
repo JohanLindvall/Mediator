@@ -15,6 +15,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -166,6 +167,13 @@ func probeItem(ctx context.Context, it Item) ffprobeResult {
 // hardcoded background context would let one probe outlive the deadline the
 // request set for it (measured: a 200 ms deadline returned after 5.01 s).
 func ProbeMedia(ctx context.Context, it Item) Probe {
+	// A file of no bytes holds no media whatever it is called — a download
+	// that created its files and never wrote them — and ffprobe says so only
+	// as "Invalid argument", which is no verdict. Nothing needs running to
+	// know it, and the verdict lasts exactly as long as the file stays empty.
+	if it.Size == 0 && emptyFile(it) {
+		return Probe{Probed: true, Unreadable: true}
+	}
 	p := Probe{DurationMs: nativeDuration(it)}
 	if it.Kind != KindVideo {
 		if p.DurationMs == 0 {
@@ -204,6 +212,17 @@ func ProbeMedia(ctx context.Context, it Item) Probe {
 	p.Interrupted = out.cutShort
 	p.Unreadable = out.unreadable
 	return p
+}
+
+// emptyFile confirms on disk what an item's size says, the verdict being
+// about the bytes: a plain file is asked, and content inside another file has
+// no size but the one its container declares.
+func emptyFile(it Item) bool {
+	if it.Archived() {
+		return true
+	}
+	fi, err := os.Stat(it.Path)
+	return err == nil && fi.Mode().IsRegular() && fi.Size() == 0
 }
 
 // ProbeDuration returns the playing time of a media item in milliseconds,
@@ -607,7 +626,7 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	// here, and a second invocation for them would be a process per video.
 	args = append(args,
 		"-show_entries",
-		"stream=codec_type,codec_name,width,height,avg_frame_rate,channels,color_transfer,color_primaries:"+
+		"stream=codec_type,codec_name,width,height,avg_frame_rate,channels,sample_rate,color_transfer,color_primaries:"+
 			"stream_tags=language,title:stream_disposition=default,comment:format=duration",
 		"-of", "json", path)
 	cmd := exec.CommandContext(ctx, probe, args...)
@@ -659,6 +678,7 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 			Height    int    `json:"height"`
 			FrameRate string `json:"avg_frame_rate"`
 			Channels  int    `json:"channels"`
+			Rate      string `json:"sample_rate"`
 			Transfer  string `json:"color_transfer"`
 			Primaries string `json:"color_primaries"`
 			Tags      struct {
@@ -680,7 +700,14 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	}
 	res := ffprobeResult{answered: true}
 	subStreams := 0
+	real := false // a stream with something in it: sound, or a picture with a size
 	for _, st := range parsed.Streams {
+		switch {
+		case st.CodecType == "audio" && (st.Channels > 0 || st.Rate != "" && st.Rate != "0"):
+			real = true
+		case st.CodecType == "video" && st.Width > 0 && st.Height > 0:
+			real = true
+		}
 		switch st.CodecType {
 		case "video":
 			if res.vcodec == "" {
@@ -732,6 +759,14 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	// off.
 	if res.vcodec == "" && res.acodec == "" && res.durationMs == 0 &&
 		len(res.subs) == 0 && unreadableInput(stderr) {
+		res.unreadable = true
+	}
+	// And a document that names streams with nothing in them — sound with no
+	// channels and no sample rate, a picture with no size — and no length is
+	// the same verdict without the complaint. It is what a file of zeros
+	// under a media name looks like: ffprobe takes the extension's word for
+	// the format, finds not one frame, and exits as though all were well.
+	if !real && res.durationMs == 0 && len(res.subs) == 0 {
 		res.unreadable = true
 	}
 	return res

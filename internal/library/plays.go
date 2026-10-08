@@ -65,7 +65,7 @@ func (l *Library) playedTotal() int {
 	total := 0
 	l.mu.RLock()
 	for id := range plays {
-		if _, ok := l.items[id]; ok {
+		if it, ok := l.items[id]; ok && it.listed() {
 			total++
 		}
 	}
@@ -73,7 +73,7 @@ func (l *Library) playedTotal() int {
 		if _, played := plays[id]; played {
 			continue // counted above
 		}
-		if _, ok := l.items[id]; ok {
+		if it, ok := l.items[id]; ok && it.listed() {
 			total++
 		}
 	}
