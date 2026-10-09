@@ -68,7 +68,7 @@ func (l *Library) LoadFromDB(db *blob.DB) int {
 		// to say nearly always. It must run before the search text, which
 		// the series name is part of.
 		setEpisode(it)
-		it.lower = itemSearchText(it)
+		it.indexText()
 		l.items[it.ID] = it
 		l.byPath[it.Path] = it
 		l.countItem(it, 1)

@@ -4,6 +4,7 @@ package library
 
 import (
 	"cmp"
+	"strconv"
 	"strings"
 )
 
@@ -39,6 +40,8 @@ type Artist struct {
 	Similarity float32 `json:"similarity,omitempty"`
 
 	lower    string // tokenized search text
+	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
+	cardEnd  int32
 	sortName string // lowercased name, for ordering
 	// Release titles and genres collected while grouping, folded into lower
 	// once the grouping is done and dropped again — they are how a performer
@@ -153,7 +156,13 @@ func artistsFrom(albums []*Album) []*Artist {
 		}
 		ar.Genre, _ = mostCommon(ar.genres)
 		ar.genres = nil
-		ar.lower = searchText(append([]string{ar.Name}, ar.searchParts...)...)
+		// The card shows the name, the genre and the years; the releases
+		// it is also found by are a page further in.
+		card := []string{ar.Genre}
+		if ar.FromYear > 0 {
+			card = append(card, strconv.Itoa(ar.FromYear), strconv.Itoa(ar.ToYear))
+		}
+		ar.lower, ar.nameEnd, ar.cardEnd = segmentedText([]string{ar.Name}, card, ar.searchParts)
 		ar.searchParts = nil // only ever needed to build the line above
 		ar.sortName = strings.ToLower(ar.Name)
 		out = append(out, ar)
@@ -222,5 +231,6 @@ func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFil
 		func(a, b *Artist) int { return compareArtists(a, b, sortKey) },
 		func(a *Artist) string { return a.sortName },
 		func(a *Artist) string { return a.ID })
+	rankByHit(out, words, func(a *Artist) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd })
 	return out
 }

@@ -60,6 +60,8 @@ type Album struct {
 	Formats []string `json:"formats,omitempty"`
 
 	lower    string // tokenized search text (name, artist, genre, year, path)
+	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
+	cardEnd  int32
 	sortName string // lowercased name, for ordering
 	// where is the absolute path Path shows, which is what a caller's
 	// path filter is asked about (paths.go matches the disk, never the
@@ -228,6 +230,7 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 		func(a, b *Album) int { return compareAlbums(a, b, sortKey) },
 		func(a *Album) string { return a.sortName },
 		func(a *Album) string { return a.ID })
+	rankByHit(out, words, func(a *Album) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd })
 	return out
 }
 
@@ -847,7 +850,12 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	if a.Year > 0 {
 		year = strconv.Itoa(a.Year)
 	}
-	a.lower = searchText(a.Name, a.Artist, a.Genre, year, displayText(path))
+	genres := a.Genres
+	if len(genres) == 0 {
+		genres = []string{a.Genre}
+	}
+	a.lower, a.nameEnd, a.cardEnd = segmentedText([]string{a.Name},
+		append([]string{a.Artist, year}, genres...), []string{displayText(path)})
 	a.sortName = strings.ToLower(a.Name)
 }
 

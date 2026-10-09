@@ -367,8 +367,8 @@ derives from `library.AllKinds`.
   (`DirEntry.Info` is an lstat).
 - Search (`search.go`): items index lowercase word runs of name + absolute
   path + tags; every query word must be a substring. Rebuild `lower` via
-  `searchText` whenever its inputs change, at all four doors (`upsert`,
-  `upsertRar`, `setMeta`, `LoadFromDB`). Absolute, not `Rel`, which starts at
+  `indexText` whenever its inputs change, at every door (`upsert`,
+  `upsertStored`, a repaired path, `setMeta`, `LoadFromDB`). Absolute, not `Rel`, which starts at
   the root's base name and hides where the root is. Albums index
   name/artist/genre/year plus their directory or playlist file (`fillAlbum`),
   so a file-listing hit answers one view across, and sort by a separate
@@ -379,6 +379,19 @@ derives from `library.AllKinds`.
     `answering`); tracks are checked only for releases their own text missed.
     Album and artist listings, like-this, chips and queue-all share this;
     genres do not.
+  - **Results rank by how directly they answer** (`rankByHit`, after every
+    view's sort — items, releases, performers, genres, shows — and so for
+    queue-all too): first what the search names, word for word as `tokenize`
+    reads words (`hitName`); then what shows every word on its card in this
+    view (`hitCard`: a track's title, performer, release, genre and year; a
+    release's title, performer, genres and year; a performer's name, genre and
+    years; a genre's or a show's name); then what was found further away
+    (`hitBeyond`: a folder, a file name behind a title, a release's tracks, a
+    performer's releases, a genre's bands, a show's episodes). Each tier keeps
+    the view's sort, either direction. The text is built in those three
+    segments with where the first two end (`segmentedText`, `nameEnd`,
+    `cardEnd` on each item and collection), so a tier is a slice compare and
+    a substring check, never a tokenize per search.
 - **A release spread over discs is one release**: disc-named directories
   (`CD2`, `disc 3`, `disk-4`, `CD 1-…`) fold into their parent. `discPattern`
   wants a standalone number and whole words, and reads numbers spelled out up

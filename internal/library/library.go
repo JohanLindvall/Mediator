@@ -208,6 +208,8 @@ type Item struct {
 	Path     string       `json:"-"` // absolute path on disk (virtual for archived items)
 	stored   *storedEntry // non-nil: content lives inside some other file
 	lower    string       // tokenized name+path+metadata for search
+	nameEnd  int32        // where the name the card shows ends in lower (hitTier)
+	cardEnd  int32        // and where the rest of what it shows ends
 	ino      fileKey      // identity of the underlying file, for deduplication
 	symlink  bool         // reached through a symbolic link
 	enriched bool         // tags and duration have been looked for
@@ -693,7 +695,7 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 		if it.Path != path {
 			delete(l.byPath, it.Path)
 			it.Path, it.Name, it.Rel = path, name, rel
-			it.lower = itemSearchText(it)
+			it.indexText()
 			l.byPath[path] = it
 			l.markDirty(id)
 			repaired = true
@@ -725,8 +727,9 @@ func (l *Library) upsert(path string, kind Kind, size int64, modTime time.Time, 
 	it := &Item{
 		ID: id, Name: name, Rel: rel, Kind: kind,
 		Size: size, ModTime: mt, FirstSeen: time.Now().UnixMilli(), Path: path,
-		lower: searchText(name, displayText(path)), ino: key, symlink: symlink,
+		ino: key, symlink: symlink,
 	}
+	it.indexText()
 	setEpisode(it)
 	l.items[id] = it
 	l.byPath[path] = it
@@ -856,8 +859,9 @@ func (l *Library) upsertStored(container string, e *storedEntry, modTime time.Ti
 		// ifoDuration), so the answer is there from the moment it is indexed
 		// rather than waiting for a probe that would get it wrong anyway.
 		Duration: e.durationMs,
-		Path:     path, stored: e, lower: searchText(name, displayText(path)),
+		Path:     path, stored: e,
 	}
+	it.indexText()
 	setEpisode(it)
 	l.items[id] = it
 	l.byPath[path] = it
@@ -927,7 +931,7 @@ func (l *Library) setMeta(id string, m tagMeta, durationMs int64) {
 	if durationMs > 0 && !it.declaresDuration() {
 		it.Duration = durationMs
 	}
-	it.lower = itemSearchText(it)
+	it.indexText()
 	l.markDirty(id)
 }
 
@@ -1655,6 +1659,9 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		}
 	}
 	slices.SortFunc(entries, order)
+	// What the search names comes first, then what shows it on its tile, then
+	// what was found by where it is kept — each in the order just sorted.
+	rankByHit(entries, words, func(e sortEntry) (string, int32, int32) { return e.it.lower, e.it.nameEnd, e.it.cardEnd })
 	l.mu.RUnlock()
 
 	items := make([]*Item, len(entries))

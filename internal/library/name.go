@@ -78,13 +78,27 @@ func displayText(s string) string {
 // the decoded name and path, and whatever tags enrichment has found. Every
 // place that touches those fields rebuilds it from here, so none of them can
 // drop half the text by forgetting an argument.
-func itemSearchText(it *Item) string {
+func itemSearchText(it *Item) (text string, nameEnd, cardEnd int32) {
 	year := ""
 	if it.Year > 0 {
 		year = strconv.Itoa(it.Year)
 	}
-	return searchText(it.Name, displayText(it.Path), it.Title, it.Artist, it.Album, it.Genre, year)
+	// What its card shows first (hitTier): the title, or the file's name
+	// where there is none, then the performer, the release, the genre and the
+	// year. The file's name behind a title, and where it is kept, are on
+	// hover at most.
+	name, beyond := it.Title, []string{displayText(it.Path)}
+	if name == "" {
+		name = it.Name
+	} else {
+		beyond = append(beyond, it.Name)
+	}
+	return segmentedText([]string{name}, []string{it.Artist, it.Album, it.Genre, year}, beyond)
 }
+
+// indexText rebuilds what an item is searched by. Every door that changes a
+// field feeding it calls this. Caller must hold l.mu, or own the item.
+func (it *Item) indexText() { it.lower, it.nameEnd, it.cardEnd = itemSearchText(it) }
 
 // Thai is the other encoding that turns up in a library like this, and it is
 // not Windows-1252: TIS-620 (Windows-874 is the same thing with a few

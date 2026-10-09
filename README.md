@@ -827,7 +827,11 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
   performer by any release of theirs that is found, so typing a song's
   title counts and lists the album it is on and who made it — and the
   search stays in force as you move between views and drill into a
-  performer, until you clear it. Results arrive in place: the listing stays up while
+  performer, until you clear it. What a search names comes first — the
+  performer called that, the release, the track — then whatever shows the
+  words on its card, then what was found a page further in, by a track, a
+  release or the folder something is kept in; each group keeps the order the
+  view is sorted by. Results arrive in place: the listing stays up while
   the next one is fetched and only what differs is redrawn, so typing narrows
   the grid instead of flashing it, and anything the two searches have in
   common keeps its tile and its loaded thumbnail. Type filter chips (all / videos / images / music /

@@ -284,6 +284,8 @@ type Series struct {
 	Matched []int `json:"matched,omitempty"`
 
 	lower    string
+	nameEnd  int32 // where its name ends in lower; its card is its name (hitTier)
+	cardEnd  int32
 	sortName string
 	// eps is what each episode is searched by (Item.lower) and the season
 	// it is in: the words a search is matched against when the show's name
@@ -447,7 +449,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 			a.s.Seasons = append(a.s.Seasons, *se)
 		}
 		slices.SortFunc(a.s.Seasons, func(x, y Season) int { return cmp.Compare(x.Season, y.Season) })
-		a.s.lower = searchText(a.s.Name)
+		a.s.lower, a.s.nameEnd, a.s.cardEnd = segmentedText([]string{a.s.Name}, nil, nil)
 		a.s.sortName = strings.ToLower(a.s.Name)
 		out = append(out, a.s)
 	}
@@ -547,12 +549,14 @@ func answering(shows []*Series, words []string) []*Series {
 
 // SearchSeries filters and sorts the shows this caller may see.
 func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilter) []*Series {
-	out := answering(l.AllowedSeries(paths), searchWords(search))
+	words := searchWords(search)
+	out := answering(l.AllowedSeries(paths), words)
 	orderBy(out, desc,
 		func(s *Series) bool { return knownKey(sortKey, s.Duration, s.ModTime) },
 		func(a, b *Series) int { return compareSeries(a, b, sortKey) },
 		func(s *Series) string { return s.sortName },
 		func(s *Series) string { return s.ID })
+	rankByHit(out, words, func(s *Series) (string, int32, int32) { return s.lower, s.nameEnd, s.cardEnd })
 	return out
 }
 

@@ -45,6 +45,8 @@ type Genre struct {
 	ModTime  int64 `json:"mtime"`
 
 	lower    string // tokenized search text
+	nameEnd  int32  // where its name ends in lower; its card is its name (hitTier)
+	cardEnd  int32
 	sortName string // lowercased name, for ordering
 	// What the chosen cover came from; see betterCover.
 	coverArt  bool
@@ -138,7 +140,7 @@ func genresFrom(albums []*Album) []*Genre {
 		// words someone remembers about a genre are the bands in it. Release
 		// titles are deliberately left out: a genre holds hundreds, and the
 		// text would be the whole library.
-		g.lower = searchText(append([]string{g.Name}, names...)...)
+		g.lower, g.nameEnd, g.cardEnd = segmentedText([]string{g.Name}, nil, names)
 		g.sortName = strings.ToLower(g.Name)
 		out = append(out, g)
 	}
@@ -192,6 +194,7 @@ func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilt
 		func(a, b *Genre) int { return compareGenres(a, b, sortKey) },
 		func(g *Genre) string { return g.sortName },
 		func(g *Genre) string { return g.ID })
+	rankByHit(out, words, func(g *Genre) (string, int32, int32) { return g.lower, g.nameEnd, g.cardEnd })
 	return out
 }
 
