@@ -1364,6 +1364,27 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 				"path", s.item.Rel, "at", tb.starts[k], "seek", early)
 		}
 	}
+	// A run from the start begins at the picture's first frame, which is
+	// past nought where the sound leads the picture (an MP4 whose picture
+	// track opens on an empty edit). The forced keyframes and the muxer's
+	// cuts both count from that frame, so both are told where it is
+	// (keyframesFrom, hlsTableArgs), or every cut falls that far past its
+	// grid point and the session is given up at its first segment. A
+	// picture beginning before nought needs nothing: the muxer shifts the
+	// whole run forward by as much (make_non_negative).
+	pictureAt := 0.0
+	if tb.grid && k == 0 {
+		at, err := h.pictureStart(ctx, s.item)
+		switch {
+		case err != nil:
+			h.log.Debug("hls: where the picture begins could not be read; counting the grid from nought",
+				"path", s.item.Rel, "err", err)
+		case at > hlsLandTol:
+			pictureAt = at
+			h.log.Debug("hls: the picture begins after the film does; keeping the grid from there",
+				"path", s.item.Rel, "at", at)
+		}
+	}
 	if !tb.grid && k > 0 {
 		var err error
 		seek, landed, err = h.landing(ctx, s.item, tb.starts[k])
@@ -1387,7 +1408,7 @@ func (h *HLS) runTable(s *hlsSession, r *hlsRun, k int) {
 	}
 
 	for attempt := 1; ; attempt++ {
-		outcome := h.attemptTable(ctx, s, r, seek, trimAt, times, to)
+		outcome := h.attemptTable(ctx, s, r, seek, trimAt, pictureAt, times, to)
 		if outcome == attemptAgain && attempt < hlsMaxAttempts && r.state.produced == 0 {
 			h.clearRun(s, r)
 			r.seen = 0
@@ -1420,8 +1441,9 @@ func runCuts(starts []float64, from, until int, landed float64) []float64 {
 	return times
 }
 
-// attemptTable is one ffmpeg over a run.
-func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek, trimAt float64, times []float64, to float64) attemptOutcome {
+// attemptTable is one ffmpeg over a run. pictureAt is where a run from the
+// start finds its picture beginning, past nought (runTable); 0 otherwise.
+func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek, trimAt, pictureAt float64, times []float64, to float64) attemptOutcome {
 	it := s.item
 	repaired := aspects.has(it)
 	plan, err := planConversion(ctx, h.ffmpeg, it, seek, s.copyVideo, s.audio, s.q, repaired, true, h.log)
@@ -1433,9 +1455,12 @@ func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek, 
 	if trimAt > 0 {
 		plan.trimTo(trimAt, it.ACodec != "")
 	}
+	if pictureAt > 0 {
+		plan.keyframesFrom(pictureAt)
+	}
 	r.hardware = plan.hardware
 	pattern := fmt.Sprintf("run%d-seg%%05d.ts", r.seq)
-	args := append(plan.args, hlsTableArgs(s.dir, r.list, pattern, r.fileStart, times, s.table.grid, to)...)
+	args := append(plan.args, hlsTableArgs(s.dir, r.list, pattern, r.fileStart, times, s.table.grid, pictureAt, to)...)
 
 	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
 	if plan.stdin != nil {
@@ -1490,8 +1515,9 @@ func (h *HLS) attemptTable(ctx context.Context, s *hlsSession, r *hlsRun, seek, 
 
 // hlsTableArgs is the delivery for a tabled run: transport-stream segments
 // keeping the file's own clock, cut where the table says, named per run,
-// and listed as each is closed.
-func hlsTableArgs(dir, list, pattern string, startNumber int, times []float64, grid bool, to float64) []string {
+// and listed as each is closed. pictureAt is, for a grid run from the start,
+// where its picture begins past nought (attemptTable).
+func hlsTableArgs(dir, list, pattern string, startNumber int, times []float64, grid bool, pictureAt, to float64) []string {
 	args := []string{
 		"-f", "segment",
 		"-segment_format", "mpegts",
@@ -1508,10 +1534,16 @@ func hlsTableArgs(dir, list, pattern string, startNumber int, times []float64, g
 		"-segment_list_size", "0",
 	}
 	if grid {
-		// Cumulative from the first packet, which the accurate seek puts on
-		// the grid point itself; the delta takes the forced keyframe on the
-		// next grid point even when it lands a frame early of the count.
-		args = append(args, "-segment_time", strconv.Itoa(hlsSegmentSec), "-segment_time_delta", "0.06")
+		// Cumulative from the first picture packet (the muxer adds its time
+		// to every cut), which the accurate seek puts on the grid point
+		// itself; the delta takes the forced keyframe on the next grid point
+		// even when it lands a frame early of the count. Where the picture
+		// begins past nought in a run from the start, the delta takes that
+		// back off too, so the cuts are on the film's grid, where the
+		// keyframes were put (gridKeyframesFrom).
+		delta := math.Round((0.06+pictureAt)*1e6) / 1e6
+		args = append(args, "-segment_time", strconv.Itoa(hlsSegmentSec),
+			"-segment_time_delta", strconv.FormatFloat(delta, 'f', -1, 64))
 	} else {
 		// Every cut named; past the last named one the muxer cuts nowhere.
 		// Named even where there is none to make — a run over the film's
@@ -1726,15 +1758,27 @@ func gridSeek(point float64, land func(float64) (float64, error)) (float64, erro
 // seekLanding asks ffmpeg where an input seek lands, for the same seek a
 // conversion makes (landsAt).
 func (h *HLS) seekLanding(ctx context.Context, it library.Item, seek float64) (float64, error) {
+	return h.firstPicture(ctx, it, []string{"-ss", strconv.FormatFloat(seek, 'f', 3, 64)})
+}
+
+// pictureStart reads where a film's picture begins on its own clock, as a
+// run from the start reads it: no seek, the first picture packet's time.
+func (h *HLS) pictureStart(ctx context.Context, it library.Item) (float64, error) {
+	return h.firstPicture(ctx, it, nil)
+}
+
+// firstPicture is the time of the first picture packet ffmpeg reads after
+// seek (landsAt), through the input a conversion reads.
+func (h *HLS) firstPicture(ctx context.Context, it library.Item, seek []string) (float64, error) {
 	input, _, err := convertInput(it, 0)
 	if err != nil {
 		return 0, err
 	}
 	if input.pipe != nil {
 		_ = input.pipe.Close()
-		return 0, errors.New("content read through a pipe cannot be seeked")
+		return 0, errors.New("content read through a pipe cannot be probed")
 	}
-	at, err := landsAt(ctx, h.ffmpeg, []string{"-ss", strconv.FormatFloat(seek, 'f', 3, 64)}, input.args)
+	at, err := landsAt(ctx, h.ffmpeg, seek, input.args)
 	return at.pts, err
 }
 

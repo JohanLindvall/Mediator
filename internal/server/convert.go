@@ -295,6 +295,19 @@ func (c *conversion) trimTo(t float64, sound bool) {
 	}
 }
 
+// keyframesFrom tells the grid's forced keyframes that the run's first frame
+// shows at from on the film's clock rather than on a grid point
+// (gridKeyframesFrom): the run from the start of a film whose picture begins
+// after its sound. Nothing changes in a run that forces none.
+func (c *conversion) keyframesFrom(from float64) {
+	for i := 0; i+1 < len(c.args); i++ {
+		if c.args[i] == "-force_key_frames" {
+			c.args[i+1] = gridKeyframesFrom(from)
+			return
+		}
+	}
+}
+
 // landCopy makes a conversion that copies the picture begin both its streams
 // on the keyframe at k — the one /api/keyframe told the client the
 // conversion begins at — and says whether it could.
@@ -433,12 +446,28 @@ func landsAt(ctx context.Context, ffmpeg string, seek, input []string) (packetTi
 }
 
 // gridKeyframeExpr makes the encoder put a keyframe on the first frame at
-// or after every multiple of hlsSegmentSec on the output clock, and on the
-// first frame of the run — which, the run seeking accurately to a grid
-// point, is on the grid too. Verified on libx264 and h264_vaapi: one
-// keyframe per segment, every segment the grid's length.
+// or after every multiple of hlsSegmentSec counted from the run's first
+// frame, and on that frame — which, the run seeking accurately to a grid
+// point, is on the grid too (where it is not, gridKeyframesFrom). Verified
+// on libx264 and h264_vaapi: one keyframe per segment, every segment the
+// grid's length.
 var gridKeyframeExpr = "expr:if(isnan(prev_forced_t),1,gte(t,(floor(prev_forced_t/" +
 	strconv.Itoa(hlsSegmentSec) + ")+1)*" + strconv.Itoa(hlsSegmentSec) + "))"
+
+// gridKeyframesFrom is gridKeyframeExpr for a run whose first frame is not on
+// a grid point but at from on the film's clock. The expression's t and
+// prev_forced_t count from the run's first frame, not from the film's
+// start, so the place of that frame is added to both: the keyframes then
+// fall on the grid however far from a grid point the picture begins.
+func gridKeyframesFrom(from float64) string {
+	if from == 0 {
+		return gridKeyframeExpr
+	}
+	at := strconv.FormatFloat(from, 'f', 6, 64)
+	seg := strconv.Itoa(hlsSegmentSec)
+	return "expr:if(isnan(prev_forced_t),1,gte(t+" + at + ",(floor((prev_forced_t+" + at + ")/" +
+		seg + ")+1)*" + seg + "))"
+}
 
 // hwGridKeyframes is the same rule for the graphics engines, which take the
 // forced frames through the same option; the long GOP keeps the engine

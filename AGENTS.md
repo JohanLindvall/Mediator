@@ -2165,6 +2165,16 @@ expose the library to the LAN.
     trims in the graph (`conversion.trimTo`; an output seek resets the
     clock). Landing is read by framecrc (`framecrcFirstPTS`), which, unlike
     the transport-stream probe, sees a copied WMV picture.
+  - A run from the start begins at the picture's first frame, past nought
+    where the sound leads it (an MP4 whose picture track opens on an empty
+    edit). Forced keyframes and the segment muxer's cuts both count from
+    that frame (the muxer adds `reference_stream_first_pts`), so
+    `pictureStart` reads it (one packet, `firstPicture`) and both are
+    offset: `gridKeyframesFrom` via `keyframesFrom`, and a
+    `-segment_time_delta` taking it back off (`hlsTableArgs`). A picture
+    beginning before nought needs nothing (`make_non_negative` shifts the
+    whole run); one beginning a segment or more late still fails, its first
+    segments holding no picture to cut at.
   - Files are per run (`run<n>-seg<k>.ts`), never overwriting another run's;
     `done.txt` is the manifest a later process adopts.
   - An unmade segment waits on the run that will reach it if that is about

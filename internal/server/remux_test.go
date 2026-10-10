@@ -843,3 +843,27 @@ func writeMKVKeyed(t *testing.T, path string, seconds, gop int) {
 		t.Skipf("ffmpeg could not build a matroska test clip: %v: %s", err, out)
 	}
 }
+
+// writeLatePicture writes an MP4 whose sound begins at nought and whose
+// picture begins delay seconds later, both ending at seconds: a picture track
+// that opens on an empty edit.
+func writeLatePicture(t *testing.T, path string, delay float64, seconds int) {
+	t.Helper()
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error",
+		"-itsoffset", strconv.FormatFloat(delay, 'f', 3, 64),
+		"-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration="+strconv.FormatFloat(float64(seconds)-delay, 'f', 3, 64),
+		"-f", "lavfi", "-i", "sine=frequency=440:duration="+strconv.Itoa(seconds),
+		"-map", "0:v", "-map", "1:a",
+		"-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-g", "10",
+		// Left to its default, ffmpeg fills the gap with copies of the first
+		// frame, and the picture begins at nought after all.
+		"-fps_mode", "passthrough",
+		"-c:a", "aac", "-y", path)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("ffmpeg could not build a test clip with a late picture: %v: %s", err, out)
+	}
+}

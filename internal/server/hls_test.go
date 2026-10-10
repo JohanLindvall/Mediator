@@ -444,7 +444,7 @@ func TestHLSAdoptsATabledSessionByItsManifest(t *testing.T) {
 // into files named for the run, so a later run never writes over what an
 // earlier one made.
 func TestHLSTableArgsSayWhereToCut(t *testing.T) {
-	args := strings.Join(hlsTableArgs("/d", "list-4.csv", "run4-seg%05d.ts", 150, []float64{4.8745, 15.2495}, false, 1249.325), " ")
+	args := strings.Join(hlsTableArgs("/d", "list-4.csv", "run4-seg%05d.ts", 150, []float64{4.8745, 15.2495}, false, 0, 1249.325), " ")
 	for _, want := range []string{
 		"-f segment", "mpegts_copyts=1", "-segment_start_number 150",
 		"-segment_times 4.8745,15.2495", "-to 1249.325",
@@ -460,13 +460,42 @@ func TestHLSTableArgsSayWhereToCut(t *testing.T) {
 	}
 	// A run over the film's last segment has no cut to make, and still has
 	// to say so, or the muxer cuts every two seconds on its own account.
-	last := strings.Join(hlsTableArgs("/d", "list-6.csv", "run6-seg%05d.ts", 258, nil, false, 0), " ")
+	last := strings.Join(hlsTableArgs("/d", "list-6.csv", "run6-seg%05d.ts", 258, nil, false, 0, 0), " ")
 	if !strings.Contains(last, "-segment_times 999999999") || strings.Contains(last, "-to ") {
 		t.Errorf("a run with no cut to make: %s", last)
 	}
-	grid := strings.Join(hlsTableArgs("/d", "list-5.csv", "run5-seg%05d.ts", 0, nil, true, 0), " ")
+	grid := strings.Join(hlsTableArgs("/d", "list-5.csv", "run5-seg%05d.ts", 0, nil, true, 0, 0), " ")
 	if !strings.Contains(grid, "-segment_time 4 -segment_time_delta 0.06") || strings.Contains(grid, "-to ") || strings.Contains(grid, "-segment_times") {
 		t.Errorf("grid args: %s", grid)
+	}
+	// A run from the start whose picture begins late: the muxer counts from
+	// that picture, and the delta takes its place back off.
+	late := strings.Join(hlsTableArgs("/d", "list-7.csv", "run7-seg%05d.ts", 0, nil, true, 2.966016, 0), " ")
+	if !strings.Contains(late, "-segment_time 4 -segment_time_delta 3.026016") {
+		t.Errorf("grid args for a late picture: %s", late)
+	}
+}
+
+// The forced keyframes of a run whose first frame is off the grid are told
+// where that frame is, in the one argument that forces them, whichever
+// engine encodes; a run on the grid keeps the plain rule.
+func TestARunOffTheGridIsToldWhereItBegins(t *testing.T) {
+	if gridKeyframesFrom(0) != gridKeyframeExpr {
+		t.Errorf("a run on the grid changed its rule: %s", gridKeyframesFrom(0))
+	}
+	want := "expr:if(isnan(prev_forced_t),1,gte(t+2.966016,(floor((prev_forced_t+2.966016)/4)+1)*4))"
+	if got := gridKeyframesFrom(2.966016); got != want {
+		t.Errorf("gridKeyframesFrom = %s, want %s", got, want)
+	}
+	c := &conversion{args: []string{"-i", "in", "-force_key_frames", gridKeyframeExpr, "-g", "1000", "-c:a", "aac"}}
+	c.keyframesFrom(2.966016)
+	if got := strings.Join(c.args, " "); got != "-i in -force_key_frames "+want+" -g 1000 -c:a aac" {
+		t.Errorf("keyframesFrom: %s", got)
+	}
+	copied := &conversion{args: []string{"-i", "in", "-c:v", "copy"}}
+	copied.keyframesFrom(2.966016)
+	if got := strings.Join(copied.args, " "); got != "-i in -c:v copy" {
+		t.Errorf("a run forcing no keyframes was changed: %s", got)
 	}
 }
 
@@ -660,5 +689,53 @@ func TestHLSGridSegmentBeginsOnTheGrid(t *testing.T) {
 	}
 	if pts, ok := tsFirstVideoPTS(seg); !ok || pts < 3.9 || pts > 4.2 {
 		t.Errorf("the middle segment begins at %.3f (%v), want 4", pts, ok)
+	}
+}
+
+// A film whose picture begins after its sound is cut on the same grid from
+// its start: the run from nought begins at the picture's first frame, and
+// its keyframes must still fall on the grid, not four seconds after that
+// frame, or the first cut is late and the session is given up.
+func TestHLSGridHoldsWhereThePictureBeginsLate(t *testing.T) {
+	dir := t.TempDir()
+	writeLatePicture(t, filepath.Join(dir, "clip.mp4"), 2.5, 16)
+	ts, _ := flagServer(t, dir)
+	id := library.PathID(filepath.Join(dir, "clip.mp4"))
+
+	res, err := http.Get(ts.URL + "/api/hls/" + id + "/index.m3u8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", res.StatusCode, body)
+	}
+	if got := res.Header.Get(hlsTimelineHeader); got != "film" {
+		t.Skipf("no table for the test clip (timeline %q)", got)
+	}
+	var names []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.HasSuffix(strings.TrimSpace(line), ".ts") {
+			names = append(names, strings.TrimSpace(line))
+		}
+	}
+	if len(names) != 4 {
+		t.Fatalf("want four segments of a sixteen-second clip:\n%s", body)
+	}
+	for k, name := range names[:2] {
+		sres, err := http.Get(res.Request.URL.ResolveReference(&url.URL{Path: name}).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		seg, _ := io.ReadAll(sres.Body)
+		sres.Body.Close()
+		if sres.StatusCode != http.StatusOK {
+			t.Fatalf("segment %d answered %d: %s", k, sres.StatusCode, seg)
+		}
+		pts, ok := tsFirstVideoPTS(seg)
+		if want := []float64{2.5, 4}[k]; !ok || pts < want-0.1 || pts > want+0.2 {
+			t.Errorf("segment %d's picture begins at %.3f (%v), want %v", k, pts, ok, want)
+		}
 	}
 }
