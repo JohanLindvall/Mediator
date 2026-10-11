@@ -848,7 +848,11 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
   written: a record from 1994 downloaded this morning is old by one and new
   by the other, and the second is what answers "what is new in my
   library". A release that carries the value sorts ahead
-  of one that does not, whichever way the order runs. Opening a performer
+  of one that does not, whichever way the order runs. **Names sort the way
+  you count** — part 2 before part 10, capitals or not, and a name spelt
+  with underscores, dots or hyphens beside the same name spelt with spaces —
+  wherever a name orders anything: files, releases, performers, genres,
+  shows, and the untagged tracks of a release. Opening a performer
   lists their releases by year, newest first unless the order has been
   turned round. UI state lives in the URL hash. A change of view goes onto the history, so Back returns from a
   drill-down. The grid can be worked from a keyboard: Tab to a tile, Enter or

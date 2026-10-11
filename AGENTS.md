@@ -365,6 +365,16 @@ derives from `library.AllKinds`.
   surviving hard link. `upsert` returns `(changed, dup)`; a duplicate stays
   out of `seen` so a demoted path is removed. `statEntry` follows symlinks
   (`DirEntry.Info` is an lstat).
+- **Names sort as a reader counts** (`naturalKey`, `natural.go`, tested): a
+  digit run is its number (length byte, then digits without leading zeros),
+  case is ignored, a run of spaces, underscores, dots and hyphens is one
+  separator, nothing at either end counts; otherwise code points, keeping
+  ASCII's classes (separator, punctuation, number, letter). Built once per
+  name — `Item.nameKey` in `indexText` (every door already calls it),
+  collections' `sortName` — and compared as plain strings: comparing names
+  in place measured ten times slower over 150k. Every name order reads it:
+  the name sort, numeric sorts' and episode ties (`byName`), `orderBy`,
+  discographies and a release's untagged tracks.
 - Search (`search.go`): items index lowercase word runs of name + absolute
   path + tags; every query word must be a substring. Rebuild `lower` via
   `indexText` whenever its inputs change, at every door (`upsert`,

@@ -286,7 +286,7 @@ type Series struct {
 	lower    string
 	nameEnd  int32 // where its name ends in lower; its card is its name (hitTier)
 	cardEnd  int32
-	sortName string
+	sortName string // the name as it sorts (naturalKey)
 	// eps is what each episode is searched by (Item.lower) and the season
 	// it is in: the words a search is matched against when the show's name
 	// does not answer it (answers).
@@ -450,7 +450,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 		}
 		slices.SortFunc(a.s.Seasons, func(x, y Season) int { return cmp.Compare(x.Season, y.Season) })
 		a.s.lower, a.s.nameEnd, a.s.cardEnd = segmentedText([]string{a.s.Name}, nil, nil)
-		a.s.sortName = strings.ToLower(a.s.Name)
+		a.s.sortName = naturalKey(a.s.Name)
 		out = append(out, a.s)
 	}
 	byID(out, func(s *Series) string { return s.ID })

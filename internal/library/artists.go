@@ -42,7 +42,7 @@ type Artist struct {
 	lower    string // tokenized search text
 	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
 	cardEnd  int32
-	sortName string // lowercased name, for ordering
+	sortName string // the name as it sorts (naturalKey)
 	// Release titles and genres collected while grouping, folded into lower
 	// once the grouping is done and dropped again — they are how a performer
 	// is found by what they released rather than only by their own name.
@@ -164,7 +164,7 @@ func artistsFrom(albums []*Album) []*Artist {
 		}
 		ar.lower, ar.nameEnd, ar.cardEnd = segmentedText([]string{ar.Name}, card, ar.searchParts)
 		ar.searchParts = nil // only ever needed to build the line above
-		ar.sortName = strings.ToLower(ar.Name)
+		ar.sortName = naturalKey(ar.Name)
 		out = append(out, ar)
 	}
 	byID(out, func(a *Artist) string { return a.ID })

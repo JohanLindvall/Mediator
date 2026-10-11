@@ -72,8 +72,8 @@ func (c *perVersion[T]) total() int { return int(c.count.Load()) }
 // sort runs: tags are missing often enough that the other rule — untagged
 // first ascending, last descending — turns half the orders into a screenful
 // of blanks, which is not what the sort was asking for either way round.
-// Equal by the chosen key, the name decides, which is the order a listing is
-// readable in, and then the id so paging stays stable. desc reverses the
+// Equal by the chosen key, the name decides (its naturalKey), which is the
+// order a listing is readable in, and then the id so paging stays stable. desc reverses the
 // whole of that, as it always has.
 func orderBy[T any](out []T, desc bool, has func(T) bool, key func(a, b T) int, name, id func(T) string) {
 	slices.SortStableFunc(out, func(a, b T) int {

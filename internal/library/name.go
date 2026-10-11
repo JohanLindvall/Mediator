@@ -96,9 +96,13 @@ func itemSearchText(it *Item) (text string, nameEnd, cardEnd int32) {
 	return segmentedText([]string{name}, []string{it.Artist, it.Album, it.Genre, year}, beyond)
 }
 
-// indexText rebuilds what an item is searched by. Every door that changes a
-// field feeding it calls this. Caller must hold l.mu, or own the item.
-func (it *Item) indexText() { it.lower, it.nameEnd, it.cardEnd = itemSearchText(it) }
+// indexText rebuilds what an item is searched and sorted by. Every door that
+// changes a field feeding it calls this. Caller must hold l.mu, or own the
+// item.
+func (it *Item) indexText() {
+	it.lower, it.nameEnd, it.cardEnd = itemSearchText(it)
+	it.nameKey = naturalKey(it.Name)
+}
 
 // Thai is the other encoding that turns up in a library like this, and it is
 // not Windows-1252: TIS-620 (Windows-874 is the same thing with a few

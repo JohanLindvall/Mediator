@@ -70,6 +70,30 @@ func TestShufflePagesTileTheResult(t *testing.T) {
 	}
 }
 
+// Names sort the way a reader counts, either way round, and so do the ties
+// of every other order.
+func TestSortByNameCountsNumbers(t *testing.T) {
+	l := quietLib("/media")
+	for _, name := range []string{"Part 10.mkv", "part_2.mkv", "Part 1.mkv",
+		"Harbour Lights 101.mp4", "Harbour_Lights_02-y.mp4", "Harbour_Lights_01-x.mp4"} {
+		l.upsert("/media/"+name, KindVideo, 10, time.Unix(1, 0), fileKey{}, false)
+	}
+	want := []string{"Harbour_Lights_01-x.mp4", "Harbour_Lights_02-y.mp4", "Harbour Lights 101.mp4",
+		"Part 1.mkv", "part_2.mkv", "Part 10.mkv"}
+	if got := order(l, Query{Sort: "name"}); !slices.Equal(got, want) {
+		t.Errorf("name order %v, want %v", got, want)
+	}
+	// Every file is the same size, so the names decide.
+	if got := order(l, Query{Sort: "size"}); !slices.Equal(got, want) {
+		t.Errorf("size order %v, want %v", got, want)
+	}
+	desc := slices.Clone(want)
+	slices.Reverse(desc)
+	if got := order(l, Query{Sort: "name", Desc: true}); !slices.Equal(got, desc) {
+		t.Errorf("descending name order %v, want %v", got, desc)
+	}
+}
+
 func TestSortByDuration(t *testing.T) {
 	l := quietLib("/media")
 	durations := map[string]int64{

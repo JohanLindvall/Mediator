@@ -62,7 +62,7 @@ type Album struct {
 	lower    string // tokenized search text (name, artist, genre, year, path)
 	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
 	cardEnd  int32
-	sortName string // lowercased name, for ordering
+	sortName string // the name as it sorts (naturalKey)
 	// where is the absolute path Path shows, which is what a caller's
 	// path filter is asked about (paths.go matches the disk, never the
 	// display form).
@@ -496,7 +496,10 @@ func (l *Library) buildAlbums() []*Album {
 			if c := cmp.Compare(a.Track, b.Track); c != 0 {
 				return c
 			}
-			return strings.Compare(a.Name, b.Name)
+			if c := strings.Compare(a.nameKey, b.nameKey); c != 0 {
+				return c
+			}
+			return strings.Compare(a.ID, b.ID)
 		})
 		finish(&Album{
 			ID:     "d" + PathID(dir),
@@ -856,7 +859,7 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	}
 	a.lower, a.nameEnd, a.cardEnd = segmentedText([]string{a.Name},
 		append([]string{a.Artist, year}, genres...), []string{displayText(path)})
-	a.sortName = strings.ToLower(a.Name)
+	a.sortName = naturalKey(a.Name)
 }
 
 // formatOf is what a track is, in the word a listener uses for it: the codec

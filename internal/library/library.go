@@ -208,6 +208,7 @@ type Item struct {
 	Path     string       `json:"-"` // absolute path on disk (virtual for archived items)
 	stored   *storedEntry // non-nil: content lives inside some other file
 	lower    string       // tokenized name+path+metadata for search
+	nameKey  string       // the name as it sorts (naturalKey)
 	nameEnd  int32        // where the name the card shows ends in lower (hitTier)
 	cardEnd  int32        // and where the rest of what it shows ends
 	ino      fileKey      // identity of the underlying file, for deduplication
@@ -1433,25 +1434,34 @@ func (l *Library) List(q Query) Result {
 	return out
 }
 
-// sortEntry is one item on its way through a sort, with the keys that need
-// computing — the lowercased name, the shuffle hash — computed once here
-// rather than once per comparison.
+// sortEntry is one item on its way through a sort, with the keys a query
+// needs computed — the shuffle hash, the tempo shown — computed once here
+// rather than once per comparison. The name's key is the item's own
+// (nameKey), made when the name was.
 type sortEntry struct {
 	it    *Item
-	key   string  // precomputed primary sort key for name ordering
-	rand  uint64  // precomputed shuffle key, likewise never per comparison
+	rand  uint64  // precomputed shuffle key, never computed per comparison
 	tempo float64 // the tempo shown, for the tempo order; nought for none
 }
 
-// byField orders entries by one stored number, ties broken by the search
-// text so that paging stays stable: the shape every numeric sort shares.
+// byField orders entries by one stored number, ties broken by name so that
+// paging stays stable: the shape every numeric sort shares.
 func byField(field func(*Item) int64) func(a, b sortEntry) int {
 	return func(a, b sortEntry) int {
 		if c := cmp.Compare(field(a.it), field(b.it)); c != 0 {
 			return c
 		}
-		return strings.Compare(a.it.lower, b.it.lower)
+		return byName(a, b)
 	}
+}
+
+// byName is the name order (naturalKey), and where two names read the
+// same, the search text, which goes on to where each is kept.
+func byName(a, b sortEntry) int {
+	if c := strings.Compare(a.it.nameKey, b.it.nameKey); c != 0 {
+		return c
+	}
+	return strings.Compare(a.it.lower, b.it.lower)
 }
 
 // buildQuery filters and sorts the whole index once for a query.
@@ -1542,8 +1552,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 			}
 		case "random":
 			e.rand = shuffleKey(it.ID, q.Seed)
-		default:
-			e.key = strings.ToLower(it.Name)
 		}
 		entries = append(entries, e)
 	}
@@ -1574,7 +1582,7 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 			if c := cmp.Compare(a.tempo, b.tempo); c != 0 {
 				return c
 			}
-			return strings.Compare(a.it.lower, b.it.lower)
+			return byName(a, b)
 		}
 	case "episode":
 		order = func(a, b sortEntry) int {
@@ -1587,7 +1595,7 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 			// Two files of one episode, or a season whose episodes are not
 			// numbered at all: the name is the only order left, and it is
 			// the one a viewer expects.
-			return strings.Compare(a.it.lower, b.it.lower)
+			return byName(a, b)
 		}
 	case "plays", "popular":
 		// Taken from a snapshot rather than the map itself: this comparison
@@ -1603,11 +1611,11 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 			if c := cmp.Compare(a.rand, b.rand); c != 0 {
 				return c
 			}
-			return strings.Compare(a.it.lower, b.it.lower)
+			return byName(a, b)
 		}
 	default: // name
 		order = func(a, b sortEntry) int {
-			if c := strings.Compare(a.key, b.key); c != 0 {
+			if c := strings.Compare(a.it.nameKey, b.it.nameKey); c != 0 {
 				return c
 			}
 			return strings.Compare(a.it.Rel, b.it.Rel)

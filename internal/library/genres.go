@@ -47,7 +47,7 @@ type Genre struct {
 	lower    string // tokenized search text
 	nameEnd  int32  // where its name ends in lower; its card is its name (hitTier)
 	cardEnd  int32
-	sortName string // lowercased name, for ordering
+	sortName string // the name as it sorts (naturalKey)
 	// What the chosen cover came from; see betterCover.
 	coverArt  bool
 	coverTime int64
@@ -141,7 +141,7 @@ func genresFrom(albums []*Album) []*Genre {
 		// titles are deliberately left out: a genre holds hundreds, and the
 		// text would be the whole library.
 		g.lower, g.nameEnd, g.cardEnd = segmentedText([]string{g.Name}, nil, names)
-		g.sortName = strings.ToLower(g.Name)
+		g.sortName = naturalKey(g.Name)
 		out = append(out, g)
 	}
 	byID(out, func(g *Genre) string { return g.ID })
