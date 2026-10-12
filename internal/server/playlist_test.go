@@ -65,7 +65,7 @@ func TestPlaylistEndpoint(t *testing.T) {
 	ts, lib := flagServer(t, dir)
 	hidden := library.PathID(filepath.Join(dir, "two.mkv"))
 	yes := true
-	lib.SetFlags([]string{hidden}, &yes, nil, nil, nil)
+	lib.SetFlags([]string{hidden}, library.FlagChange{Hidden: &yes})
 
 	res, err := http.Get(ts.URL + "/api/playlist.m3u?kind=video")
 	if err != nil {

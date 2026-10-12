@@ -161,8 +161,9 @@ type Item struct {
 	// index (see annotate.go), not on the indexed item, because a flag
 	// outlives the file it is about.
 	// Rotation is the correction this file needs, in quarter turns, as the
-	// owner last left it, and NoCrop says to leave its black borders alone.
-	// Stamped on from the flags like the two below.
+	// owner last left it, NoCrop says to leave its black borders alone, and
+	// Aspect is the shape the owner says the picture is, where the file
+	// declares a wrong one. Stamped on from the flags like the two below.
 	// Series, Season and EpisodeNo are read out of the path when a video is
 	// indexed (series.go). Nothing tags an episode, so the names are all
 	// there is, and they are parsed once here rather than on every listing.
@@ -195,6 +196,7 @@ type Item struct {
 	Spoken    bool   `json:"spoken,omitempty"`
 	Rotation  int    `json:"rotation,omitempty"`
 	NoCrop    bool   `json:"nocrop,omitempty"`
+	Aspect    string `json:"aspect,omitempty"`
 	Hidden    bool   `json:"hidden,omitempty"`
 	Favourite bool   `json:"favourite,omitempty"`
 	// BPM is the track's tempo in beats per minute, as the analysis read it

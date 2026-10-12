@@ -251,6 +251,10 @@ type FlagUpdate struct {
 	// NoCrop keeps a file's black borders, which are otherwise trimmed
 	// wherever they are found.
 	NoCrop *bool `json:"nocrop,omitempty"`
+	// Aspect is the shape the picture really is, "W:H" ("16:9"), where the
+	// file declares a wrong one; empty goes back to the file's own. Anything
+	// library.ValidAspect refuses is a bad request.
+	Aspect *string `json:"aspect,omitempty"`
 }
 
 // FlagsResponse is the body of the flag endpoints: the flags every item the

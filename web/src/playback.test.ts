@@ -17,7 +17,7 @@ import { defaultMode, fallbackMode, modeShown } from './content.ts';
 import { singleAudioElement } from './playback.ts';
 import { REPORT_CAP, REPORT_QUIET_MS, shouldReport } from './report.ts';
 import { belongsTo, fitFrame, trackTitle, withoutTrackNumber } from './format.ts';
-import { PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, sourceStart, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
+import { PICTURE_SHAPES, PLAYER_KEYS, REWRAP_WAIT_LIMIT, START_FLOOR_S, WATCHED_FRACTION, audioSilent, castStep, cropScale, decodesAudio, decodesHEVC, decodesVideo, endedOnSet, fitShape, framesReported, hlsClock, mediaErrorText, menuShift, nativeHLS, opensDirectly, pickAudioTrack, pictureRoute, playButtonIcon, playsOnReceiver, qualityChoices, qualityLabel, readFault, resumeStart, rewrapWorthTheWait, sourceStart, shapeChoices, shapeLabel, shapeRatio, shouldSave, tapChoice, trackLabel, wantsFaststart, watchState } from './playback.ts';
 
 /** Real agent strings, trimmed to what the check looks at. */
 const AGENTS = {
@@ -532,6 +532,54 @@ test('crop: nothing real is pushed off the screen to remove a border', () => {
   const wide = { x: 0, y: 72, w: 1920, h: 936, frameW: 1920, frameH: 1080 };
   const scale = cropScale(wide, 2000, 1000);
   assert.ok(scale > 1 && scale <= 2000 / 1778 + 0.001, `scale ${scale} loses the sides`);
+});
+
+test('shape: only the spellings the server keeps are shapes', () => {
+  assert.equal(shapeRatio('16:9'), 16 / 9);
+  assert.equal(shapeRatio('4:3'), 4 / 3);
+  for (const s of PICTURE_SHAPES) assert.ok(shapeRatio(s) > 0, s);
+  // None is the file's own, and so is anything ValidAspect would refuse.
+  for (const s of [undefined, '', '16/9', '0:1', '04:3', '5:1', '1.85:1', '100:9', ' 4:3']) {
+    assert.equal(shapeRatio(s), 0, String(s));
+  }
+});
+
+test('shape: named as people name it', () => {
+  assert.equal(shapeLabel(640 / 480), '4:3');
+  assert.equal(shapeLabel(1920 / 1080), '16:9');
+  assert.equal(shapeLabel(1024 / 576), '16:9');
+  assert.equal(shapeLabel(720 / 576), '5:4');
+  assert.equal(shapeLabel(1.85), '1.85:1');
+  assert.equal(shapeLabel(1080 / 1920), '9:16');
+});
+
+test('shape: the menu offers what the file is not', () => {
+  // A 4:3 file: its own shape, and the widescreen it may have been squeezed from.
+  assert.deepEqual(shapeChoices(4 / 3, ''), [
+    { value: '', label: 'Original (4:3)' },
+    { value: '16:9', label: '16:9' },
+  ]);
+  // A widescreen one the other way round; a third shape offers both.
+  assert.deepEqual(shapeChoices(16 / 9, '').map((c) => c.value), ['', '4:3']);
+  assert.deepEqual(shapeChoices(2.39, '').map((c) => c.value), ['', '4:3', '16:9']);
+  // A choice the file already is stays listed while it is the one chosen.
+  assert.deepEqual(shapeChoices(4 / 3, '4:3').map((c) => c.value), ['', '4:3', '16:9']);
+  // Before the file's shape is known, everything is offered.
+  assert.deepEqual(shapeChoices(0, ''), [
+    { value: '', label: 'Original' },
+    { value: '4:3', label: '4:3' },
+    { value: '16:9', label: '16:9' },
+  ]);
+});
+
+test('shape: a reshaped picture is the largest of its shape that fits', () => {
+  // Widescreen in a window taller than it: as wide as the window.
+  assert.deepEqual(fitShape(16 / 9, 1600, 1200), { w: 1600, h: 900 });
+  // 4:3 in a wide window: as tall as the window.
+  assert.deepEqual(fitShape(4 / 3, 2000, 900), { w: 1200, h: 900 });
+  // No shape, no box: the box is left as it is.
+  assert.deepEqual(fitShape(0, 2000, 900), { w: 2000, h: 900 });
+  assert.deepEqual(fitShape(4 / 3, 0, 900), { w: 0, h: 900 });
 });
 
 test('crop: a stretched picture is measured as it is shown, not as it is stored', () => {

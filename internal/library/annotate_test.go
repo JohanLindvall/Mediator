@@ -36,8 +36,8 @@ func listedIDs(l *Library, q Query) map[string]bool {
 
 func TestHiddenItemsStayOutOfListings(t *testing.T) {
 	l, ids := flagLib()
-	l.SetFlags([]string{ids[0], ids[4]}, boolp(true), nil, nil, nil)
-	l.SetFlags([]string{ids[1], ids[4]}, nil, boolp(true), nil, nil)
+	l.SetFlags([]string{ids[0], ids[4]}, FlagChange{Hidden: boolp(true)})
+	l.SetFlags([]string{ids[1], ids[4]}, FlagChange{Favourite: boolp(true)})
 
 	cases := []struct {
 		name string
@@ -115,10 +115,10 @@ func TestCountsFollowFlags(t *testing.T) {
 	}
 	check("nothing flagged")
 
-	l.SetFlags([]string{ids[0], ids[2], ids[5]}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{ids[0], ids[2], ids[5]}, FlagChange{Hidden: boolp(true)})
 	check("after hiding three kinds")
 
-	l.SetFlags([]string{ids[2]}, boolp(false), nil, nil, nil)
+	l.SetFlags([]string{ids[2]}, FlagChange{Hidden: boolp(false)})
 	check("after unhiding one")
 
 	// Removing a hidden item drops it from both totals at once.
@@ -127,13 +127,13 @@ func TestCountsFollowFlags(t *testing.T) {
 	check("after removing a hidden item")
 
 	// A favourite is still a visible item.
-	l.SetFlags([]string{ids[1]}, nil, boolp(true), nil, nil)
+	l.SetFlags([]string{ids[1]}, FlagChange{Favourite: boolp(true)})
 	check("after marking a favourite")
 }
 
 func TestFlagFiltersAreInTheQueryCacheKey(t *testing.T) {
 	l, ids := flagLib()
-	l.SetFlags([]string{ids[0]}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{ids[0]}, FlagChange{Hidden: boolp(true)})
 
 	l.List(Query{Sort: "name"})
 	cached := l.lastQuery
@@ -156,7 +156,7 @@ func TestFlagFiltersAreInTheQueryCacheKey(t *testing.T) {
 	}
 	// A flag change has to invalidate the cache as surely as an added file.
 	cached = l.lastQuery
-	l.SetFlags([]string{ids[1]}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{ids[1]}, FlagChange{Hidden: boolp(true)})
 	l.List(Query{Sort: "name", ShowHidden: "include", FavouritesOnly: true})
 	if l.lastQuery == cached {
 		t.Fatal("a flag change did not invalidate the cached listing")
@@ -167,7 +167,7 @@ func TestSetFlagsBatch(t *testing.T) {
 	l, ids := flagLib()
 
 	version := l.Version()
-	out := l.SetFlags([]string{ids[0], ids[1], ids[2], "deadbeefdeadbeef"}, boolp(true), nil, nil, nil)
+	out := l.SetFlags([]string{ids[0], ids[1], ids[2], "deadbeefdeadbeef"}, FlagChange{Hidden: boolp(true)})
 	if len(out) != 3 {
 		t.Fatalf("judged %d items, want the 3 the index knows: %+v", len(out), out)
 	}
@@ -185,18 +185,18 @@ func TestSetFlagsBatch(t *testing.T) {
 
 	// Writing the same values again changes nothing.
 	version = l.Version()
-	l.SetFlags(ids[:3], boolp(true), nil, nil, nil)
+	l.SetFlags(ids[:3], FlagChange{Hidden: boolp(true)})
 	if l.Version() != version {
 		t.Fatal("a no-op flag write bumped the version")
 	}
 
 	// One flag at a time: clearing hidden must not clear favourite.
-	l.SetFlags([]string{ids[0]}, nil, boolp(true), nil, nil)
-	l.SetFlags([]string{ids[0]}, boolp(false), nil, nil, nil)
+	l.SetFlags([]string{ids[0]}, FlagChange{Favourite: boolp(true)})
+	l.SetFlags([]string{ids[0]}, FlagChange{Hidden: boolp(false)})
 	if f := l.Flags(ids[0]); f.Hidden || !f.Favourite {
 		t.Fatalf("flags = %+v, want favourite only", f)
 	}
-	l.SetFlags(ids[:3], boolp(false), nil, nil, nil)
+	l.SetFlags(ids[:3], FlagChange{Hidden: boolp(false)})
 	if total := l.List(Query{ShowHidden: "only"}).Total; total != 0 {
 		t.Fatalf("%d items still hidden", total)
 	}
@@ -217,7 +217,7 @@ func TestFlagsSurviveRestart(t *testing.T) {
 	l.SetMetaDB(db)
 	l.Scan(nil)
 	id := PathID(hidden)
-	l.SetFlags([]string{id}, boolp(true), boolp(true), nil, nil)
+	l.SetFlags([]string{id}, FlagChange{Hidden: boolp(true), Favourite: boolp(true)})
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -242,6 +242,72 @@ func TestFlagsSurviveRestart(t *testing.T) {
 	}
 }
 
+// A file's picture shape is the owner's to correct, kept as its rotation
+// is: stamped on what is handed out, written down, and put back to the
+// file's own by an empty shape, which leaves no record. A shape the player
+// would not draw is refused, not kept.
+func TestAspectIsKeptForTheFile(t *testing.T) {
+	dir := t.TempDir()
+	film := filepath.Join(dir, "Squeezed.flv")
+	write(t, film, "video")
+	dbPath := filepath.Join(t.TempDir(), "media.db")
+
+	db, err := blob.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := quietLib(dir)
+	l.SetMetaDB(db)
+	l.Scan(nil)
+	id := PathID(film)
+	wide, bad := "16:9", "16:0"
+	if f := l.SetFlags([]string{id}, FlagChange{Aspect: &wide})[id]; f.Aspect != wide {
+		t.Fatalf("flags after setting the shape = %+v", f)
+	}
+	if f := l.SetFlags([]string{id}, FlagChange{Aspect: &bad})[id]; f.Aspect != wide {
+		t.Fatalf("a refused shape replaced the kept one: %+v", f)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db2, err := blob.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db2.Close()
+	l2 := quietLib(dir)
+	l2.SetMetaDB(db2)
+	l2.Scan(nil)
+	if it, ok := l2.Get(id); !ok || it.Aspect != wide {
+		t.Fatalf("after restart Get = %+v (ok=%v)", it, ok)
+	}
+	if res := l2.List(Query{}); res.Total != 1 || res.Items[0].Aspect != wide {
+		t.Fatalf("the listing does not carry the shape: %+v", res.Items)
+	}
+	own := ""
+	l2.SetFlags([]string{id}, FlagChange{Aspect: &own})
+	if f, ok := db2.GetFlags(id); ok {
+		t.Fatalf("the file's own shape left a record behind: %+v", f)
+	}
+	if it, _ := l2.Get(id); it.Aspect != "" {
+		t.Fatalf("after clearing Get = %+v", it)
+	}
+}
+
+func TestValidAspect(t *testing.T) {
+	for s, want := range map[string]bool{
+		"": true, "4:3": true, "16:9": true, "1:1": true, "4:1": true, "1:4": true, "99:25": true,
+		"16/9": false, "16:": false, ":9": false, "0:1": false, "1:0": false, "5:1": false, "1:5": false,
+		"+4:3": false, "04:3": false, " 4:3": false, "4:3 ": false, "100:99": false, "1.85:1": false,
+		"16:9:1": false, "wide": false,
+	} {
+		if got := ValidAspect(s); got != want {
+			t.Errorf("ValidAspect(%q) = %v, want %v", s, got, want)
+		}
+	}
+}
+
 func TestFlagsOutliveTheItem(t *testing.T) {
 	dir := t.TempDir()
 	movie := filepath.Join(dir, "One.mkv")
@@ -257,7 +323,7 @@ func TestFlagsOutliveTheItem(t *testing.T) {
 	l.SetMetaDB(db)
 	l.Scan(nil)
 	id := PathID(movie)
-	l.SetFlags([]string{id}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{id}, FlagChange{Hidden: boolp(true)})
 
 	// The file disappears and the caches are reconciled against the disk.
 	if err := os.Remove(movie); err != nil {

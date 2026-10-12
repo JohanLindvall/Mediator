@@ -298,7 +298,7 @@ export function clearPosition(id: string): void {
 }
 
 /** One judgement about an item; a field left out keeps the value it has. */
-export type FlagChange = Pick<FlagUpdate, 'hidden' | 'favourite' | 'rotation' | 'nocrop'>;
+export type FlagChange = Pick<FlagUpdate, 'hidden' | 'favourite' | 'rotation' | 'nocrop' | 'aspect'>;
 
 /**
  * Record what the owner thinks of one item. The response holds the flags it

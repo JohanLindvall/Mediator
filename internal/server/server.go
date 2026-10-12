@@ -1417,7 +1417,7 @@ func (s *Server) handleFlagsPut(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags([]string{id}, body.Hidden, body.Favourite, body.NoCrop, body.Rotation)})
+	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags([]string{id}, body.change())})
 }
 
 // handleFlagsBatch applies one change to many items at once: culling a
@@ -1446,7 +1446,7 @@ func (s *Server) handleFlagsBatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no ids", http.StatusBadRequest)
 		return
 	}
-	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags(allowed, body.Hidden, body.Favourite, body.NoCrop, body.Rotation)})
+	writeJSON(w, FlagsResponse{Flags: s.lib.SetFlags(allowed, body.change())})
 }
 
 func decodeFlagUpdate(w http.ResponseWriter, r *http.Request) (FlagUpdate, bool) {
@@ -1455,7 +1455,17 @@ func decodeFlagUpdate(w http.ResponseWriter, r *http.Request) (FlagUpdate, bool)
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return FlagUpdate{}, false
 	}
+	if body.Aspect != nil && !library.ValidAspect(*body.Aspect) {
+		http.Error(w, "bad aspect", http.StatusBadRequest)
+		return FlagUpdate{}, false
+	}
 	return body, true
+}
+
+// change is the part of the body the library applies.
+func (u FlagUpdate) change() library.FlagChange {
+	return library.FlagChange{Hidden: u.Hidden, Favourite: u.Favourite, NoCrop: u.NoCrop,
+		Rotation: u.Rotation, Aspect: u.Aspect}
 }
 
 // handleStateAll hands the page every position, count and verdict it may

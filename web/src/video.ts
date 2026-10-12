@@ -61,6 +61,9 @@ import {
   shouldSave,
   PLAYER_KEYS,
   cropScale,
+  fitShape,
+  shapeChoices,
+  shapeRatio,
   pickAudioTrack,
   playButtonIcon,
   trackLabel,
@@ -300,6 +303,14 @@ class VideoOverlay {
   /** Whether the borders are being trimmed, as the owner last left it. */
   private cropping = false;
   private cropBtn!: HTMLButtonElement;
+  /**
+   * The shape the owner says this picture is ("16:9"; Flags.aspect), where
+   * the file declares a wrong one — '' for the file's own. Kept per file,
+   * as the rotation is.
+   */
+  private aspect = '';
+  private shapeBtn!: HTMLButtonElement;
+  private shapeMenu!: HTMLElement;
   private fsBtn: HTMLButtonElement;
   private centerFlash: HTMLElement;
   private titleEl: HTMLElement;
@@ -322,7 +333,7 @@ class VideoOverlay {
   private slideCur: HTMLCanvasElement;
   /** The keys, listed on request. */
   private helpEl!: HTMLElement;
-  /** The three menus, so dismissing, closing and asking about them is one loop. */
+  /** The menus, so dismissing, closing and asking about them is one loop. */
   private menus: Array<{ el: HTMLElement; button: HTMLElement }> = [];
   private qualityBtn!: HTMLElement;
   private qualityMenu!: HTMLElement;
@@ -441,49 +452,49 @@ class VideoOverlay {
   private rotation = 0; // quarter turns; a viewing aid for sideways footage
 
   /**
-   * Apply the current rotation. Quarter-turned video swaps its constraints:
-   * the element is sized to the overlay's opposite axis so the rotated
-   * picture still fits, and object-fit keeps the aspect within that box.
+   * Lay the picture out as the owner has said it is: turned, reshaped and
+   * trimmed. The poster follows the turn and the shape, being that picture
+   * until the file renders (and for the whole of a film on a television).
    */
-  private applyRotation(): void {
+  private applyPicture(): void {
     const v = this.video;
-    const odd = this.rotation % 180 !== 0;
-    // A quarter-turned element keeps its unrotated layout box, so it is
-    // sized to the overlay's swapped axes, taken out of flow and centered;
-    // the rotation then happens around that center.
-    v.classList.toggle('rotated', odd);
-    v.style.width = odd ? `${this.root.clientHeight}px` : '';
-    v.style.height = odd ? `${this.root.clientWidth}px` : '';
     // The file's own black borders are pushed off the edges by scaling the
     // picture about its centre; the overlay clips what goes past. Composed
     // with the turn rather than fighting it: both are transforms of the same
     // element, and the scale is written last so it applies first.
     const scale = this.cropping ? this.cropScaleNow(this.crop) : 1;
-    const zoom = scale > 1 ? ` scale(${scale.toFixed(4)})` : '';
     v.classList.toggle('cropped', scale > 1);
     this.cropBtn.classList.toggle('active', this.cropping && scale > 1);
-    v.style.transform = odd
-      ? `translate(-50%, -50%) rotate(${this.rotation}deg)${zoom}`
-      : this.rotation
-        ? `rotate(${this.rotation}deg)${zoom}`
-        : zoom.trim();
-    this.turnPoster(this.rotation);
+    this.place(v, this.rotation, shapeRatio(this.aspect), scale > 1 ? `scale(${scale.toFixed(4)})` : '');
+    this.place(this.poster, this.rotation, shapeRatio(this.aspect));
   }
 
   /**
-   * Turn the poster as the picture it stands in for is turned. It is that
-   * picture for a moment on every open and for the whole of a film playing
-   * on a television, and a still left as the file has it showed a film the
-   * owner had turned upright lying on its side — the frame the seek bar
-   * previews had the same fault. Placed by its centre, as the element is.
+   * Place a picture — the element, or the still standing in for it — turned
+   * by `deg` and, where `shape` is not 0, drawn at that shape (width over
+   * height) instead of its own; `extra` is a transform applied before both.
+   *
+   * Left alone, the element fills the overlay and fits its own shape inside
+   * it. A quarter-turned one keeps its unturned layout box, so it is sized to
+   * the overlay's swapped axes, taken out of flow and centred, and turned
+   * about that centre. A reshaped one is placed the same way, at the largest
+   * box of the shape that fits (fitShape), and fills it: what the file
+   * declares is the one thing the owner has said is wrong, so the element is
+   * given the shape rather than asked for its own.
    */
-  private turnPoster(deg: number): void {
-    const p = this.poster;
+  private place(el: HTMLElement, deg: number, shape: number, extra = ''): void {
     const odd = deg % 180 !== 0;
-    p.classList.toggle('rotated', odd);
-    p.style.width = odd ? `${this.root.clientHeight}px` : '';
-    p.style.height = odd ? `${this.root.clientWidth}px` : '';
-    p.style.transform = odd ? `translate(-50%, -50%) rotate(${deg}deg)` : deg ? `rotate(${deg}deg)` : '';
+    const areaW = odd ? this.root.clientHeight : this.root.clientWidth;
+    const areaH = odd ? this.root.clientWidth : this.root.clientHeight;
+    const placed = odd || shape > 0;
+    const box = fitShape(shape, areaW, areaH);
+    el.classList.toggle('placed', placed);
+    el.classList.toggle('reshaped', shape > 0);
+    el.style.width = placed ? `${Math.round(box.w)}px` : '';
+    el.style.height = placed ? `${Math.round(box.h)}px` : '';
+    el.style.transform = [placed ? 'translate(-50%, -50%)' : '', deg ? `rotate(${deg}deg)` : '', extra]
+      .filter(Boolean)
+      .join(' ');
   }
 
   /**
@@ -504,7 +515,7 @@ class VideoOverlay {
     // Offered only where there is something to offer, which depends on the
     // screen as much as on the file — see cropScale.
     this.cropBtn.hidden = this.cropScaleNow(box) === 1;
-    this.applyRotation();
+    this.applyPicture();
   }
 
   /** What trimming this file would buy on the screen it is being shown on. */
@@ -514,10 +525,12 @@ class VideoOverlay {
     const w = odd ? this.root.clientHeight : this.root.clientWidth;
     const h = odd ? this.root.clientWidth : this.root.clientHeight;
     // The size the element lays the picture out at, which for anamorphic
-    // video — every DVD — is not the size it is stored at. Zero until the
-    // metadata is in, and then cropScale falls back to the frame's own
-    // dimensions; loadedmetadata asks again.
-    const shown = { w: this.video.videoWidth, h: this.video.videoHeight };
+    // video — every DVD — is not the size it is stored at, and for a picture
+    // the owner has reshaped is that shape. Zero until the metadata is in,
+    // and then cropScale falls back to the frame's own dimensions;
+    // loadedmetadata asks again.
+    const shape = shapeRatio(this.aspect);
+    const shown = shape > 0 ? { w: shape, h: 1 } : { w: this.video.videoWidth, h: this.video.videoHeight };
     return cropScale(box, w, h, shown);
   }
 
@@ -525,10 +538,62 @@ class VideoOverlay {
   private toggleCrop(): void {
     this.cropping = !this.cropping;
     this.cropBtn.classList.toggle('active', this.cropping);
-    this.applyRotation();
+    this.applyPicture();
     const id = this.item.id;
     void setFlags(id, { nocrop: !this.cropping }).then((flags) => {
       if (!this.closed && this.item.id === id) this.item.nocrop = flags[id]?.nocrop ?? false;
+    });
+  }
+
+  /**
+   * The shape menu, built as it opens: what the file's own shape is comes
+   * with its metadata (the library's reading is the coded size, which for a
+   * DVD is not the shape), and the menu leaves out a shape the file already
+   * is (shapeChoices).
+   */
+  private toggleShapeMenu(show = this.shapeMenu.hidden): void {
+    if (show) {
+      const v = this.video;
+      const it = this.item;
+      const own =
+        v.videoWidth > 0 && v.videoHeight > 0
+          ? v.videoWidth / v.videoHeight
+          : it.width && it.height
+            ? it.width / it.height
+            : 0;
+      this.shapeMenu.innerHTML = shapeChoices(own, this.aspect)
+        .map(
+          (c) =>
+            `<button class="vo-menu-item${c.value === this.aspect ? ' on' : ''}" data-aspect="${esc(c.value)}">${esc(c.label)}</button>`,
+        )
+        .join('');
+      for (const el of this.shapeMenu.querySelectorAll<HTMLElement>('[data-aspect]')) {
+        el.addEventListener('click', () => {
+          this.selectShape(el.dataset.aspect ?? '');
+          this.toggleShapeMenu(false);
+        });
+      }
+    }
+    this.toggleMenu(this.shapeMenu, this.shapeBtn, show);
+  }
+
+  /**
+   * Show the picture at another shape, and remember it for the file.
+   *
+   * A conversion that squeezed a widescreen film into a 4:3 frame squeezed
+   * it for every player and every viewer, so, like a turn, this corrects the
+   * file rather than one sitting, and is kept with the owner's other flags.
+   * Failing to write it down is not worth interrupting anyone over.
+   */
+  private selectShape(aspect: string): void {
+    if (aspect === this.aspect) return;
+    this.aspect = aspect;
+    this.shapeBtn.classList.toggle('active', aspect !== '');
+    if (this.crop) this.cropBtn.hidden = this.cropScaleNow(this.crop) === 1;
+    this.applyPicture();
+    const id = this.item.id;
+    void setFlags(id, { aspect }).then((flags) => {
+      if (!this.closed && this.item.id === id) this.item.aspect = flags[id]?.aspect ?? '';
     });
   }
 
@@ -803,7 +868,7 @@ class VideoOverlay {
    */
   private rotate(quarter: 1 | -1): void {
     this.rotation = (this.rotation + quarter * 90 + 360) % 360;
-    this.applyRotation();
+    this.applyPicture();
     this.flash(quarter > 0 ? icons.rotateCw : icons.rotateCcw);
     const id = this.item.id;
     void setFlags(id, { rotation: this.rotation / 90 }).then((flags) => {
@@ -812,7 +877,7 @@ class VideoOverlay {
     });
   }
 
-  private onResize = (): void => this.applyRotation();
+  private onResize = (): void => this.applyPicture();
 
   /** Current position in media time. */
   private curT(): number {
@@ -1641,7 +1706,7 @@ class VideoOverlay {
   }
 
   /**
-   * Open or close one of the three menus. The controls are shown as well,
+   * Open or close one of the menus. The controls are shown as well,
    * and re-armed: the menu itself is what blocks their hide while it is up.
    */
   private toggleMenu(menu: HTMLElement, button: HTMLElement, show: boolean): void {
@@ -1900,6 +1965,10 @@ class VideoOverlay {
           </div>
           <button class="icon-btn" data-share aria-label="Copy a link to this film">${icons.link}</button>
           <button class="icon-btn" data-viz aria-label="Spectrum">${icons.grid}</button>
+          <div class="vo-menu-wrap">
+            <button class="icon-btn" data-shape aria-label="Picture shape" title="Picture shape" aria-haspopup="menu" aria-expanded="false">${icons.shape}</button>
+            <div class="vo-menu" data-shapemenu role="menu" hidden></div>
+          </div>
           <button class="icon-btn" data-crop aria-label="Trim the file's black borders" hidden>${icons.crop}</button>
           <button class="icon-btn vo-rotate" data-rotate aria-label="Rotate (R)">${icons.rotateCw}</button>
           <button class="icon-btn vo-pip" data-pip aria-label="Picture in picture">${icons.pip}</button>
@@ -1948,6 +2017,9 @@ class VideoOverlay {
     this.ccBtn = this.q('[data-cc]');
     this.subMenu = this.q('[data-ccmenu]');
     this.cropBtn = this.q('[data-crop]');
+    this.shapeBtn = this.q('[data-shape]');
+    this.shapeMenu = this.q('[data-shapemenu]');
+    this.shapeBtn.addEventListener('click', () => this.toggleShapeMenu());
     this.airplayBtn = this.q('[data-airplay]');
     this.castMenu = this.q('[data-castmenu]');
     this.onTv = this.q('[data-ontv]');
@@ -1959,6 +2031,7 @@ class VideoOverlay {
       { el: this.subMenu, button: this.ccBtn },
       { el: this.audioMenu, button: this.audioBtn },
       { el: this.castMenu, button: this.airplayBtn },
+      { el: this.shapeMenu, button: this.shapeBtn },
     ];
     this.skipBtn = this.q('[data-skip]');
     this.skipBtn.addEventListener('click', () => void this.applySkip(this.offer, 'button'));
@@ -2167,10 +2240,14 @@ class VideoOverlay {
     this.hidePrep();
     // As the owner last left this file, not as the last file was left.
     this.rotation = ((item.rotation ?? 0) % 4) * 90;
+    this.aspect = shapeRatio(item.aspect) > 0 ? (item.aspect ?? '') : '';
+    this.shapeMenu.hidden = true;
+    this.shapeBtn.setAttribute('aria-expanded', 'false');
+    this.shapeBtn.classList.toggle('active', this.aspect !== '');
     this.crop = null;
     this.cropping = !item.nocrop;
     this.cropBtn.hidden = true;
-    this.applyRotation();
+    this.applyPicture();
     void this.findBorders(item);
 
     this.titleEl.textContent = item.name;
@@ -2464,7 +2541,7 @@ class VideoOverlay {
    * rather than the film being left.
    */
   private showPoster(item: Item): void {
-    this.turnPoster(((item.rotation ?? 0) % 4) * 90);
+    this.place(this.poster, ((item.rotation ?? 0) % 4) * 90, shapeRatio(item.aspect));
     this.poster.src = previewUrl(item.id, item.mtime);
     this.root.classList.add('posted');
   }
@@ -2484,8 +2561,11 @@ class VideoOverlay {
   private captureFrame(): boolean {
     if (!this.opts.nav?.src) return false; // nothing to step through
     const v = this.video;
-    const w = v.videoWidth;
     const h = v.videoHeight;
+    // At the shape the owner gave the picture, where they gave it one: the
+    // layer is the picture as it was on screen.
+    const shape = shapeRatio(this.aspect);
+    const w = shape > 0 ? Math.round(h * shape) : v.videoWidth;
     if (!w || !h) return true;
     const c = this.slideCur;
     if (c.width !== w || c.height !== h) {
@@ -2632,7 +2712,7 @@ class VideoOverlay {
     // it: until then a stretched picture is measured in the wrong units.
     v.addEventListener('loadedmetadata', () => {
       if (this.crop) this.cropBtn.hidden = this.cropScaleNow(this.crop) === 1;
-      this.applyRotation();
+      this.applyPicture();
       // The element's own audio tracks exist from here, so this is the
       // first moment a remembered language can be switched to for free.
       this.applyAudioChoice();
@@ -2846,12 +2926,15 @@ class VideoOverlay {
   private openPreview(): void {
     const player = this.root.getBoundingClientRect();
     const v = this.video;
+    const shape = shapeRatio(this.aspect);
     const aspect =
-      v.videoWidth > 0 && v.videoHeight > 0
-        ? v.videoWidth / v.videoHeight
-        : this.item.width && this.item.height
-          ? this.item.width / this.item.height
-          : 16 / 9;
+      shape > 0
+        ? shape
+        : v.videoWidth > 0 && v.videoHeight > 0
+          ? v.videoWidth / v.videoHeight
+          : this.item.width && this.item.height
+            ? this.item.width / this.item.height
+            : 16 / 9;
     const turns = Math.round(this.rotation / 90);
     const g = previewBox({
       playerW: player.width,
@@ -2869,6 +2952,8 @@ class VideoOverlay {
     const odd = turns % 2 !== 0;
     this.previewImg.style.width = `${odd ? g.boxH : g.boxW}px`;
     this.previewImg.style.height = `${odd ? g.boxW : g.boxH}px`;
+    // A reshaped film's frames come at the file's shape, and fill the box.
+    this.previewImg.classList.toggle('reshaped', shape > 0);
     this.previewImg.style.transform = `translate(-50%, -50%)${this.rotation ? ` rotate(${this.rotation}deg)` : ''}`;
     this.previewEl.hidden = false;
   }
@@ -3064,7 +3149,7 @@ class VideoOverlay {
     this.syncViz();
     // Entering or leaving fullscreen changes the overlay's dimensions,
     // which a quarter-turned video is sized against.
-    requestAnimationFrame(() => this.applyRotation());
+    requestAnimationFrame(() => this.applyPicture());
   };
 
   private onActivity = (): void => this.showControls();

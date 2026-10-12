@@ -1271,14 +1271,30 @@ derives from `library.AllKinds`.
     inherited. Seeks take the thumbnailer's slot; the run marks
     `Library.StartStream` (a viewer waits on it); frame size comes from the
     header reading.
-  - Applied as a scale about the element's centre, composed with the rotation,
-    element clipped; `cropScale` refuses off-centre boxes and near-total trims
+  - Applied as a scale about the element's centre, composed with the turn and
+    the shape (`place`), element clipped; `cropScale` refuses off-centre boxes and near-total trims
     and stops at the first edge reached, so only the smaller border goes.
     Geometry uses `video.videoWidth/videoHeight`, detection as fractions
     (coded pixels over-scale an anamorphic DVD by a fifth), redone on
     `loadedmetadata`. It answers for this screen: the button shows only where
     the window gains; `Flags.NoCrop` keeps borders (a 2.39:1 film has them on
     purpose).
+- **A picture's shape is the owner's to correct** (`Flags.Aspect`, the
+  player's shape menu; `shapeRatio`, `shapeChoices`, `fitShape` in
+  `playback.ts`, tested): a widescreen title converted into a 640×480 frame
+  declares square pixels in stream and container alike, so every player
+  shows it squeezed and nothing in the file says otherwise — never guessed
+  from the picture. Kept per file with the owner's flags, as the turn is
+  (`FlagChange`; `ValidAspect` takes "W:H" in whole numbers to 99, neither
+  side over four times the other, else 400), and stamped on items. The menu
+  offers the file's own shape (the element's metadata; the library's coded
+  size is wrong for a DVD) and each of `PICTURE_SHAPES` (4:3, 16:9) the file
+  is not. `place` (`video.ts`) draws element and poster alike: a reshaped
+  picture is centred at the largest box of its shape with `object-fit: fill`
+  and turned like a quarter-turned one; the trim measures it at that shape
+  (`cropScaleNow`), the seek preview takes the shape (`reshaped` fills its
+  box) and the drag layer draws the frame stretched. A television plays the
+  file itself, which the shape cannot reach.
 - `swipe.ts` defines gestures for both viewers: one `SlideDeck` drag
   (neighbours resolved while down, damped travel, layer home before the file
   changes), differing only in `arriveEarly` (the picture viewer renders under
@@ -1289,8 +1305,8 @@ derives from `library.AllKinds`.
   recognised gesture `preventDefault`s the touchend, the only way to cancel
   the synthesised click.
 - A file switch is covered by the **poster** (`.vo-poster`: incoming thumbnail
-  from `load()` to `loadeddata`, turned with the item by `turnPoster`, a
-  thumbnail being the file as stored — the neighbour's rotation mid-swipe; the
+  from `load()` to `loadeddata`, turned and shaped as the item is by `place`,
+  a thumbnail being the file as stored — the neighbour's mid-swipe; the
   picture during a cast) and the **slides** (`.vo-slides`, `.lb-slides`:
   current frame on a canvas, neighbour thumbnails either side). On release:
   layer home, poster up with the same picture, then layer down — that order
@@ -2618,8 +2634,8 @@ expose the library to the LAN.
   - `previewBox`: a fifth of a wide player (160–320 CSS px), a quarter of the
     player's height for a tall picture (120–240), turned with the film,
     density capped at 2, rounded up to 32 so sizes share frames; the
-    element's shape, else the library's. Centre the frame and turn it about
-    its centre like `applyRotation`: a clipping box pins a turned image's
+    owner's shape, else the element's, else the library's. Centre the frame
+    and turn it about its centre like `place`: a clipping box pins a turned image's
     overflow to its start edge.
   - Hovering pointers only; touch previews only while dragging. A DVD title,
     read by position (`library.SeekByte`), gets a frame near the moment;

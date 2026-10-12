@@ -22,6 +22,7 @@ func TestFlagsRoundtripAndReopen(t *testing.T) {
 		"id2": {Favourite: true},
 		"id3": {Hidden: true, Favourite: true},
 		"id4": {}, // nothing to remember: not stored
+		"id5": {Aspect: "16:9"},
 	}
 	if err := db.SaveFlags(set); err != nil {
 		t.Fatal(err)
@@ -30,7 +31,8 @@ func TestFlagsRoundtripAndReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 || all["id1"] != (Flags{Hidden: true}) || all["id3"] != (Flags{Hidden: true, Favourite: true}) {
+	if len(all) != 4 || all["id1"] != (Flags{Hidden: true}) || all["id3"] != (Flags{Hidden: true, Favourite: true}) ||
+		all["id5"] != (Flags{Aspect: "16:9"}) {
 		t.Fatalf("AllFlags = %+v", all)
 	}
 	if _, ok := all["id4"]; ok {
@@ -57,6 +59,9 @@ func TestFlagsRoundtripAndReopen(t *testing.T) {
 	f, ok := db.GetFlags("id3")
 	if !ok || !f.Hidden || !f.Favourite {
 		t.Fatalf("after reopen: ok=%v flags=%+v", ok, f)
+	}
+	if f, ok := db.GetFlags("id5"); !ok || f.Aspect != "16:9" {
+		t.Fatalf("after reopen the shape is: ok=%v flags=%+v", ok, f)
 	}
 }
 

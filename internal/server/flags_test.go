@@ -96,6 +96,14 @@ func TestFlagEndpoints(t *testing.T) {
 	if f := flags[id("one.mkv")]; !f.Favourite || !f.Hidden {
 		t.Fatalf("hiding cleared the favourite: %+v", f)
 	}
+	// The picture's shape, said once for the file and handed out with it.
+	flags = decodeFlags(t, putJSON(t, ts.URL+"/api/flags/"+id("one.mkv"), `{"aspect":"16:9"}`))
+	if f := flags[id("one.mkv")]; f.Aspect != "16:9" || !f.Favourite || !f.Hidden {
+		t.Fatalf("setting the shape = %+v", f)
+	}
+	if it, ok := lib.Get(id("one.mkv")); !ok || it.Aspect != "16:9" {
+		t.Fatalf("the item does not carry the shape: %+v", it)
+	}
 
 	// A whole selection in one request.
 	body := `{"ids":["` + id("two.mkv") + `","` + id("three.mkv") + `"],"hidden":true}`
@@ -142,6 +150,7 @@ func TestFlagEndpointsRejectBadRequests(t *testing.T) {
 		{"unknown item", ts.URL + "/api/flags/deadbeefdeadbeef", `{"hidden":true}`, http.StatusNotFound},
 		{"bad body", ts.URL + "/api/flags/" + library.PathID(filepath.Join(dir, "one.mkv")), `nonsense`, http.StatusBadRequest},
 		{"batch without ids", ts.URL + "/api/flags", `{"hidden":true}`, http.StatusBadRequest},
+		{"bad aspect", ts.URL + "/api/flags/" + library.PathID(filepath.Join(dir, "one.mkv")), `{"aspect":"wide"}`, http.StatusBadRequest},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

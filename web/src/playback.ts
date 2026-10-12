@@ -548,6 +548,71 @@ export function cropScale(
 }
 
 /**
+ * The shapes the owner can say a picture is (`Flags.aspect`, the player's
+ * shape menu): the two a picture gets squeezed between. A widescreen DVD
+ * title converted to 640×480 declares square pixels and shows every face
+ * thin, in every player, since nothing in the file says otherwise; a 4:3
+ * broadcast stretched to fill a 16:9 frame is the same mistake the other way
+ * round.
+ */
+export const PICTURE_SHAPES: readonly string[] = ['4:3', '16:9'];
+
+/**
+ * A shape's width over its height, or 0 for none: the file's own, or a
+ * spelling the server would have refused (`ValidAspect`) and so is not one.
+ */
+export function shapeRatio(shape: string | undefined): number {
+  const m = /^([1-9]\d?):([1-9]\d?)$/.exec(shape ?? '');
+  if (!m) return 0;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  return w <= 4 * h && h <= 4 * w ? w / h : 0;
+}
+
+const NAMED_SHAPES: readonly [string, number][] = [
+  ['1:1', 1],
+  ['5:4', 5 / 4],
+  ['4:3', 4 / 3],
+  ['3:2', 3 / 2],
+  ['16:10', 16 / 10],
+  ['16:9', 16 / 9],
+  ['3:4', 3 / 4],
+  ['9:16', 9 / 16],
+];
+
+/** A shape as people name it: "4:3", "16:9", or failing a name "1.85:1". */
+export function shapeLabel(ratio: number): string {
+  for (const [name, r] of NAMED_SHAPES) if (Math.abs(ratio / r - 1) < 0.01) return name;
+  return `${ratio.toFixed(2)}:1`;
+}
+
+/**
+ * The shape menu for a file whose own shape is `own` (its width over its
+ * height as the element lays it out; 0 before anyone knows): the file's own
+ * first, then each other shape — one the file already is would be that
+ * first entry twice, so it is left out unless it is the one chosen, which
+ * must stay there to be marked.
+ */
+export function shapeChoices(own: number, chosen: string): { value: string; label: string }[] {
+  const out = [{ value: '', label: own > 0 ? `Original (${shapeLabel(own)})` : 'Original' }];
+  for (const s of PICTURE_SHAPES) {
+    if (s !== chosen && own > 0 && Math.abs(shapeRatio(s) / own - 1) < 0.02) continue;
+    out.push({ value: s, label: s });
+  }
+  return out;
+}
+
+/**
+ * The largest box of a shape that fits inside another, which is where a
+ * picture the owner has reshaped is drawn: the element is given that box and
+ * fills it, rather than fitting its own shape into the screen.
+ */
+export function fitShape(ratio: number, boxW: number, boxH: number): { w: number; h: number } {
+  if (!(ratio > 0) || !(boxW > 0) || !(boxH > 0)) return { w: boxW, h: boxH };
+  return boxW / boxH > ratio ? { w: boxH * ratio, h: boxH } : { w: boxW, h: boxW / ratio };
+}
+
+/**
  * Video codecs a television on the other end of AirPlay can be expected to
  * decode.
  *

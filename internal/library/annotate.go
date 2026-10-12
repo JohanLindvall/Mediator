@@ -3,6 +3,8 @@
 package library
 
 import (
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/JohanLindvall/Mediator/internal/blob"
@@ -30,6 +32,45 @@ type Flags struct {
 	// film framed at 2.39:1 has borders on purpose, and cutting them off
 	// takes the tops of heads with them.
 	NoCrop bool `json:"nocrop,omitempty"`
+	// Aspect is the shape the picture really is, width to height ("16:9"),
+	// where the file says otherwise and is wrong: a widescreen title
+	// squeezed into 640×480 by whatever converted it declares square pixels
+	// and shows everyone thin, in every player. Nothing in such a file says
+	// so, so it is the owner's to say, once, for every device; empty is the
+	// file's own shape. Only ValidAspect values are kept.
+	Aspect string `json:"aspect,omitempty"`
+}
+
+// ValidAspect reports whether s is a shape Flags.Aspect may hold: empty (the
+// file's own), or a width and a height, whole numbers from 1 to 99 written
+// plainly, neither more than four times the other — as wide as any film is
+// framed, and no further, since a typing slip would otherwise draw a hair.
+func ValidAspect(s string) bool {
+	if s == "" {
+		return true
+	}
+	w, h, ok := strings.Cut(s, ":")
+	if !ok {
+		return false
+	}
+	a, errA := strconv.Atoi(w)
+	b, errB := strconv.Atoi(h)
+	if errA != nil || errB != nil || strconv.Itoa(a) != w || strconv.Itoa(b) != h {
+		return false // a sign, a leading zero or a space is another spelling
+	}
+	if a < 1 || a > 99 || b < 1 || b > 99 {
+		return false
+	}
+	return a <= 4*b && b <= 4*a
+}
+
+// FlagChange is what one request changes: a field left nil is left as it
+// is, so hiding something does not silently clear whether it is a
+// favourite, nor turning it what shape it is.
+type FlagChange struct {
+	Hidden, Favourite, NoCrop *bool
+	Rotation                  *int
+	Aspect                    *string
 }
 
 // LoadFlags reads the stored flags into memory and reports how many there
@@ -133,11 +174,12 @@ func (l *Library) Flags(id string) Flags {
 	return l.flags[id]
 }
 
-// SetFlags applies hidden and favourite (nil leaves that flag alone) to every
-// given item and returns the resulting flags per item. Ids the index does not
-// know are skipped. One call per multi-selection: a cull is a single request,
-// a single database transaction and a single change event.
-func (l *Library) SetFlags(ids []string, hidden, favourite, noCrop *bool, rotation *int) map[string]Flags {
+// SetFlags applies a change (nil leaves that flag alone) to every given item
+// and returns the resulting flags per item. Ids the index does not know are
+// skipped, and so is an aspect ValidAspect refuses. One call per
+// multi-selection: a cull is a single request, a single database transaction
+// and a single change event.
+func (l *Library) SetFlags(ids []string, c FlagChange) map[string]Flags {
 	l.ensureFlags()
 	out := make(map[string]Flags, len(ids))
 	write := make(map[string]blob.Flags)
@@ -162,17 +204,20 @@ func (l *Library) SetFlags(ids []string, hidden, favourite, noCrop *bool, rotati
 		}
 		old := l.flags[id]
 		f := old
-		if hidden != nil {
-			f.Hidden = *hidden
+		if c.Hidden != nil {
+			f.Hidden = *c.Hidden
 		}
-		if favourite != nil {
-			f.Favourite = *favourite
+		if c.Favourite != nil {
+			f.Favourite = *c.Favourite
 		}
-		if noCrop != nil {
-			f.NoCrop = *noCrop
+		if c.NoCrop != nil {
+			f.NoCrop = *c.NoCrop
 		}
-		if rotation != nil {
-			f.Rotation = ((*rotation % 4) + 4) % 4 // quarter turns, always 0-3
+		if c.Rotation != nil {
+			f.Rotation = ((*c.Rotation % 4) + 4) % 4 // quarter turns, always 0-3
+		}
+		if c.Aspect != nil && ValidAspect(*c.Aspect) {
+			f.Aspect = *c.Aspect
 		}
 		out[id] = f
 		if f == old {
@@ -251,7 +296,7 @@ func (l *Library) stamper() *stamper {
 // took. Caller must hold l.mu.
 func (s *stamper) stamp(it Item) Item {
 	f := s.l.flags[it.ID]
-	it.Hidden, it.Favourite, it.Rotation, it.NoCrop = f.Hidden, f.Favourite, f.Rotation, f.NoCrop
+	it.Hidden, it.Favourite, it.Rotation, it.NoCrop, it.Aspect = f.Hidden, f.Favourite, f.Rotation, f.NoCrop, f.Aspect
 	it.Plays = s.plays[it.ID]
 	it.Like = s.likes[it.ID]
 	if b := s.aff.bucket[it.ID]; b != 0 {

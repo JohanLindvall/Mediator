@@ -41,6 +41,7 @@ export interface Item {
   spoken?: boolean;
   rotation?: number;
   nocrop?: boolean;
+  aspect?: string;
   hidden?: boolean;
   favourite?: boolean;
   bpm?: number;
@@ -61,6 +62,7 @@ export interface Flags {
   favourite?: boolean;
   rotation?: number;
   nocrop?: boolean;
+  aspect?: string;
 }
 
 export interface Counts {
@@ -394,6 +396,7 @@ export interface FlagUpdate {
   favourite?: boolean;
   rotation?: number;
   nocrop?: boolean;
+  aspect?: string;
 }
 
 export interface FlagsResponse {

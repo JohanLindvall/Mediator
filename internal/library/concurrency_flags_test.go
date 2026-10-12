@@ -35,8 +35,8 @@ func TestLoadFlagsDropsASnapshotOlderThanAWithdrawal(t *testing.T) {
 	l.SetMetaDB(db)
 	id := ids[0]
 
-	l.SetFlags([]string{id}, boolp(true), nil, nil, nil)
-	l.SetFlags([]string{id}, boolp(false), nil, nil, nil) // withdrawn
+	l.SetFlags([]string{id}, FlagChange{Hidden: boolp(true)})
+	l.SetFlags([]string{id}, FlagChange{Hidden: boolp(false)}) // withdrawn
 	if l.Flags(id).Hidden {
 		t.Fatal("the withdrawal did not take")
 	}
@@ -64,12 +64,12 @@ func TestSetFlagsSettlesAndWritesUnderOneLock(t *testing.T) {
 	l.Flags(id) // the lazy load, out of the way
 
 	rot := func(n int) *int { return &n }
-	l.SetFlags([]string{id}, nil, nil, nil, rot(1))
+	l.SetFlags([]string{id}, FlagChange{Rotation: rot(1)})
 
 	flagStore.Lock()
 	done := make(chan struct{})
 	go func() {
-		l.SetFlags([]string{id}, nil, nil, nil, rot(2))
+		l.SetFlags([]string{id}, FlagChange{Rotation: rot(2)})
 		close(done)
 	}()
 	select {
@@ -125,7 +125,7 @@ func TestStamperEstablishesTheFlags(t *testing.T) {
 // taken of another.
 func TestHiddenCountsAreStampedWithTheVersionTheyCounted(t *testing.T) {
 	l, ids := flagLib()
-	l.SetFlags([]string{ids[0]}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{ids[0]}, FlagChange{Hidden: boolp(true)})
 	at := l.GroupVersion()
 
 	if c := l.hiddenCounts(at - 1); c.Video != 1 {
@@ -139,7 +139,7 @@ func TestHiddenCountsAreStampedWithTheVersionTheyCounted(t *testing.T) {
 	// with the memo left standing at the version that walk saw: published
 	// under the stale question instead, this is the answer every other
 	// request holding it would have been handed.
-	l.SetFlags([]string{ids[1]}, boolp(true), nil, nil, nil)
+	l.SetFlags([]string{ids[1]}, FlagChange{Hidden: boolp(true)})
 	now := l.GroupVersion()
 	if c := l.hiddenCounts(now); c.Video != 2 {
 		t.Fatalf("hidden videos = %d, want 2", c.Video)

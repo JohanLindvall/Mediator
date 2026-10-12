@@ -634,6 +634,10 @@ type Flags struct {
 	// default where they are found, and this is how a viewer says not to —
 	// a film framed at 2.39:1 is meant to have them.
 	NoCrop bool `json:"nocrop,omitempty"`
+	// Aspect is the shape the picture really is ("16:9") where the file
+	// declares another, empty for the file's own: a squeezed conversion is
+	// squeezed for every viewer, so the correction is the file's.
+	Aspect string `json:"aspect,omitempty"`
 }
 
 // GetFlags returns the flags stored for id, or false if it has none.

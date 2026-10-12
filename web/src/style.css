@@ -858,20 +858,28 @@ body.viewing #app {
 .video-overlay video.cropped {
   clip-path: inset(0);
 }
-/* Quarter-turned playback: the element is sized to the swapped axes and
-   recentered by applyRotation; absolute positioning keeps the layout box
-   from pushing the overlay around. */
-.video-overlay video.rotated {
+/* A quarter-turned or reshaped picture: the element is sized by place
+   (video.ts) — to the swapped axes, or to the shape the owner gave it — and
+   recentred; absolute positioning keeps the layout box from pushing the
+   overlay around. */
+.video-overlay video.placed {
   position: absolute;
   left: 50%;
   top: 50%;
 }
-/* The poster of a quarter-turned film is placed by its centre too, its
-   size set to the overlay's swapped axes as the element's is. */
-.video-overlay .vo-poster.rotated {
+/* The poster of such a film is placed by its centre too, sized as the
+   element is. */
+.video-overlay .vo-poster.placed {
   inset: auto;
   left: 50%;
   top: 50%;
+}
+/* A reshaped picture fills the box of its shape, since the shape it would
+   fit is the file's, which the owner has said is wrong. */
+.video-overlay video.reshaped,
+.video-overlay .vo-poster.reshaped,
+.seek-preview-frame img.reshaped {
+  object-fit: fill;
 }
 .lb-stage img {
   transition: opacity 0.18s, transform 0.15s;
@@ -1222,7 +1230,7 @@ body.viewing #app {
   display: none;
 }
 /* The frame is placed by its centre, as the player's own turned picture is
-   (applyRotation): a quarter-turned image keeps its unturned layout box,
+   (place): a quarter-turned image keeps its unturned layout box,
    taller than this one, and centred by a grid it was held to the top
    instead — a box that clips will not let what it holds overflow its start
    edge — so, turned about its own centre, it left a black band above and

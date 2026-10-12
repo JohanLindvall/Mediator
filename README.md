@@ -134,7 +134,9 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
 - **Video player** — custom controls: play/pause, seek with buffer display,
   ±10s skip, volume/mute, playback speed, rotation for sideways footage
   (`r`/`R`, remembered per file and shared across devices, since a clip shot
-  sideways is sideways everywhere), trimming of black borders that are baked
+  sideways is sideways everywhere), a picture-shape menu for a file made at
+  the wrong shape (a widescreen film squeezed into a 4:3 frame shows at
+  16:9 again, remembered per file the same way), trimming of black borders that are baked
   into the file — a portrait clip padded out to a landscape frame fills the
   screen on a phone instead of sitting in the middle of it, found
   automatically and remembered per file if you would rather keep them —
@@ -1507,7 +1509,7 @@ CONTRIBUTING.md, CODE_OF_CONDUCT.md, .github/
 | `POST /api/links`                         | Mint a shortlink to a view or to one item; asking twice for the same place returns the same code |
 | `GET /s/{code}`                           | Follow one, redirecting to the address it names; an unknown code opens the library |
 | `GET /api/prefs`, `PUT /api/prefs`        | The directories being indexed              |
-| `PUT /api/flags/{id}`, `PUT /api/flags`   | Hidden / favourite, one item or a batch    |
+| `PUT /api/flags/{id}`, `PUT /api/flags`   | Hidden / favourite, rotation, borders kept and picture shape (`aspect`, e.g. `"16:9"`; empty for the file's own), one item or a batch |
 | `GET /api/subs/{id}`, `GET /api/subs/{id}/{n}?shift=&format=` | External subtitles: list, and one as WebVTT — or as SubRip (`format=srt`), which is what a television reads |
 | `GET/PUT/DELETE /api/state/{id}`, `GET /api/state` | Playback positions, filtered by face and paths like everything else |
 | `GET /api/renderers`                      | The DLNA renderers on the network (`?fresh=1` searches again) |
