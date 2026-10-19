@@ -194,7 +194,7 @@ func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilt
 		func(a, b *Genre) int { return compareGenres(a, b, sortKey) },
 		func(g *Genre) string { return g.sortName },
 		func(g *Genre) string { return g.ID })
-	rankByHit(out, words, func(g *Genre) (string, int32, int32) { return g.lower, g.nameEnd, g.cardEnd })
+	rankByHit(out, words, func(g *Genre) (string, int32, int32) { return g.lower, g.nameEnd, g.cardEnd }, nil)
 	return out
 }
 

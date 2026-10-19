@@ -1671,7 +1671,7 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	slices.SortFunc(entries, order)
 	// What the search names comes first, then what shows it on its tile, then
 	// what was found by where it is kept — each in the order just sorted.
-	rankByHit(entries, words, func(e sortEntry) (string, int32, int32) { return e.it.lower, e.it.nameEnd, e.it.cardEnd })
+	rankByHit(entries, words, func(e sortEntry) (string, int32, int32) { return e.it.lower, e.it.nameEnd, e.it.cardEnd }, nil)
 	l.mu.RUnlock()
 
 	items := make([]*Item, len(entries))

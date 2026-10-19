@@ -73,8 +73,22 @@
     release's title, performer, genres and year; a performer's name, genre and
     years; a genre's or a show's name); then what was found further away
     (`hitBeyond`: a folder, a file name behind a title, a release's tracks, a
-    performer's releases, a genre's bands, a show's episodes). Each tier keeps
-    the view's sort, either direction. The text is built in those three
-    segments with where the first two end (`segmentedText`, `nameEnd`,
-    `cardEnd` on each item and collection), so a tier is a slice compare and
-    a substring check, never a tokenize per search.
+    performer's releases, a genre's bands, a show's episodes).
+  - **Within a tier a whole word beats part of one** (`hits.rank`): each
+    tier runs by how many words were found only inside longer words, none
+    first — judged on the card in `hitCard`, on the whole text in
+    `hitBeyond`. A whole word never lifts a thing out of its tier: every file
+    under a root of that name holds it whole in its path, and would bury
+    every card showing it. A thing its own text does not find but a member
+    does ranks as found further away, by the member's answer (where its own
+    text finds it, that text decides): a release by its best track
+    (`albumsAnswering` fills `byTrack`, then asking every track until one is
+    whole, where a filter stops at the first), a performer by their best
+    release (`performersAnswering`), a show by its best episode
+    (`byEpisode`).
+  - Each rank keeps the view's sort, either direction (`rankBy`, a stable
+    counting sort). The text is built in three segments with where the first
+    two end (`segmentedText`, `nameEnd`, `cardEnd` on each item and
+    collection), and a whole word is a token between spaces (`" w "`), so a
+    rank is a slice compare and a few substring checks, never a tokenize per
+    search.

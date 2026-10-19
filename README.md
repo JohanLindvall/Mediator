@@ -833,7 +833,10 @@ docker run --rm -p 8080:8080 -v /path/to/your/media:/library:ro \
   performer, until you clear it. What a search names comes first — the
   performer called that, the release, the track — then whatever shows the
   words on its card, then what was found a page further in, by a track, a
-  release or the folder something is kept in; each group keeps the order the
+  release or the folder something is kept in. Within each group a whole word
+  beats part of one: "gorse" lists a card reading "Gorse" before one reading
+  "Gorseland", and a release found by a track titled with the word before
+  one whose track only holds it. Beyond that, each group keeps the order the
   view is sorted by. Results arrive in place: the listing stays up while
   the next one is fetched and only what differs is redrawn, so typing narrows
   the grid instead of flashing it, and anything the two searches have in

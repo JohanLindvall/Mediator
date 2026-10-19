@@ -227,7 +227,7 @@ func (l *Library) CountsFor(q CountQuery) Counts {
 		inView = append(inView, a)
 	}
 	// Found as the listing finds them: by their own text or a track on them.
-	for _, a := range l.albumsAnswering(inView, words, allowed) {
+	for _, a := range l.albumsAnswering(inView, words, allowed, nil) {
 		if a.Spoken {
 			out.Audiobooks++
 			continue

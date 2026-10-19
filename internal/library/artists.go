@@ -196,7 +196,11 @@ func (l *Library) artistsFor(paths PathFilter) []*Artist {
 // titles and the genres — finds them as well; this is the half that reaches
 // a song's title, so the performer of a song a search finds is found with
 // it, and drilling into them from its card lists the release it is on.
-func (l *Library) performersAnswering(paths PathFilter, words []string) map[string]bool {
+//
+// byRelease, where given, is filled for rankByHit: for each performer, the
+// fewest words any of those releases holds only inside longer words — in
+// the release's own text, or the track that found it.
+func (l *Library) performersAnswering(paths PathFilter, words []string, byRelease map[string]int) map[string]bool {
 	if len(words) == 0 {
 		return nil
 	}
@@ -206,9 +210,25 @@ func (l *Library) performersAnswering(paths PathFilter, words []string) map[stri
 			theirs = append(theirs, a)
 		}
 	}
+	var h *hits
+	var byTrack map[*Album]int
+	if byRelease != nil {
+		h, byTrack = newHits(words), map[*Album]int{}
+	}
 	out := map[string]bool{}
-	for _, a := range l.albumsAnswering(theirs, words, paths.allower()) {
-		out[strings.ToLower(a.Artist)] = true
+	for _, a := range l.albumsAnswering(theirs, words, paths.allower(), byTrack) {
+		key := strings.ToLower(a.Artist)
+		out[key] = true
+		if byRelease == nil {
+			continue
+		}
+		partial, ok := byTrack[a]
+		if !ok {
+			partial = h.partial(a.lower)
+		}
+		if best, seen := byRelease[key]; !seen || partial < best {
+			byRelease[key] = partial
+		}
 	}
 	return out
 }
@@ -217,11 +237,16 @@ func (l *Library) performersAnswering(paths PathFilter, words []string) map[stri
 func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFilter) []*Artist {
 	all := l.artistsFor(paths)
 	words := searchWords(search)
-	theirs := l.performersAnswering(paths, words)
+	byRelease := map[string]int{}
+	theirs := l.performersAnswering(paths, words, byRelease)
 	out := make([]*Artist, 0, len(all))
+	through := map[*Artist]int{} // found by a release, not by their own text
 	for _, a := range all {
-		if matchWords(a.lower, words) || theirs[strings.ToLower(a.Name)] {
+		if matchWords(a.lower, words) {
 			out = append(out, a)
+		} else if key := strings.ToLower(a.Name); theirs[key] {
+			out = append(out, a)
+			through[a] = byRelease[key]
 		}
 	}
 	// The length is left at zero unless every album underneath was measured,
@@ -231,6 +256,7 @@ func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFil
 		func(a, b *Artist) int { return compareArtists(a, b, sortKey) },
 		func(a *Artist) string { return a.sortName },
 		func(a *Artist) string { return a.ID })
-	rankByHit(out, words, func(a *Artist) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd })
+	rankByHit(out, words, func(a *Artist) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd },
+		func(a *Artist) (int, bool) { p, ok := through[a]; return p, ok })
 	return out
 }

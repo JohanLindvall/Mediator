@@ -224,13 +224,15 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 		}
 		in = append(in, a)
 	}
-	out := l.albumsAnswering(in, words, q.Paths.allower())
+	byTrack := map[*Album]int{}
+	out := l.albumsAnswering(in, words, q.Paths.allower(), byTrack)
 	orderBy(out, desc,
 		func(a *Album) bool { return albumHasKey(a, sortKey) },
 		func(a, b *Album) int { return compareAlbums(a, b, sortKey) },
 		func(a *Album) string { return a.sortName },
 		func(a *Album) string { return a.ID })
-	rankByHit(out, words, func(a *Album) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd })
+	rankByHit(out, words, func(a *Album) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd },
+		func(a *Album) (int, bool) { p, ok := byTrack[a]; return p, ok })
 	return out
 }
 
@@ -251,30 +253,55 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 // The tracks are asked only of a release its own text did not find, so a
 // search for a release or a performer costs what it always did; one that
 // finds a song looks through the music's tracks once, under the read lock.
-func (l *Library) albumsAnswering(albums []*Album, words []string, allowed func(string) bool) []*Album {
+//
+// byTrack, where given, is filled for rankByHit: for each release found by a
+// track, how many words the best such track holds only inside longer words.
+// nil leaves it out, and with it the look past the first track that answers.
+func (l *Library) albumsAnswering(albums []*Album, words []string, allowed func(string) bool, byTrack map[*Album]int) []*Album {
 	if len(words) == 0 {
 		return albums
+	}
+	var h *hits
+	if byTrack != nil {
+		h = newHits(words)
 	}
 	out := make([]*Album, 0, len(albums))
 	l.mu.RLock()
 	defer l.mu.RUnlock()
 	for _, a := range albums {
-		if matchWords(a.lower, words) || l.trackAnswers(a, words, allowed) {
+		if matchWords(a.lower, words) {
 			out = append(out, a)
+		} else if partial, ok := l.trackAnswers(a, words, allowed, h); ok {
+			out = append(out, a)
+			if byTrack != nil {
+				byTrack[a] = partial
+			}
 		}
 	}
 	return out
 }
 
-// trackAnswers says whether a track on the release answers the search.
-// Called with l.mu held for reading.
-func (l *Library) trackAnswers(a *Album, words []string, allowed func(string) bool) bool {
+// trackAnswers says whether a track on the release answers the search and,
+// given h, how many words the best one holds only inside longer words: every
+// track is then asked, until one holds them all whole. Called with l.mu held
+// for reading.
+func (l *Library) trackAnswers(a *Album, words []string, allowed func(string) bool, h *hits) (partial int, ok bool) {
 	for _, id := range a.TrackIDs {
-		if it := l.items[id]; it != nil && allowed(it.Path) && matchWords(it.lower, words) {
-			return true
+		it := l.items[id]
+		if it == nil || !allowed(it.Path) || !matchWords(it.lower, words) {
+			continue
+		}
+		if h == nil {
+			return 0, true
+		}
+		if p := h.partial(it.lower); !ok || p < partial {
+			partial, ok = p, true
+		}
+		if partial == 0 {
+			break
 		}
 	}
-	return false
+	return partial, ok
 }
 
 // collection is what every grouped thing carries — a release, a performer,

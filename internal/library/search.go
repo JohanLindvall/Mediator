@@ -52,11 +52,19 @@ func matchWords(text string, words []string) bool {
 }
 
 // How directly something answers a search, best first. A listing is ordered
-// by its tier before anything else, each tier keeping the view's own order
-// whichever way it runs: what the search names comes first, then what shows
-// every word on its card, then what was found further away — a track of a
-// release, a release of a performer, the performers of a genre, an episode of
-// a show, the folder a file is kept in — none of which the card shows.
+// by its tier before anything else: what the search names comes first, then
+// what shows every word on its card, then what was found further away — a
+// track of a release, a release of a performer, the performers of a genre, an
+// episode of a show, the folder a file is kept in — none of which the card
+// shows.
+//
+// Within a tier a whole word beats part of one: a search for "gorse" lists a
+// card reading "Gorse" before one reading "Gorseland", each tier running by
+// how many of the search's words were found only inside longer words, none
+// first. A whole word never lifts a thing out of its tier: every file under a
+// root of that name holds it whole in its path, and a card showing the word
+// at all answers more directly than a folder far up. Each rank keeps the
+// view's own order, whichever way it runs.
 const (
 	hitName   = iota // the search is its name, word for word
 	hitCard          // every word is in what its card shows
@@ -65,7 +73,7 @@ const (
 
 // segmentedText is searchText built in three parts — the name a card shows,
 // the rest of what it shows, and everything else the thing is found by —
-// with where the first two end, so hitTier can read how directly a search
+// with where the first two end, so hits.rank can read how directly a search
 // was answered without tokenizing anything again.
 func segmentedText(name, card, beyond []string) (text string, nameEnd, cardEnd int32) {
 	var b strings.Builder
@@ -86,40 +94,104 @@ func segmentedText(name, card, beyond []string) (text string, nameEnd, cardEnd i
 	return b.String(), nameEnd, cardEnd
 }
 
-// hitTier is how directly a segmented search text answers the words of a
-// search, phrase being those words joined as tokenize joins them.
-func hitTier(text string, nameEnd, cardEnd int32, words []string, phrase string) int {
-	if nameEnd > 1 && text[1:nameEnd-1] == phrase {
-		return hitName
-	}
-	if matchWords(text[:cardEnd], words) {
-		return hitCard
-	}
-	return hitBeyond
+// hits is a search made ready to rank what it found: its words, each again
+// as a token of its own (" w ", as segmentedText writes tokens, so a whole
+// word is one substring check), and the phrase that names a thing — the
+// words joined as tokenize joins them.
+type hits struct {
+	words  []string
+	whole  []string
+	phrase string
 }
 
-// rankHits orders a sorted list by tier, each tier keeping the order it was
-// sorted in.
-func rankHits[T any](out []T, tier func(T) int) {
-	var tiers [hitBeyond + 1][]T
-	for _, x := range out {
-		t := tier(x)
-		tiers[t] = append(tiers[t], x)
+func newHits(words []string) *hits {
+	h := &hits{words: words, whole: make([]string, len(words)), phrase: strings.Join(words, " ")}
+	for i, w := range words {
+		h.whole[i] = " " + w + " "
+	}
+	return h
+}
+
+// rank is where a thing's own segmented text puts it: its tier, then how
+// many words the answer holds only inside longer words — judged on the card
+// where the card shows every word, else on the whole text. Lower first.
+func (h *hits) rank(text string, nameEnd, cardEnd int32) int {
+	if nameEnd > 1 && text[1:nameEnd-1] == h.phrase {
+		return h.at(hitName, 0)
+	}
+	card, partial := text[:cardEnd], 0
+	for i, w := range h.words {
+		if strings.Contains(card, h.whole[i]) {
+			continue
+		}
+		if !strings.Contains(card, w) {
+			return h.at(hitBeyond, h.partial(text))
+		}
+		partial++
+	}
+	return h.at(hitCard, partial)
+}
+
+// partial counts the words text does not hold as tokens of their own.
+func (h *hits) partial(text string) int {
+	n := 0
+	for _, w := range h.whole {
+		if !strings.Contains(text, w) {
+			n++
+		}
+	}
+	return n
+}
+
+// at is the rank of a tier with that many partial words: every rank of one
+// tier comes before any of the next.
+func (h *hits) at(tier, partial int) int {
+	return tier*(len(h.words)+1) + partial
+}
+
+// rankBy orders a sorted list by rank, lowest first, each rank keeping the
+// order the list was sorted in.
+func rankBy[T any](out []T, rank func(T) int) {
+	ranks := make([]int, len(out))
+	top := 0
+	for i, x := range out {
+		ranks[i] = rank(x)
+		top = max(top, ranks[i])
+	}
+	start := make([]int, top+1) // each rank's count, then where it begins
+	for _, r := range ranks {
+		start[r]++
 	}
 	n := 0
-	for _, t := range tiers {
-		n += copy(out[n:], t)
+	for r, c := range start {
+		start[r], n = n, n+c
 	}
+	ranked := make([]T, len(out))
+	for i, x := range out {
+		ranked[start[ranks[i]]] = x
+		start[ranks[i]]++
+	}
+	copy(out, ranked)
 }
 
-// rankByHit is rankHits for a search: nothing moves without one.
-func rankByHit[T any](out []T, words []string, text func(T) (string, int32, int32)) {
+// rankByHit is rankBy for a search: nothing moves without one. through
+// answers, in a view that finds things through their members as well — a
+// release through a track, a performer through a release, a show through an
+// episode — for a thing its own text did not find: it ranks as found further
+// away, by how many words the member's answer holds only inside longer words.
+// nil where nothing is found that way.
+func rankByHit[T any](out []T, words []string, text func(T) (string, int32, int32), through func(T) (int, bool)) {
 	if len(words) == 0 {
 		return
 	}
-	phrase := strings.Join(words, " ")
-	rankHits(out, func(x T) int {
+	h := newHits(words)
+	rankBy(out, func(x T) int {
+		if through != nil {
+			if partial, ok := through(x); ok {
+				return h.at(hitBeyond, partial)
+			}
+		}
 		t, nameEnd, cardEnd := text(x)
-		return hitTier(t, nameEnd, cardEnd, words, phrase)
+		return h.rank(t, nameEnd, cardEnd)
 	})
 }

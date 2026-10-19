@@ -576,7 +576,7 @@ func (l *Library) SimilarAlbums(id string, q AlbumQuery) []*Album {
 	}
 	// Found by the search as the listing finds them (albumsAnswering).
 	var out []*Album
-	for _, a := range l.albumsAnswering(in, words, q.Paths.allower()) {
+	for _, a := range l.albumsAnswering(in, words, q.Paths.allower(), nil) {
 		c := *a
 		c.Similarity = dot(seed.vec, snd.albums[a.ID].vec)
 		out = append(out, &c)
@@ -595,7 +595,7 @@ func (l *Library) SimilarArtists(name, search string, desc bool, f PathFilter) [
 		return nil
 	}
 	words := searchWords(search)
-	theirs := l.performersAnswering(f, words)
+	theirs := l.performersAnswering(f, words, nil)
 	var out []*Artist
 	// Every performer the caller may see, in no order: the resemblance is
 	// the order, and sorting them by name first was work thrown away.

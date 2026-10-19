@@ -556,8 +556,31 @@ func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilt
 		func(a, b *Series) int { return compareSeries(a, b, sortKey) },
 		func(s *Series) string { return s.sortName },
 		func(s *Series) string { return s.ID })
-	rankByHit(out, words, func(s *Series) (string, int32, int32) { return s.lower, s.nameEnd, s.cardEnd })
+	rankByHit(out, words, func(s *Series) (string, int32, int32) { return s.lower, s.nameEnd, s.cardEnd },
+		byEpisode(words))
 	return out
+}
+
+// byEpisode answers rankByHit for a show its episodes found, its name not:
+// how many words the best episode holding every word has only inside longer
+// words.
+func byEpisode(words []string) func(*Series) (int, bool) {
+	h := newHits(words)
+	return func(s *Series) (int, bool) {
+		if matchWords(s.lower, words) {
+			return 0, false
+		}
+		best, found := 0, false
+		for _, e := range s.eps {
+			if !matchWords(e.lower, words) {
+				continue
+			}
+			if p := h.partial(e.lower); !found || p < best {
+				best, found = p, true
+			}
+		}
+		return best, found
+	}
 }
 
 // compareSeries orders two shows by one key: their own, then the ones every
