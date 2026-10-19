@@ -1464,7 +1464,8 @@ internal/state/       playback positions, held in memory and flushed to the
 internal/rartest/     spec-correct rar fixtures, shared by the tests
 web/                  Vite + vanilla TypeScript frontend (no runtime deps);
                       web/src/*.test.ts run under node's own test runner
-AGENTS.md             how it works and why, for anyone changing it
+AGENTS.md             what every change needs, for anyone changing it
+docs/                 how each part works and why, a chapter per part
 LICENSE, SECURITY.md, CITATION.cff
                       MIT; private vulnerability reporting; citation
 CONTRIBUTING.md, CODE_OF_CONDUCT.md, .github/
@@ -1543,8 +1544,8 @@ deleting off altogether. Thumbnails for `.avif` fall back to an icon
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md)
-says how to build, test and report, and [AGENTS.md](AGENTS.md) how the code
-works. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+says how to build, test and report, and [AGENTS.md](AGENTS.md) with the
+chapters under [docs/](docs/) how the code works. Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 ## Security
 

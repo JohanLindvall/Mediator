@@ -25,16 +25,19 @@ make test     # frontend type check, tests and build; go vet for Linux, macOS
 make build    # extracts the static Linux binary to ./mediator
 ```
 
-[AGENTS.md](AGENTS.md) explains how the code is organised and why, and which
-rules each part keeps. Read the part you are changing before changing it.
+[AGENTS.md](AGENTS.md) says what every change needs, and which chapter under
+[docs/](docs/) explains each part of the code: how it works, why, and which
+rules it keeps. Read the chapter for the part you are changing before
+changing it.
 
 ## Pull requests
 
 - One change per pull request. A fix comes with a test that fails without it.
 - `make test` passes.
 - The docs change with the code: `README.md` for what it does and how it is
-  run (features, flags, endpoints), `AGENTS.md` for how it works and why,
-  written in the present tense.
+  run (features, flags, endpoints), the chapter under `docs/` for how it
+  works and why (`AGENTS.md` for a rule every change keeps), written in the
+  present tense.
 - New source files start with `SPDX-License-Identifier: MIT` in their own
   comment syntax (AGENTS.md, "License headers").
 - Nothing committed may name what anybody's library holds: not in tests,
