@@ -2,6 +2,9 @@
 
 blank_issues_enabled: true
 contact_links:
+  - name: Documentation and troubleshooting
+    url: https://github.com/JohanLindvall/Mediator/blob/main/SUPPORT.md
+    about: Installation guides, common fixes and how to ask for help.
   - name: Report a security vulnerability
     url: https://github.com/JohanLindvall/Mediator/security/advisories/new
     about: Privately, through GitHub's private vulnerability reporting — never in a public issue.

@@ -16,9 +16,11 @@ the indexed directories, delete from the disk and play to a television.
 
 ## Commands
 
-Every make target builds inside Docker (BuildKit); the host needs only Docker:
+Build and test targets run inside Docker (BuildKit); the host needs Git,
+Make and Docker. `make help`, `make names` and `make clean` run on the host:
 
 ```sh
+make help             # list commands and requirements without starting Docker
 make docker           # runtime image (mediator:latest): gen-ts → npm → go build, all in Docker
 make build            # same build; extracts the static linux binary to ./mediator
 make generate         # regenerate web/src/types.gen.ts via the Docker gen stage
@@ -70,6 +72,14 @@ Dockerfile stage layout and gotchas:
 How each part works and why, one file per part. Each entry names the code
 the chapter covers: read it before changing that code, and change it in the
 same commit.
+
+The project:
+
+- [project maintenance](docs/project.md): the README, user guides and their
+  [index](docs/README.md), support and contribution paths, Compose defaults,
+  editor settings, Makefile help, issue forms, dependency updates and release
+  notes (`README.md`, community files, `.github/`, `compose.yaml`,
+  `.env.example`, `.editorconfig`, `Makefile`).
 
 The library (`internal/library`, `internal/blob`, `internal/state`):
 
@@ -251,7 +261,11 @@ endpoints, layout) and the chapter under `docs/` that covers it (how it works
 and why), or this file where the rule holds everywhere; a new part gets a
 chapter and a line under [Chapters](#chapters). A flag without its table row,
 or an endpoint without its API-table line, is unfinished: nobody would know
-it exists. The docs say what the code does now, and why, in the present
+it exists. Keep the README an entry point: detailed feature behavior belongs
+in `docs/features.md`, installation and operations in the user guides linked
+from `docs/README.md`; the flag and API tables stay in the README's expandable
+reference sections. Update affected guides alongside the architecture chapter.
+The docs say what the code does now, and why, in the present
 tense; how a rule came to be, what an earlier version did and how a fault was
 found belong in the commit message.
 

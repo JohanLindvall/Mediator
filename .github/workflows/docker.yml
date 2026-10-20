@@ -39,6 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Validate the Compose example
+        run: |
+          mkdir -p "$RUNNER_TEMP/mediator-media"
+          MEDIA_DIR="$RUNNER_TEMP/mediator-media" docker compose config --quiet
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Test (go vet, go test -race, the frontend's tsc and tests)

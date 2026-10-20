@@ -4,6 +4,11 @@ name: Feature request
 description: Something it could do, or do better
 labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the task you want to accomplish and who it helps. Search existing requests first; a small example makes the idea easier to discuss.
+        Use invented media names. Do not include private library screenshots, signed URLs or credentials.
   - type: textarea
     id: need
     attributes:
@@ -18,4 +23,5 @@ body:
   - type: textarea
     id: more
     attributes:
-      label: Anything else
+      label: Alternatives or workarounds
+      description: What have you tried, and why does it fall short?

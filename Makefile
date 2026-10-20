@@ -10,11 +10,30 @@ COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null)
 BUILT   ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 STAMP   := --build-arg VERSION=$(VERSION) --build-arg COMMIT=$(COMMIT) --build-arg BUILT=$(BUILT)
 
-.PHONY: all build docker generate test vet run clean names
+.PHONY: all build docker generate test vet run clean names help
 
 all: build
 
-## Everything builds inside Docker (BuildKit) — no local Go, Node or npm
+help:
+	@printf '%s\n' \
+	  'Mediator commands (run from the repository root)' \
+	  '' \
+	  'Builds and checks use Docker with BuildKit; no local Go or Node needed:' \
+	  '  make docker     Build the runtime image (mediator:latest)' \
+	  '  make build      Extract ./mediator, a Linux binary' \
+	  '  make generate   Regenerate the checked-in TypeScript API model' \
+	  '  make test       Frontend tests/build, cross-platform vet, Go race tests' \
+	  '  make vet        Frontend tests/build and cross-platform Go vet' \
+	  '' \
+	  'Host commands:' \
+	  '  make run DIRS="/path/to/media"   Build and run on Linux' \
+	  '  make names      Review tracked files for identifying media names' \
+	  '  make clean      Remove the binary, frontend build and node_modules' \
+	  '' \
+	  'Overrides: DOCKER=docker IMAGE=mediator:latest VERSION=dev' \
+	  'Setup and live frontend development: docs/development.md'
+
+## Build and check targets use Docker (BuildKit) — no local Go, Node or npm
 ## packages are needed or used. See the Dockerfile stages.
 
 ## Build the runtime image.

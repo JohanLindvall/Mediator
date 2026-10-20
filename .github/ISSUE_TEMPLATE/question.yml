@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: MIT
+
+name: Setup or usage question
+description: Get help with installation, playback or a receiver
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the [documentation](https://github.com/JohanLindvall/Mediator/blob/main/docs/README.md) and [troubleshooting](https://github.com/JohanLindvall/Mediator/blob/main/docs/troubleshooting.md).
+        Use invented media names and remove personal paths, signed URLs and credentials. Do not attach private media or library screenshots.
+        Security reports belong in [private reporting](https://github.com/JohanLindvall/Mediator/security/advisories/new).
+  - type: textarea
+    id: question
+    attributes:
+      label: What are you trying to do?
+      description: Explain where you got stuck and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Your setup
+      description: Version from Preferences, installation method, server OS/architecture, browser and receiver if relevant. Do not paste the full `/api/info` response; it can contain a token.
+      placeholder: Compose on Linux amd64, version v0.1.0, Firefox on a laptop
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Mention relevant guide sections and include only redacted log lines.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed real library names, personal paths, signed URLs and credentials from this question.
+          required: true

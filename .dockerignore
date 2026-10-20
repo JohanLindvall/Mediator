@@ -6,3 +6,8 @@ web/node_modules
 web/dist
 web/src/types.gen.ts
 *.log
+.env
+.env.*
+!.env.example
+compose.override.yaml
+compose.override.yml

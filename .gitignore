@@ -4,3 +4,8 @@
 *.db
 web/node_modules/
 web/dist/
+.env
+.env.*
+!.env.example
+compose.override.yaml
+compose.override.yml

@@ -7,7 +7,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Please **leave out the names of your files and folders** and describe their shape instead — "an MKV holding HEVC and two soundtracks", "a film split over a multi-part RAR set".
+        Please search existing issues and check the [troubleshooting guide](https://github.com/JohanLindvall/Mediator/blob/main/docs/troubleshooting.md) first.
+        **Leave out real media names, personal paths, signed URLs and credentials.** Describe file shapes instead — "an MKV holding HEVC and two soundtracks". Do not attach private media or library screenshots.
         A security problem goes through [private reporting](https://github.com/JohanLindvall/Mediator/security/advisories/new), not here.
   - type: textarea
     id: what
@@ -29,8 +30,27 @@ body:
     id: version
     attributes:
       label: Version
-      description: The about box at the foot of the preferences sheet shows it, as does `/api/info`.
+      description: Copy the build version from Preferences or `/api/info`. Do not paste the full API response; it can contain a media token.
       placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - Published Docker image
+        - Docker Compose
+        - Locally built Docker image
+        - Native source build
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: server
+    attributes:
+      label: Server OS and architecture
+      placeholder: Linux amd64, macOS arm64, Windows amd64…
     validations:
       required: true
   - type: input
@@ -42,5 +62,12 @@ body:
     id: log
     attributes:
       label: Server log
-      description: The lines around the moment, from a server run with `-debug`. Replace file names with their shape.
+      description: Relevant lines from `docker compose logs --tail=100 mediator`, or a run with `-debug`. Remove real names, personal paths, signed media URLs and credentials before posting.
       render: text
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed real library names, personal paths, signed URLs and credentials from this report.
+          required: true

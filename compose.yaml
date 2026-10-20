@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: MIT
+
+services:
+  mediator:
+    image: ${MEDIATOR_IMAGE:-ghcr.io/johanlindvall/mediator:latest}
+    restart: unless-stopped
+    # Keep the configured directories fixed and disable deletion.
+    command: ["-lock", "/library"]
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
+    volumes:
+      - type: bind
+        source: ${MEDIA_DIR:?Set MEDIA_DIR in .env to an existing absolute media directory}
+        target: /library
+        read_only: true
+        bind:
+          create_host_path: false
+      - mediator-data:/data
+    # Allow the HTTP drain and final database writes to finish.
+    stop_grace_period: 30s
+
+volumes:
+  mediator-data:
