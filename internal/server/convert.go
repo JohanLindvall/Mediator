@@ -125,6 +125,20 @@ func (c *conversion) close() {
 	}
 }
 
+// The film's picture, as every conversion, copy, landing, keyframe and still
+// here names it: the first video stream that is not an attached picture
+// (ffmpeg's V). A file can carry a cover — a WMV its publisher's picture, an
+// MP4 its artwork, a Matroska file an attachment — which ffmpeg lists as a
+// video stream, and a WMV lists it ahead of its film. Taken by "v:0", that
+// cover was every still of the film, and every conversion of it failed
+// before writing a byte: the re-encoded cover keeps its mark, and an MP4
+// stores a cover only as a JPEG, PNG or BMP picture ("Could not find tag for
+// codec h264 in stream #0").
+const (
+	pictureStream = "V:0"
+	pictureMap    = "0:" + pictureStream
+)
+
 // planConversion works out everything the two converters share for a run
 // from t seconds. copyVideo is the caller's decision, mustReencode already
 // consulted; audio names the soundtrack as the URL did.
@@ -190,7 +204,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 	// Which soundtrack, when the file carries more than one. Out of range is
 	// nobody's choice, so the map is optional and ffmpeg simply produces a
 	// picture — better than refusing to play the film.
-	args = append(args, "-map", "0:v:0", "-map", audioMap(audio), "-sn", "-dn")
+	args = append(args, "-map", pictureMap, "-map", audioMap(audio), "-sn", "-dn")
 	if !copyVideo {
 		// What comes out keeps the timing of what went in.
 		//
@@ -432,7 +446,7 @@ func landsAt(ctx context.Context, ffmpeg string, seek, input []string) (packetTi
 	args := append(ffmpegBase(), seek...)
 	args = append(args, "-copyts")
 	args = append(args, input...)
-	args = append(args, "-map", "0:v:0", "-c", "copy", "-frames:v", "1", "-f", "framecrc", "pipe:1")
+	args = append(args, "-map", pictureMap, "-c", "copy", "-frames:v", "1", "-f", "framecrc", "pipe:1")
 	cmd := exec.CommandContext(ctx, ffmpeg, args...)
 	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.Output()

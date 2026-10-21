@@ -722,7 +722,7 @@ func (r *Remuxer) run(ctx context.Context, it library.Item, track int, kind remu
 	// languages hands a television all four and lets it choose, which is how
 	// a Swedish release comes out in Danish; DLNA has no way to say which,
 	// so the choice is made by what is in the file it is given.
-	args = append(args, "-map", "0:v:0", "-map", audioMapN(track), "-sn", "-dn", "-c:v", "copy")
+	args = append(args, "-map", pictureMap, "-map", audioMapN(track), "-sn", "-dn", "-c:v", "copy")
 	if kind == remuxSound {
 		// The picture goes through untouched — it was never the problem —
 		// and only the soundtrack is made into something the browser has a

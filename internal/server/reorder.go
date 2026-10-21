@@ -198,7 +198,7 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 	ctx, cancel := context.WithTimeout(ctx, reorderProbeTimeout)
 	defer cancel()
 	args := append([]string{
-		"-v", "error", "-select_streams", "v:0",
+		"-v", "error", "-select_streams", pictureStream,
 		"-show_entries", "stream=has_b_frames:frame=pict_type,pts_time",
 		"-read_intervals", "%+#" + strconv.Itoa(reorderProbeFrames),
 		"-of", "json",

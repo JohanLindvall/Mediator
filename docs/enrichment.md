@@ -39,6 +39,11 @@
   deliberately not waiting for playback (the player needs the answer). Nothing
   is recorded on context expiry, ffprobe's own ceiling (`Probe.Interrupted`),
   or a changed identity.
+  - The picture is the first video stream that is not an attached picture
+    (`attached_pic`): a cover listed ahead of the film, as a WMV lists its
+    publisher's picture, read as an MJPEG still at the cover's size, and the
+    player and every converter worked on the cover. A file with a cover and
+    no film has no picture codec.
   - The document is stdout alone: stderr's diagnostics differ by tool version
     and never count as stream records. Stderr is read only for the not-media
     phrases below (`unreadableInput`).

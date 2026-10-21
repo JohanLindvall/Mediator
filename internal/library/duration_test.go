@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/JohanLindvall/Mediator/internal/mediatest"
 	"github.com/JohanLindvall/Mediator/internal/rartest"
 )
 
@@ -238,6 +239,28 @@ func TestArchivedVideoProbePipesEnoughPrefix(t *testing.T) {
 	if got.Duration == 0 || got.VCodec == "" {
 		t.Fatalf("archived video probed to duration=%d vcodec=%q; want both filled in",
 			got.Duration, got.VCodec)
+	}
+}
+
+// A picture the file carries is not its film, wherever ffmpeg lists it: the
+// probe names the film's codec, size and rate, and a file holding a cover
+// and no film has no picture of its own.
+func TestACoverIsNotTheFilm(t *testing.T) {
+	dir := t.TempDir()
+	covered := filepath.Join(dir, "covered.mp4")
+	mediatest.CoverFirst(t, covered, 2)
+	res := ffprobe(context.Background(), covered, nil)
+	if res.vcodec != "mpeg4" || res.width != mediatest.FilmWidth || res.height != mediatest.FilmHeight || res.fps != 5 {
+		t.Errorf("probed as %q %dx%d at %v fps, want the film: mpeg4 %dx%d at 5",
+			res.vcodec, res.width, res.height, res.fps, mediatest.FilmWidth, mediatest.FilmHeight)
+	}
+
+	sound := filepath.Join(dir, "sound.mp4")
+	mediatest.CoverOnly(t, sound, 2)
+	res = ffprobe(context.Background(), sound, nil)
+	if res.vcodec != "" || res.width != 0 || res.acodec != "aac" || res.unreadable {
+		t.Errorf("a cover over sound probed as picture %q (%dx%d), sound %q, unreadable %v; want no picture",
+			res.vcodec, res.width, res.height, res.acodec, res.unreadable)
 	}
 }
 

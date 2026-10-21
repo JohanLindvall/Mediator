@@ -5,12 +5,16 @@
 - **A file that never starts is diagnosed before it is converted.** A dead
   disk (EIO on every open, mount kept) fails every route at `OpenItem`, so
   `serveStream` answers **503** for a known item it cannot open (404 means "no
-  such item") and the pipe answers 503, not an empty 200, when ffmpeg produced
-  nothing. On the element's first error the player fetches one byte and reads
-  the status (`readFault`, tested), matching **by id** since `refreshItem`
-  replaces the item object when `/api/item` answers; the fault is drawn in the
-  picture and stays (`giveUp`), and the file stays given up (`faulted`) so
-  late codecs start no conversion. The 503 states the reason for the viewer
+  such item"). The pipe, when ffmpeg produced nothing, asks the disk the same
+  question (`conversionFailed`, `readsAtAll`): 503 with the reason where the
+  file will not be read, else 500, never an empty 200 — the player words a
+  503 as a file it cannot read, which said of a film ffmpeg failed to convert
+  sends its owner to a healthy disk. On the element's first error the player
+  fetches one byte and reads the status (`readFault`, tested), matching **by
+  id** since `refreshItem` replaces the item object when `/api/item` answers;
+  the fault is drawn in the picture and stays (`giveUp`), and the file stays
+  given up (`faulted`) so late codecs start no conversion. The 503 states the
+  reason for the viewer
   (`openFault`, tested: dead disk vs a filesystem needing repair, e.g. XFS
   "structure needs cleaning"); other answers proceed to rewrap and
   conversion. The index keeps such files (an unreadable root is protected
@@ -206,6 +210,20 @@
   merges the fields for good; test-pinned); **`send_frame` stated
   explicitly**, the default `send_field` doubling every re-encode's frame
   rate. `crop.go` has none: bars are black in both fields.
+- **The film's picture is ffmpeg's `V:0`, never `v:0`** (`pictureMap`,
+  `pictureStream`, `convert.go`): a cover the file carries (a WMV's embedded
+  picture, an MP4's artwork, a Matroska attachment) is a video stream to
+  ffmpeg, and a WMV lists it ahead of its film. Taken for the film, it was
+  every still, and every conversion failed before writing a byte (the
+  re-encoded cover keeps its attached-picture mark, and an MP4 stores a cover
+  only as JPEG, PNG or BMP: "Could not find tag for codec h264"). Conversions,
+  rewraps, landings, keyframes, the aspect repair, the reorder look and every
+  still map it, and the probe passes covers over too
+  ([enrichment](enrichment.md)). Crop detection maps nothing (ffmpeg's own
+  choice ranks covers last); a cover is a tile only where no film is there
+  ([thumbnails](thumbnails.md)). `mediatest.CoverFirst` writes the shape for
+  tests: an MP4 with its artwork box moved ahead of the tracks (ffmpeg's ASF
+  writer keeps no cover, and its MP4 writer puts one last).
 
 ## Soundtracks
 

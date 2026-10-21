@@ -120,7 +120,7 @@ func repairArgs(it library.Item, t float64, secs int, out string) []string {
 	if t > 0 {
 		args = append(args, "-ss", strconv.FormatFloat(t, 'f', 3, 64))
 	}
-	args = append(args, "-i", it.Path, "-map", "0:v:0", "-map", "0:a?")
+	args = append(args, "-i", it.Path, "-map", pictureMap, "-map", "0:a?")
 	if secs > 0 {
 		args = append(args, "-t", strconv.Itoa(secs))
 	}

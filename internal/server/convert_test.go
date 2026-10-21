@@ -30,7 +30,7 @@ func TestPlanConversion(t *testing.T) {
 		t.Errorf("a conversion from the start seeks: %s", joined)
 	}
 	for _, want := range []string{
-		"-i /m/film.mkv", "-map 0:v:0 -map 0:a:0? -sn -dn",
+		"-i /m/film.mkv", "-map 0:V:0 -map 0:a:0? -sn -dn",
 		"-c:v libx264", "-vf " + videoFilter(convertScale),
 		"-c:a aac -b:a 160k -ac 2 -avoid_negative_ts make_zero",
 	} {

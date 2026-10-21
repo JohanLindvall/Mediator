@@ -33,7 +33,9 @@
   - **Video frames are taken a tenth of the way in** (`thumbOffsets`; plain,
     archived and disc titles alike), past front matter; fallbacks: the
     alternative offset, 3 s, frame 0 (opening bytes only: short clips, unknown
-    durations, bounded prefixes). The key is width-only on purpose: **stored
+    durations, bounded prefixes), then for a plain file the cover it carries
+    (`coverFrame`): every other still takes the film's picture, never a cover
+    ([conversion](conversion.md)). The key is width-only on purpose: **stored
     tiles are never remade for a recipe change** (older is not wrong); a new
     recipe reaches a file when it changes.
   - **Stills are un-squeezed before scaling** (`square`, tested): a JPEG

@@ -50,7 +50,7 @@ func streamStart(ctx context.Context, ffmpegBin string, input []string, t float6
 	args := []string{"-hide_banner", "-loglevel", "error", "-nostdin",
 		"-copyts", "-ss", strconv.FormatFloat(t, 'f', 3, 64)}
 	args = append(args, input...)
-	args = append(args, "-map", "0:v:0", "-c:v", "copy", "-frames:v", "1",
+	args = append(args, "-map", pictureMap, "-c:v", "copy", "-frames:v", "1",
 		"-f", "matroska", "pipe:1")
 	ff := exec.CommandContext(ctx, ffmpegBin, args...)
 	ff.WaitDelay = 2 * time.Second

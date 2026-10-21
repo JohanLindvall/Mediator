@@ -627,7 +627,7 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 	args = append(args,
 		"-show_entries",
 		"stream=codec_type,codec_name,width,height,avg_frame_rate,channels,sample_rate,color_transfer,color_primaries:"+
-			"stream_tags=language,title:stream_disposition=default,comment:format=duration",
+			"stream_tags=language,title:stream_disposition=default,comment,attached_pic:format=duration",
 		"-of", "json", path)
 	cmd := exec.CommandContext(ctx, probe, args...)
 	cmd.Stdin = stdin
@@ -688,6 +688,10 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 			Disposition struct {
 				Default int `json:"default"`
 				Comment int `json:"comment"`
+				// A picture the file carries, not its film: a cover, which
+				// ffmpeg lists as a video stream (a WMV's embedded picture,
+				// an MP4's artwork, a Matroska attachment).
+				AttachedPic int `json:"attached_pic"`
 			} `json:"disposition"`
 			// Subtitle streams reuse CodecName and Tags; nothing more.
 		} `json:"streams"`
@@ -710,7 +714,11 @@ func ffprobe(ctx context.Context, path string, stdin io.Reader) ffprobeResult {
 		}
 		switch st.CodecType {
 		case "video":
-			if res.vcodec == "" {
+			// The film's picture, wherever ffmpeg lists the cover. A WMV
+			// keeps its publisher's picture ahead of its film, and taken
+			// for the film it read as an MJPEG still at the picture's size,
+			// with the player and every converter set to work on the cover.
+			if res.vcodec == "" && st.Disposition.AttachedPic == 0 {
 				res.vcodec = st.CodecName
 				res.width, res.height = saneDimension(st.Width), saneDimension(st.Height)
 				res.fps = parseRate(st.FrameRate)

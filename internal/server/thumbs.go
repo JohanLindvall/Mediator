@@ -639,7 +639,24 @@ func (t *Thumbnailer) fromVideo(ctx context.Context, it library.Item, width int)
 	if len(data) > 0 {
 		return data, nil
 	}
+	// No frame of a film anywhere. The file may still carry a picture — the
+	// cover of sound under a video's name, or a publisher's picture beside a
+	// film that will not decode — and its own picture beats a blank tile.
+	data, err = t.coverFrame(ctx, it, width)
+	if err != nil || len(data) > 0 {
+		return data, err
+	}
 	return nil, ErrNoThumb
+}
+
+// coverFrame takes the first picture the file holds, a cover included,
+// which every seek above passes over for being no frame of the film.
+func (t *Thumbnailer) coverFrame(ctx context.Context, it library.Item, width int) ([]byte, error) {
+	cctx, cancel := context.WithTimeout(ctx, plainThumbTimeout)
+	defer cancel()
+	return t.runFrame(ctx, cctx, nil, func(out string) []string {
+		return frameArgs(frameSpec{input: it.Path, out: out, width: width, quality: 4, cover: true})
+	})
 }
 
 // repairedFrame is the last resort for a file whose bitstream lies about
@@ -874,6 +891,10 @@ type frameSpec struct {
 	// empty: a DVD title is seeked by where it starts reading rather than by
 	// time (library.SeekByte), and then there is no -ss to give.
 	pre []string
+	// cover takes the first picture the file holds, a cover included, where
+	// every other still takes the film's (pictureMap): the last resort for a
+	// file with no film to take a frame of.
+	cover bool
 }
 
 // frameArgs is the ffmpeg command line for one scaled frame at a seek — the
@@ -903,9 +924,13 @@ func frameArgs(f frameSpec) []string {
 	if f.seek != "" {
 		args = append(args, "-ss", f.seek)
 	}
+	picture := pictureMap
+	if f.cover {
+		picture = "0:v:0"
+	}
 	return append(args,
 		"-i", f.input,
-		"-map", "0:v:0", "-an", "-sn", "-dn",
+		"-map", picture, "-an", "-sn", "-dn",
 		"-frames:v", "1", "-vf", videoFilter(square(fmt.Sprintf("scale=%d:-2", f.width))),
 		"-q:v", strconv.Itoa(f.quality), "-y", f.out)
 }
@@ -957,7 +982,7 @@ func archivePipeArgs(out string, width int) []string {
 		"-hide_banner", "-loglevel", "error",
 		"-skip_frame", "nokey",
 		"-t", strconv.Itoa(archivePipeWindowSec), "-i", "pipe:0",
-		"-map", "0:v:0", "-an", "-sn", "-dn",
+		"-map", pictureMap, "-an", "-sn", "-dn",
 		"-vf", videoFilter(square(fmt.Sprintf("fps=1/%d,scale=%d:-2,thumbnail=%d",
 			archivePipeSampleSec, width, archiveThumbFrames))),
 		"-frames:v", "1", "-q:v", "4", "-y", out,
@@ -971,7 +996,7 @@ func archiveFirstFrameArgs(out string, width int) []string {
 	return []string{
 		"-hide_banner", "-loglevel", "error",
 		"-i", "pipe:0",
-		"-map", "0:v:0", "-an", "-sn", "-dn",
+		"-map", pictureMap, "-an", "-sn", "-dn",
 		"-vf", videoFilter(square(fmt.Sprintf("scale=%d:-2", width))),
 		"-frames:v", "1", "-q:v", "4", "-y", out,
 	}

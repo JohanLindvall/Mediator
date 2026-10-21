@@ -44,6 +44,12 @@ func TestUnreadableFileIsNotNotFound(t *testing.T) {
 	if code, _ := get("/api/stream/" + id); code != http.StatusOK {
 		t.Fatalf("a readable file answered %d", code)
 	}
+	// One the disk hands over and ffmpeg cannot convert is the converter's
+	// failure, not the disk's: the player words a 503 as a file it cannot
+	// read.
+	if code, _ := get("/api/transcode/" + id); code != http.StatusInternalServerError && code != http.StatusNotImplemented {
+		t.Errorf("a failed conversion of a readable file answered %d, want 500", code)
+	}
 	// Gone from the disk while the index still lists it, which is what the
 	// index does deliberately for a root that stops answering.
 	if err := os.Remove(path); err != nil {
@@ -56,10 +62,12 @@ func TestUnreadableFileIsNotNotFound(t *testing.T) {
 	if code, _ := get("/api/stream/deadbeefdeadbeef"); code != http.StatusNotFound {
 		t.Errorf("an unknown item answered %d, want 404", code)
 	}
-	// The pipe cannot open it either, and says so rather than answering an
-	// empty 200 — but only where there is an ffmpeg to have tried.
-	if code, _ := get("/api/transcode/" + id); code != http.StatusServiceUnavailable && code != http.StatusNotImplemented {
-		t.Errorf("a conversion of an unreadable file answered %d, want 503", code)
+	// The pipe cannot open it either, and says so with the same reason
+	// rather than answering an empty 200 — but only where there is an
+	// ffmpeg to have tried.
+	if code, body := get("/api/transcode/" + id); code != http.StatusNotImplemented &&
+		(code != http.StatusServiceUnavailable || body != "file unavailable: it is no longer where the library found it") {
+		t.Errorf("a conversion of an unreadable file answered %d %q, want 503 and the reason", code, body)
 	}
 }
 

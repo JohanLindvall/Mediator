@@ -520,6 +520,14 @@ from a tenth of the way in, wherever the video lives, because the opening
 is the distributor's logo and the title card. Tiles already made are kept
 as they are; new and changed files get the better frame.
 
+## A cover is not the film
+
+a file can carry a picture of its own (a
+WMV its publisher's, an MP4 its artwork), which ffmpeg lists as a video
+stream and a WMV lists first. Conversions, frames, previews and the codec
+shown all take the film; the cover is a tile only where no film is there
+to take a frame of.
+
 ## Deinterlacing
 
 a PAL DVD is 576i, and a browser shows those combed

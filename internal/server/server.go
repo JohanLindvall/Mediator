@@ -1281,13 +1281,41 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 		case wasHardware:
 			// hwRefused.note above already steers the next plan to software.
 		default:
-			http.Error(w, "conversion failed", http.StatusServiceUnavailable)
+			conversionFailed(w, it)
 			return
 		}
 	}
 	// Every start-over spent and nothing went out: say so, rather than
 	// letting the handler fall off the end into an empty 200.
-	http.Error(w, "conversion failed", http.StatusServiceUnavailable)
+	conversionFailed(w, it)
+}
+
+// conversionFailed answers a conversion that produced nothing, by asking the
+// disk the question the player's words turn on. The player says it cannot
+// read the file for a 503, so that is the answer only where the file will
+// not be handed over (with the reason, as the stream gives it). A file that
+// reads is the converter's failure, a 500: answered 503, a film ffmpeg could
+// not convert was reported to its viewer as a disk that would not read it.
+func conversionFailed(w http.ResponseWriter, it library.Item) {
+	if err := readsAtAll(it); err != nil {
+		http.Error(w, "file unavailable: "+openFault(err), http.StatusServiceUnavailable)
+		return
+	}
+	http.Error(w, "conversion failed", http.StatusInternalServerError)
+}
+
+// readsAtAll opens the item and reads its first byte, as the player's own
+// question of the stream does (readFault).
+func readsAtAll(it library.Item) error {
+	f, err := library.OpenItem(it)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Read(make([]byte, 1)); err != nil && !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
 }
 
 // startOverWithAspect says whether this attempt's failure is the declared

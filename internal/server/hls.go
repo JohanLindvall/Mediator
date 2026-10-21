@@ -1848,7 +1848,7 @@ func (h *HLS) probe(ctx context.Context, it library.Item, seek float64) (float64
 	defer cancel()
 	args := append(ffmpegBase(), "-ss", strconv.FormatFloat(seek, 'f', 3, 64), "-copyts")
 	args = append(args, input.args...)
-	args = append(args, "-map", "0:v:0", "-c:v", "copy", "-frames:v", "1",
+	args = append(args, "-map", pictureMap, "-c:v", "copy", "-frames:v", "1",
 		"-f", "mpegts", "-mpegts_copyts", "1", "pipe:1")
 	cmd := exec.CommandContext(ctx, h.ffmpeg, args...)
 	cmd.WaitDelay = 2 * time.Second
