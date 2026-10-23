@@ -955,12 +955,17 @@ uses that root's name. Nested folders keep their own names, and music's disc
 folders are not folded into releases in this view. Albums, Artists, Genres,
 Audiobooks and Series keep their existing grouping.
 
-Folder cards show thumbnails and the number of matching items. Search still
-matches filenames, tags and paths: a match in a file brings its folder into
-view, and opening the card keeps the search and shows those matching files
-in the usual grid. Video playback, image browsing and music queues stay
-within that listing. The folder chip returns to the groups; **Flat** returns
-to individual files. Grouping and the open folder travel in the address,
+Folder cards show thumbnails and the number of matching items. Hover over a
+card for its item count, total size and playing time when all matching files
+have a known duration, plus the most recent modification and library addition
+dates when known. These details describe the files matching the current
+filters and search.
+
+Search still matches filenames, tags and paths: a match in a file brings its
+folder into view, and opening the card keeps the search and shows those
+matching files in the usual grid. Video playback, image browsing and music
+queues stay within that listing. The folder chip returns to the groups;
+**Flat** returns to individual files. Grouping and the open folder travel in the address,
 including shared links and browser Back. Folder cards can sort by name,
 modified or added date, item count, size or total playing time.
 

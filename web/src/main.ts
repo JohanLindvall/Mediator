@@ -56,6 +56,7 @@ import {
   extBadge,
   formatBytes,
   formatDate,
+  formatDateFull,
   formatDuration,
   hoverLines,
   mediaShape,
@@ -420,11 +421,9 @@ interface CollectionCard {
   /** A play badge over the cover, where the card has something to play. */
   play?: string;
   /**
-   * Where the thing on the card is kept and what it is made of, for the
-   * hover — set on the card as a whole, as a tile's path and technical line
-   * are, since the cover is what a pointer lands on. Only a release has
-   * one: a performer, a genre and a show are made of releases and episodes
-   * in many places rather than of one place on the disk.
+   * Extra details on hover, set on the card as a whole since the cover is
+   * what a pointer lands on. Releases describe their path and formats;
+   * folder groups summarize their matching files and latest dates.
    */
   tip?: string;
   coverId?: string;
@@ -462,13 +461,22 @@ function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
 
 function renderFolderCell(el: HTMLElement, folder: Folder | undefined): void {
   if (!folder) return skeleton(el);
+  const count = counted(folder.items, 'item');
+  const sub = facts([formatBytes(folder.size), folder.duration ? formatDuration(folder.duration / 1000) : '']);
+  const tip = hoverLines(
+    facts([count, sub]),
+    folder.mtime ? `Last modified: ${formatDateFull(folder.mtime)}` : '',
+    folder.added ? `Last added: ${formatDateFull(folder.added)}` : '',
+  );
   renderCollectionCell(el, {
     key: JSON.stringify(folder),
     cls: 'folder-card',
     icon: icons.folder,
-    badge: counted(folder.items, 'item'),
+    badge: count,
     title: folder.name,
-    sub: facts([formatBytes(folder.size), folder.duration ? formatDuration(folder.duration / 1000) : '']),
+    sub,
+    subTitle: tip,
+    tip,
     coverId: folder.coverId,
     coverSrc: folder.coverSvg ? streamUrl(folder.coverId) : undefined,
     mtime: folder.coverTime,

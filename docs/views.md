@@ -8,7 +8,9 @@
   filter; a folder chip returns to the groups. Search survives both steps.
   The hash carries `group=folders` and `folder=<name>`, so Back, reload and
   shortlinks restore the view. Existing collection views hide this control.
-  Folder cards offer aggregate sort keys; their contents offer file keys.
+  Folder cards offer aggregate sort keys and hover details: matching item
+  count, size, known total playing time and latest modified and added dates.
+  Their contents offer file keys.
   The toolbar wraps when its controls cannot fit on one line.
 - **Resolution and bitrate are separate orders** (`pixels`, `bitrate`; videos
   only). Resolution sorts by **area** (one dimension misranks portrait clips; a

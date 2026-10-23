@@ -6,6 +6,11 @@
   scoped to that group. Changing the folder clears held item pages; changing
   search within it keeps them until the new answer arrives. Folder cards use
   the representative file's thumbnail timestamp, with SVGs rendered directly.
+  Their hover summarizes matching items, total size and known playing time,
+  followed by the latest member modification and library arrival dates.
+  Unknown duration and dates are omitted. The tooltip uses the existing
+  folder response without fetching on hover; its fields are part of the cell
+  key, so refreshed aggregates update the tooltip too.
 - `grid.ts`: windowed virtual grid over a `GridAdapter` (`main.ts` swaps the
   items view's `LibrarySource` — 200-item pages keyed by a query generation
   counter — and whole album/artist lists). It asks only `need(a, b)` for the
