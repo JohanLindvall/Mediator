@@ -1,7 +1,10 @@
 # The grid and its sources
 
 - `FoldersSource` uses the same collection card renderer and thumbnail queue
-  as albums. Entering a folder switches to `LibrarySource` with `folder` in
+  as albums. Its adapter reuses the item adapter's responsive minimum width
+  and cell height, so folder thumbnails and fallback icons fit the same
+  compact landscape tiles as individual files, including while loading.
+  Entering a folder switches to `LibrarySource` with `folder` in
   the query, keeping paging, video/image navigation and music queue requests
   scoped to that group. Changing the folder clears held item pages; changing
   search within it keeps them until the new answer arrives. Folder cards use

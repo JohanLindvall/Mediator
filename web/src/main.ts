@@ -395,7 +395,7 @@ function years(from?: number, to?: number): string {
 }
 
 /**
- * What every collection card is: a square cover with a fallback icon and a
+ * What every collection card is: a cover with a fallback icon and a
  * badge, a title, and a line of facts under it. The albums, performers,
  * genres, shows and seasons each used to spell the whole of this out, and
  * what they actually differ in is the handful of fields below.
@@ -875,7 +875,7 @@ function renderSeasonCell(el: HTMLElement, season: Season | undefined): void {
 /** Anything the grid can draw: an item, or one of the grouped cards. */
 type Cell = Item | Album | Artist | Genre | Series | Season | Folder;
 
-/** The size of a collection card, which is the same for every collection. */
+/** The default square layout for collection cards. */
 const collectionSize = {
   minCardWidth: (w: number): number => (w < 480 ? 156 : w < 1100 ? 180 : 200),
   cellHeight: (cardW: number): number => cardW + 56,
@@ -917,11 +917,16 @@ const albumAdapter = collectionAdapter<Album>(albumsSource, renderAlbumCell, (al
   else openAlbumPanel(album.id, panelOpts);
 });
 
-const folderAdapter = collectionAdapter<Folder>(foldersSource, renderFolderCell, (folder) => {
-  leaveDrillDowns();
-  state.folder = folder.name;
-  enterView(state.mode);
-});
+const folderAdapter: GridAdapter<Cell> = {
+  ...collectionAdapter<Folder>(foldersSource, renderFolderCell, (folder) => {
+    leaveDrillDowns();
+    state.folder = folder.name;
+    enterView(state.mode);
+  }),
+  // Folder groups keep the same tile dimensions as the files they contain.
+  minCardWidth: itemAdapter.minCardWidth,
+  cellHeight: itemAdapter.cellHeight,
+};
 
 const artistAdapter = collectionAdapter<Artist>(artistsSource, renderArtistCell, (artist, ev) => {
   // The genre under their name goes across to it; anywhere else drills down

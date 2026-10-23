@@ -955,8 +955,9 @@ uses that root's name. Nested folders keep their own names, and music's disc
 folders are not folded into releases in this view. Albums, Artists, Genres,
 Audiobooks and Series keep their existing grouping.
 
-Folder cards show thumbnails and the number of matching items. Hover over a
-card for its item count, total size and playing time when all matching files
+Folder cards use the same compact tile size as videos and other files,
+showing thumbnails and the number of matching items. Hover over a card
+for its item count, total size and playing time when all matching files
 have a known duration, plus the most recent modification and library addition
 dates when known. These details describe the files matching the current
 filters and search.

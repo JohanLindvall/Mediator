@@ -10,7 +10,8 @@
   shortlinks restore the view. Existing collection views hide this control.
   Folder cards offer aggregate sort keys and hover details: matching item
   count, size, known total playing time and latest modified and added dates.
-  Their contents offer file keys.
+  Their tiles use the same responsive width and height as individual files;
+  their contents offer file keys.
   The toolbar wraps when its controls cannot fit on one line.
 - **Resolution and bitrate are separate orders** (`pixels`, `bitrate`; videos
   only). Resolution sorts by **area** (one dimension misranks portrait clips; a
