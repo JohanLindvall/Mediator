@@ -4,6 +4,12 @@
 
 - `List` serves pages from a cached per-(query, version) sorted result; never
   add per-request work that walks the index.
+  - `Query.Folder` selects the exact displayed leaf directory name, across
+    roots and parent paths, and participates in the cache key. Folder cards
+    use their own selection/group-version cache (`folders.go`), while their
+    opened contents use the ordinary byte-versioned listing. The search and
+    kind chips still count across folders; the status counts files in the
+    selected folder, and clicking a kind chip leaves that folder.
   - `queryMu` guards only that immutable result (`cachedQuery`), not page
     copies or counting (a narrowed count can trigger a disk-reading album
     build, stalling every listing).

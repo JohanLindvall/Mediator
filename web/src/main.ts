@@ -20,6 +20,7 @@ import {
   type Artist,
   type Counts,
   type Genre,
+  type Folder,
   type Season,
   type Series,
   type Item,
@@ -42,6 +43,7 @@ import {
   findKind,
   ArtistsSource,
   GenresSource,
+  FoldersSource,
   SeriesSource,
   LibrarySource,
   type ItemSource,
@@ -72,7 +74,7 @@ import {
   viewSource,
   type ViewSource,
 } from './query';
-import { defaultMode, fallbackMode, modeShown, queueSource, type ViewMode } from './content';
+import { defaultMode, fallbackMode, modeShown, queueSource, supportsFolders, type ViewMode } from './content';
 import { openingDesc, openingSort, sortOptions } from './sorts';
 import { loadThumb, cancelThumb, retryThumbs } from './thumbs';
 import { showToast } from './toast';
@@ -119,6 +121,9 @@ interface AppState {
    */
   near: string;
   nearName: string;
+  /** Optional grouping of file views; flat until the viewer chooses it. */
+  grouped: boolean;
+  folder: string;
 }
 
 const state: AppState = {
@@ -134,6 +139,8 @@ const state: AppState = {
   season: 0,
   near: '',
   nearName: '',
+  grouped: false,
+  folder: '',
 };
 
 // ---- element handles ---------------------------------------------------
@@ -157,6 +164,8 @@ const statusEl = $('#status');
 const searchInput = $<HTMLInputElement>('#search');
 const searchClear = $('#search-clear');
 const sortSelect = $<HTMLSelectElement>('#sort');
+const groupSelect = $<HTMLSelectElement>('#group');
+const groupWrap = $('#group-wrap');
 const prefsBtn = $('#prefs');
 const shareBtn = $('#share');
 const sortDirBtn = $('#sort-dir');
@@ -188,6 +197,7 @@ const albumsSource = new AlbumsSource();
 const artistsSource = new ArtistsSource();
 const genresSource = new GenresSource();
 const seriesSource = new SeriesSource();
+const foldersSource = new FoldersSource();
 /**
  * The item listing as a position in a sequence, which is all the overlays
  * need of it: both step through the same one, so closing a picture and
@@ -418,6 +428,7 @@ interface CollectionCard {
    */
   tip?: string;
   coverId?: string;
+  coverSrc?: string;
   mtime: number;
 }
 
@@ -446,7 +457,22 @@ function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
       <div class="title" title="${esc(hoverLines(card.title, card.tip))}">${esc(card.title)}</div>
       <div class="sub" title="${esc(card.subTitle ?? card.sub)}">${card.sub}</div>
     </div>`;
-  wireThumb(el, card.coverId ? thumbUrl(card.coverId, THUMB_W, card.mtime) : null);
+  wireThumb(el, card.coverSrc ?? (card.coverId ? thumbUrl(card.coverId, THUMB_W, card.mtime) : null));
+}
+
+function renderFolderCell(el: HTMLElement, folder: Folder | undefined): void {
+  if (!folder) return skeleton(el);
+  renderCollectionCell(el, {
+    key: JSON.stringify(folder),
+    cls: 'folder-card',
+    icon: icons.folder,
+    badge: counted(folder.items, 'item'),
+    title: folder.name,
+    sub: facts([formatBytes(folder.size), folder.duration ? formatDuration(folder.duration / 1000) : '']),
+    coverId: folder.coverId,
+    coverSrc: folder.coverSvg ? streamUrl(folder.coverId) : undefined,
+    mtime: folder.coverTime,
+  });
 }
 
 /** "3 albums", "1 track": a count with its noun, for the cards. */
@@ -727,7 +753,7 @@ async function openLinked(): Promise<void> {
   }
 }
 
-const itemAdapter: GridAdapter<Item | Album | Artist | Genre | Series | Season> = {
+const itemAdapter: GridAdapter<Cell> = {
   count: () => libSource.count(),
   get: (i) => libSource.get(i),
   itemKey: (x) => (x as Item).id,
@@ -839,7 +865,7 @@ function renderSeasonCell(el: HTMLElement, season: Season | undefined): void {
 }
 
 /** Anything the grid can draw: an item, or one of the grouped cards. */
-type Cell = Item | Album | Artist | Genre | Series | Season;
+type Cell = Item | Album | Artist | Genre | Series | Season | Folder;
 
 /** The size of a collection card, which is the same for every collection. */
 const collectionSize = {
@@ -848,7 +874,7 @@ const collectionSize = {
 };
 
 /**
- * A grid adapter over a collection source: the four grouped views differ
+ * A grid adapter over a collection source: the grouped views differ
  * only in their source, how a card is drawn, and what a press does, so the
  * boilerplate (identity, no prefetch, thumbnail cancel, card size) lives
  * here once.
@@ -881,6 +907,12 @@ const albumAdapter = collectionAdapter<Album>(albumsSource, renderAlbumCell, (al
   // order and the individual tracks are.
   if (viaPlayBadge(ev)) void playCollection(album.id, 'album');
   else openAlbumPanel(album.id, panelOpts);
+});
+
+const folderAdapter = collectionAdapter<Folder>(foldersSource, renderFolderCell, (folder) => {
+  leaveDrillDowns();
+  state.folder = folder.name;
+  enterView(state.mode);
 });
 
 const artistAdapter = collectionAdapter<Artist>(artistsSource, renderArtistCell, (artist, ev) => {
@@ -957,7 +989,7 @@ function seasonsOf(): Season[] {
   return show ? seasonsOffered(show) : [];
 }
 
-const grid = new VirtualGrid<Item | Album | Artist | Genre | Series | Season>(
+const grid = new VirtualGrid<Cell>(
   scroller,
   spacer,
   plane,
@@ -1168,6 +1200,7 @@ function renderChips(): void {
     state.series ? `series:${state.series}` : '',
     state.season ? `season:${state.season}` : '',
     state.near ? `near:${state.near}` : '',
+    state.folder ? `folder:${state.folder}` : '',
   ].join('|');
 
   if (shape !== chipsShape) {
@@ -1202,6 +1235,11 @@ function renderChips(): void {
         ${icons.tag}<span>${esc(state.genre)}</span>${icons.close}
       </button>`;
     }
+    if (state.folder) {
+      html += `<button class="chip active" data-clear-folder title="Back to all folders">
+        ${icons.folder}<span>${esc(state.folder)}</span>${icons.close}
+      </button>`;
+    }
     // Television drills twice, so it gets a chip per level: the show, and
     // the season within it. Each goes back one level rather than all the
     // way out, which is what a trail of them means.
@@ -1226,7 +1264,7 @@ function renderChips(): void {
     held: lastMatching,
     totals: lastCounts,
   });
-  const drilled = state.artist !== '' || state.genre !== '' || state.series !== '' || state.near !== '';
+  const drilled = state.artist !== '' || state.genre !== '' || state.series !== '' || state.near !== '' || state.folder !== '';
   for (const c of list) {
     const el = chipsNav.querySelector<HTMLElement>(`.chip[data-mode="${c.mode}"]`);
     if (!el) continue;
@@ -1246,6 +1284,11 @@ function renderChips(): void {
 chipsNav.addEventListener('click', (ev) => {
   const chip = (ev.target as HTMLElement).closest<HTMLElement>('.chip');
   if (!chip) return;
+  if (chip.hasAttribute('data-clear-folder')) {
+    state.folder = '';
+    enterView(state.mode);
+    return;
+  }
   if (chip.hasAttribute('data-clear-artist')) {
     state.artist = '';
     setModeForce('artists');
@@ -1283,7 +1326,7 @@ chipsNav.addEventListener('click', (ev) => {
     return;
   }
   const mode = chip.dataset.mode as Mode;
-  if (state.artist || state.genre || state.series || state.near) {
+  if (state.artist || state.genre || state.series || state.near || state.folder) {
     // Leaving the drill-down for any other view drops its filter. Forced,
     // because stepping out of one into the very chip it was reached from is
     // not a change of mode and would otherwise be ignored.
@@ -1322,6 +1365,7 @@ function enterView(mode: Mode): void {
  * them all leaves them here.
  */
 function leaveDrillDowns(): void {
+  state.folder = '';
   state.artist = '';
   state.genre = '';
   state.series = '';
@@ -1395,6 +1439,8 @@ function showArtist(name: string): void {
 
 /** Refill the sort select for the current view, keeping the key if it fits. */
 function renderSortOptions(): void {
+  groupWrap.hidden = !supportsFolders(state.mode);
+  groupSelect.value = state.grouped ? 'folders' : 'flat';
   const opts = sortOptions(state.mode, state, shownContent());
   // A key that does not survive the change of view falls back to the one
   // that view opens on, rather than being sent to a server that would
@@ -1439,6 +1485,7 @@ function queryState(): QueryState {
     played: state.mode === 'popular',
     series: state.series,
     season: state.season,
+    folder: state.folder,
     q: state.q,
     sort: state.sort,
     desc: state.desc,
@@ -1464,6 +1511,8 @@ let shownView: ViewSource | null = null;
  */
 function adapterFor(): GridAdapter<Cell> {
   switch (viewSource(state)) {
+    case 'folders':
+      return folderAdapter;
     case 'albums':
       return albumAdapter;
     case 'artists':
@@ -1592,6 +1641,12 @@ async function queueAll(): Promise<void> {
 queueAllBtn.innerHTML = icons.queueAdd;
 queueAllBtn.addEventListener('click', () => void queueAll());
 
+groupSelect.addEventListener('change', () => {
+  state.grouped = groupSelect.value === 'folders';
+  state.folder = '';
+  enterView(state.mode);
+});
+
 sortDirBtn.addEventListener('click', () => {
   state.desc = !state.desc;
   renderSortDir();
@@ -1633,11 +1688,12 @@ function emptyViewHtml(): string {
   if (state.near) {
     return `<div class="empty">${icons.radio}<h3>Nothing sounds like this yet</h3><p>The analysis has not read enough of the library to say.</p></div>`;
   }
-  return `<div class="empty">${icons.search}<h3>No matches</h3><p>Nothing found${state.q ? ` for “${esc(state.q)}”` : ''} in ${searchedWhere()}.</p></div>`;
+  return `<div class="empty">${icons.search}<h3>No matches</h3><p>Nothing found${state.q ? ` for “${esc(state.q)}”` : ''} in ${esc(searchedWhere())}.</p></div>`;
 }
 
 /** Where the empty answer was looked for, as prose rather than a mode key. */
 function searchedWhere(): string {
+  if (state.folder) return `folder “${state.folder}”`;
   switch (state.mode) {
     case 'all':
       return 'the library';
@@ -1661,6 +1717,8 @@ function searchedWhere(): string {
 /** How many things the view on screen holds, and what to call them. */
 function viewCount(): { total: number; noun: string } {
   switch (viewSource(state)) {
+    case 'folders':
+      return { total: foldersSource.count(), noun: 'folders' };
     case 'albums':
       // One source, two views over it: the shelf names its own noun.
       return { total: albumsSource.count(), noun: state.mode === 'audiobooks' ? 'audiobooks' : 'albums' };
@@ -1724,6 +1782,8 @@ function itemsOnScreen(): boolean {
 /** The grouped source the grid is drawing from, or null for the listing. */
 function collectionOnScreen(): { load(q: QueryState): void; reset(): void; error: Error | null } | null {
   switch (viewSource(state)) {
+    case 'folders':
+      return foldersSource;
     case 'albums':
       return albumsSource;
     case 'artists':
@@ -1777,6 +1837,7 @@ bindCollection(albumsSource, () => viewSource(state) === 'albums');
 bindCollection(artistsSource, () => viewSource(state) === 'artists');
 bindCollection(genresSource, () => viewSource(state) === 'genres');
 bindCollection(seriesSource, () => viewSource(state) === 'series');
+bindCollection(foldersSource, () => viewSource(state) === 'folders');
 
 // Only the relayout: the bar appearing or disappearing changes the grid's
 // height. The album sheet watches the player itself, and must not drag a
@@ -1792,6 +1853,7 @@ audioPlayer.onTrackChange = () => {
  * does; failing both it is the library itself.
  */
 function shareLabel(): string {
+  if (state.folder) return state.folder;
   if (state.series) return state.season ? `${state.series} season ${state.season}` : state.series;
   if (state.artist) return state.artist;
   if (state.genre) return state.genre;
@@ -1815,6 +1877,8 @@ function writeHash(push = false): void {
   // default on a music face (that is 'artists'), so leaving it out there
   // made "All" unaddressable and Back to it land on the artists.
   if (state.mode !== defaultMode(shownContent())) p.set('m', state.mode);
+  if (supportsFolders(state.mode) && state.grouped) p.set('group', 'folders');
+  if (state.folder) p.set('folder', state.folder);
   if (state.artist) p.set('ar', state.artist);
   if (state.genre) p.set('g', state.genre);
   if (state.series) p.set('tv', state.series);
@@ -1843,6 +1907,8 @@ function readHash(): void {
   // the albums, opened on the one that shows only films. It opens the
   // listing rather than an empty screen with no way back.
   state.mode = fallbackMode(asked, shownContent());
+  state.grouped = supportsFolders(state.mode) && p.get('group') === 'folders';
+  state.folder = state.grouped ? p.get('folder') ?? '' : '';
   state.artist = p.get('ar') ?? '';
   state.genre = p.get('g') ?? '';
   state.series = p.get('tv') ?? '';

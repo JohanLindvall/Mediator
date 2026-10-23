@@ -1,5 +1,11 @@
 # The grid and its sources
 
+- `FoldersSource` uses the same collection card renderer and thumbnail queue
+  as albums. Entering a folder switches to `LibrarySource` with `folder` in
+  the query, keeping paging, video/image navigation and music queue requests
+  scoped to that group. Changing the folder clears held item pages; changing
+  search within it keeps them until the new answer arrives. Folder cards use
+  the representative file's thumbnail timestamp, with SVGs rendered directly.
 - `grid.ts`: windowed virtual grid over a `GridAdapter` (`main.ts` swaps the
   items view's `LibrarySource` — 200-item pages keyed by a query generation
   counter — and whole album/artist lists). It asks only `need(a, b)` for the

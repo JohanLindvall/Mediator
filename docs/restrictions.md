@@ -61,3 +61,10 @@ library under restricted chips, invisibly.
 
 `library.KindSet` carries the face into a query as `Query.Kinds` (not
 `Query.Kind`, the viewer's chosen view), a value type to key the cache.
+
+Leaf-folder groups (`GET /api/folders`) use `groupedView` and the ordinary
+listing query's restrictions **before** aggregating. Equal leaf names may
+span allowed and excluded paths; only permitted matching members contribute
+to counts, sizes or the representative thumbnail. `folder=` drill-downs,
+music queues and exports retain both restrictions. Their cache keys and ETags
+include the same face and paths as other listings.

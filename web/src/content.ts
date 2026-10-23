@@ -25,6 +25,11 @@ export type ViewMode =
   | 'audiobooks'
   | 'series';
 
+/** File views can optionally collect their items by leaf folder name. */
+export function supportsFolders(mode: string): boolean {
+  return ['all', 'video', 'image', 'audio', 'started', 'watched', 'popular'].includes(mode);
+}
+
 /**
  * Whether a view is worth offering.
  *

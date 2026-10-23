@@ -116,6 +116,19 @@ export interface Album {
   formats?: string[];
 }
 
+export interface Folder {
+  id: string;
+  name: string;
+  items: number;
+  size: number;
+  mtime: number;
+  added?: number;
+  duration?: number;
+  coverId: string;
+  coverTime: number;
+  coverSvg?: boolean;
+}
+
 export interface DeleteRequest {
   kind: string;
   id: string;
@@ -232,6 +245,7 @@ export interface ListQueryParams {
   genre?: string;
   series?: string;
   season?: string;
+  folder?: string;
   sort?: string;
   order?: string;
   seed?: number;
@@ -243,6 +257,12 @@ export interface ListQueryParams {
 
 export interface AlbumsResponse {
   albums: Album[];
+  version: number;
+  matching?: Counts;
+}
+
+export interface FoldersResponse {
+  folders: Folder[];
   version: number;
   matching?: Counts;
 }

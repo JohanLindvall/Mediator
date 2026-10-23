@@ -101,8 +101,9 @@ The library (`internal/library`, `internal/blob`, `internal/state`):
 - [enrichment](docs/enrichment.md): tags, lengths and technical shape read
   from the files, probes and their verdicts (`enrich.go`, `shape.go`,
   `mp4box.go`, `duration.go`).
-- [collections](docs/collections.md): releases, discs, performers and
-  genres, and what their cards show (`albums.go`, `artists.go`, `genres.go`,
+- [collections](docs/collections.md): releases, discs, performers, genres and
+  leaf-folder groups, and what their cards show (`albums.go`, `artists.go`,
+  `genres.go`, `folders.go`,
   `web/src/format.ts`).
 - [television](docs/television.md): shows and seasons read from names,
   intros and credits found in the sound (`series.go`, `fingerprint.go`,

@@ -274,6 +274,9 @@ type Query struct {
 	// library is not a question anybody asks.
 	Series string
 	Season int
+	// Folder is the displayed name of the immediate containing folder.
+	// Equal leaf names under different parents select the same group.
+	Folder string
 	// Paths restricts the caller to what lives under certain directories
 	// (paths.go). A value type, so it sits in the listing cache's key —
 	// without that, one caller's restricted answer would be served to the
@@ -418,6 +421,7 @@ type Library struct {
 	artists perVersion[Artist]
 	genres  perVersion[Genre]
 	series  perVersion[Series]
+	folders folderCache
 
 	// streams counts media responses currently being written. Background
 	// work (thumbnail generation, tag enrichment) throttles itself while
@@ -1304,6 +1308,7 @@ type queryResult struct {
 	played     bool
 	series     string
 	season     int
+	folder     string
 	paths      PathFilter
 	search     string
 	sort       string
@@ -1343,7 +1348,7 @@ func (l *Library) cachedQuery(q Query, version int64) *queryResult {
 		(q.Watch != "" && res.watchVer < l.watchVersion()) ||
 		res.kind != q.Kind || res.kinds != q.Kinds || res.watch != q.Watch ||
 		res.played != q.Played || res.series != q.Series || res.season != q.Season ||
-		res.paths != q.Paths || res.search != q.Search ||
+		res.folder != q.Folder || res.paths != q.Paths || res.search != q.Search ||
 		res.sort != q.Sort || res.seed != q.Seed || res.desc != q.Desc ||
 		res.showHidden != q.ShowHidden || res.favourites != q.FavouritesOnly {
 		res = l.buildQuery(q, version)
@@ -1539,6 +1544,9 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		if !allowed(it.Path) {
 			continue
 		}
+		if q.Folder != "" && leafFolder(it) != q.Folder {
+			continue
+		}
 		if !l.keepFlagged(it.ID, q.ShowHidden, q.FavouritesOnly) {
 			continue
 		}
@@ -1681,7 +1689,7 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	return &queryResult{
 		version: version, watchVer: watchVer,
 		kind: q.Kind, kinds: q.Kinds, watch: q.Watch, played: q.Played,
-		series: q.Series, season: q.Season, paths: q.Paths, search: q.Search,
+		series: q.Series, season: q.Season, folder: q.Folder, paths: q.Paths, search: q.Search,
 		sort: q.Sort, seed: q.Seed, desc: q.Desc,
 		showHidden: q.ShowHidden, favourites: q.FavouritesOnly,
 		items: items,

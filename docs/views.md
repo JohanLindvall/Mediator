@@ -2,6 +2,14 @@
 
 - **A music-only face opens on the artists** (`defaultMode`), its file listing
   being tracks in disk order; a link naming a view still opens that view.
+- **File listings default to Flat**, with a **Folders** option beside sort
+  (`supportsFolders`): All, Videos, Images, Music, In progress, Watched and
+  Popular. Folder cards open the ordinary item grid with an exact leaf-name
+  filter; a folder chip returns to the groups. Search survives both steps.
+  The hash carries `group=folders` and `folder=<name>`, so Back, reload and
+  shortlinks restore the view. Existing collection views hide this control.
+  Folder cards offer aggregate sort keys; their contents offer file keys.
+  The toolbar wraps when its controls cannot fit on one line.
 - **Resolution and bitrate are separate orders** (`pixels`, `bitrate`; videos
   only). Resolution sorts by **area** (one dimension misranks portrait clips; a
   turned picture ties its twin); bitrate is file size over playing time (no
@@ -19,9 +27,9 @@
   episode whatever list led there. An address naming a sort or direction keeps
   it; after that the direction is the viewer's. Every way into a view (chip,
   drill-down, brand, address) goes through `enterView`. One `bindCollection`
-  wires the four grouped sources and one `collectionOnScreen` says which is
+  wires the five grouped sources and one `collectionOnScreen` says which is
   showing, for both `reloadGroupedView` and the guard keeping a listing's stale
-  counts out of a grouped view. The five collection cards are one
+  counts out of a grouped view. The six collection cards are one
   `renderCollectionCell`.
 - UI state (mode/search/sort/artist) is the URL hash (`readHash`/`writeHash`,
   `main.ts`): a view change is **pushed**, a keystroke or sort **replaces**

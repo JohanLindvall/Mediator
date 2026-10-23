@@ -29,6 +29,8 @@ type ListQueryParams struct {
 	// it — which is what a season card opens.
 	Series string `json:"series,omitempty"`
 	Season string `json:"season,omitempty"` // with Series: one season of that show
+	// Folder selects all files whose immediate folder has this displayed name.
+	Folder string `json:"folder,omitempty"`
 	// Sort is the view's own key. Items: "name" | "mtime" | "size" | "added" |
 	// "duration" | "popular" | "pixels" | "bitrate" | "tempo" | "episode" |
 	// "random";
@@ -44,6 +46,13 @@ type ListQueryParams struct {
 	Fav    string `json:"fav,omitempty"`    // "1": only items marked favourite
 	Offset int    `json:"offset,omitempty"`
 	Limit  int    `json:"limit,omitempty"`
+}
+
+// FoldersResponse is the body of GET /api/folders.
+type FoldersResponse struct {
+	Folders  []*library.Folder `json:"folders"`
+	Version  int64             `json:"version"`
+	Matching *library.Counts   `json:"matching,omitempty"`
 }
 
 // AlbumsResponse is the body of GET /api/albums.

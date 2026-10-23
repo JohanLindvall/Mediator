@@ -947,7 +947,24 @@ an item unwatched clears its resume point while preserving likes and play histor
 
 ## Search / filter / sort
 
-the filter chips count what you are looking
+File views open **Flat**. Choose **Folders** beside the sort control to group
+videos, images or the Music file listing by each file's immediate containing
+folder. Equal displayed folder names merge across parents and indexed roots;
+names differing in case remain separate. A file directly in an indexed root
+uses that root's name. Nested folders keep their own names, and music's disc
+folders are not folded into releases in this view. Albums, Artists, Genres,
+Audiobooks and Series keep their existing grouping.
+
+Folder cards show thumbnails and the number of matching items. Search still
+matches filenames, tags and paths: a match in a file brings its folder into
+view, and opening the card keeps the search and shows those matching files
+in the usual grid. Video playback, image browsing and music queues stay
+within that listing. The folder chip returns to the groups; **Flat** returns
+to individual files. Grouping and the open folder travel in the address,
+including shared links and browser Back. Folder cards can sort by name,
+modified or added date, item count, size or total playing time.
+
+The filter chips count what you are looking
 at, not what the library holds: type a word and each chip says how many
 videos, images, tracks, albums and artists answer to it, and inside one
 performer's releases they count only theirs. Word-based search that

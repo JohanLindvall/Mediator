@@ -1,4 +1,32 @@
-# Releases, performers and genres
+# Releases, performers, genres and folders
+
+## Leaf folder groups
+
+`folders.go` groups the ordinary file selection by the displayed name of
+its **immediate** containing directory. Equal names merge across roots and
+parents; comparison is exact after the existing filename decoding, including
+case. There is no recursive roll-up and no music disc folding. Root-level
+files use the root's own name. Archived members use their innermost member
+directory, or the container's parent when the member has no directory.
+
+`SearchFolders` applies the listing's kind, face, path, search, watch, play
+and owner filters **before** grouping, using `buildQuery`. The cards count
+matching files, sum their sizes, take the newest valid modification and
+arrival times, and show total duration only when every member has one. A
+stable member ID selects the representative thumbnail from that same
+permitted selection; its own mtime versions the image, and SVGs use their
+native stream route. Folder-name search hits rank before member hits using
+the existing word-ranking rule.
+
+The result is cached by the full selection and group version, with the watch
+version for watch filters, under its own lock. It never shares the item
+listing's cache, whose version also moves with byte growth. A cache miss
+copies the aggregate fields under the index read lock; cached cards are
+immutable. As with albums, size and mtime aggregates can lag byte growth
+until a group change. `Query.Folder` opens a group through the ordinary paged
+listing and is part of that cache's key, so viewers and music queues retain
+the folder selection. Groups are views across paths and offer no directory
+deletion action.
 
 ## Grouping
 

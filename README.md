@@ -49,7 +49,7 @@ See [Development](#development).
 | Listen to music | Albums, artists, genres, playlists, a queue, shuffle, media keys, similar tracks and radio from audio analysis. |
 | Browse pictures | Full-resolution viewing, zoom, rotation, fullscreen and touch navigation. |
 | Open archives and discs | Browse supported RAR/ZIP sets and DVD images without manually extracting them. |
-| Organize a large library | Live directory watching, search, filters, favourites, watched state and a virtual grid. |
+| Organize a large library | Live directory watching, search, optional grouping by leaf folder name, filters, favourites, watched state and a virtual grid. |
 | Keep deployment simple | One binary, an embedded web app and a local database; Docker includes ffmpeg for conversion and analysis. |
 
 [Explore the feature guide](docs/features.md) for formats, controls and details.
@@ -216,7 +216,8 @@ The server uses JSON for metadata and HTTP Range requests for media. The
 
 | Endpoint                                  | Description                              |
 | ----------------------------------------- | ---------------------------------------- |
-| `GET /api/library?kind&q&sort&order&offset&limit` | Paged, filtered, sorted listing; `sort=tempo` orders music by the tempo read from the sound (each track's `bpm`), those with none last  |
+| `GET /api/library?kind&q&folder&sort&order&offset&limit` | Paged, filtered, sorted listing; `folder` selects the exact displayed leaf folder name across all parents and roots. `sort=tempo` orders music by the tempo read from the sound (each track's `bpm`), those with none last |
+| `GET /api/folders?kind&q&sort&order` | File groups by leaf folder name, merging equal names; each carries an item count and representative thumbnail ID. Search, `watch`, `played`, `hidden` and `fav` filter members before grouping; sorts: `name`, `mtime`, `added`, `items`, `size`, `duration` |
 | `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead. Each carries `path` (where the release is kept, as the listing names a file) and `formats` (what its tracks are, commonest first) |
 | `GET /api/artists?q&sort&order`           | Artists, grouped from album tags         |
 | `GET /api/genres?q&sort&order`            | Genres, grouped from album tags          |

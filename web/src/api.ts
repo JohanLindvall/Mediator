@@ -16,6 +16,7 @@ import type {
   PrefsResponse,
   PrefsUpdate,
   AlbumsResponse,
+  FoldersResponse,
   ArtistsResponse,
   GenresResponse,
   SeriesResponse,
@@ -104,6 +105,7 @@ export type ListFilters = Pick<
   | 'played'
   | 'series'
   | 'season'
+  | 'folder'
   | 'q'
   | 'sort'
   | 'order'
@@ -119,6 +121,7 @@ function listParams(q: ListFilters): URLSearchParams {
   if (q.played) p.set('played', q.played);
   if (q.series) p.set('series', q.series);
   if (q.season) p.set('season', q.season);
+  if (q.folder) p.set('folder', q.folder);
   if (q.q) p.set('q', q.q);
   if (q.sort) p.set('sort', q.sort);
   p.set('order', q.order ?? 'desc');
@@ -135,6 +138,10 @@ export function listMedia(q: ListQueryParams, signal?: AbortSignal): Promise<Res
   p.set('offset', String(q.offset ?? 0));
   p.set('limit', String(q.limit ?? 200));
   return getJSON<Result>(`/api/library?${p}`, signal);
+}
+
+export function listFolders(q: ListFilters, signal?: AbortSignal): Promise<FoldersResponse> {
+  return getJSON<FoldersResponse>(`/api/folders?${listParams(q)}`, signal);
 }
 
 /**

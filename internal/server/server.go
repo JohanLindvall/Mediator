@@ -160,6 +160,7 @@ func New(lib *library.Library, st *state.Store, thumbs *Thumbnailer, remux *Remu
 	}
 	s.mux.HandleFunc("GET /api/info", s.handleInfo)
 	s.mux.HandleFunc("GET /api/library", s.handleList)
+	s.mux.HandleFunc("GET /api/folders", s.handleFolders)
 	s.mux.HandleFunc("GET /api/playlist.m3u", s.handlePlaylist)
 	s.mux.HandleFunc("GET /api/albums", s.handleAlbums)
 	s.mux.HandleFunc("GET /api/albums/{id}", s.handleAlbum)
@@ -270,6 +271,7 @@ func listQuery(q url.Values, c content, paths library.PathFilter) library.Query 
 		Played: q.Get("played") == "1",
 		Series: q.Get("series"),
 		Season: seasonNumber(q.Get("season")),
+		Folder: q.Get("folder"),
 		// What this caller may draw from at all. A kind it asked for but is
 		// not allowed simply matches nothing, which is the same answer as an
 		// empty library and needs no special case.
@@ -742,6 +744,25 @@ func (s *Server) handleAlbums(w http.ResponseWriter, r *http.Request) {
 		func() []*library.Album { return s.lib.SearchAlbums(albumQuery(v.q, v.paths)) },
 		countsOfAlbums, v.matching(s.lib))
 	writeJSON(w, AlbumsResponse{Albums: albums, Version: v.version, Matching: matching})
+}
+
+// handleFolders groups the file listing after its visibility and search
+// filters, so merged names never reveal another caller's files or artwork.
+func (s *Server) handleFolders(w http.ResponseWriter, r *http.Request) {
+	v, done := s.groupedView(w, r)
+	if done {
+		return
+	}
+	q := listQuery(v.q, v.c, v.paths)
+	folders := s.lib.SearchFolders(q)
+	cq := library.CountQuery{Search: q.Search, Paths: q.Paths, Kinds: q.Kinds,
+		ShowHidden: q.ShowHidden, Favourites: q.FavouritesOnly}
+	var matching *library.Counts
+	if cq != (library.CountQuery{}) {
+		m := v.c.mask(s.lib.CountsFor(cq))
+		matching = &m
+	}
+	writeJSON(w, FoldersResponse{Folders: folders, Version: v.version, Matching: matching})
 }
 
 // handleSeries lists the shows. Television is video, so a face that shows no

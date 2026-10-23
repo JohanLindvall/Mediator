@@ -10,6 +10,7 @@
 import type { Item, Kind } from './types.gen';
 
 import type { ListFilters } from './api';
+import { supportsFolders } from './content.ts';
 
 export interface QueryState {
   kind: Kind | '';
@@ -39,6 +40,8 @@ export interface QueryState {
   near?: string;
   /** The audiobook shelf rather than the records. */
   audiobooks?: boolean;
+  /** Files from every directory with this exact displayed leaf name. */
+  folder?: string;
 }
 
 /**
@@ -62,6 +65,7 @@ export function sameSubject(a: QueryState, b: QueryState): boolean {
   if ((a.played ?? false) !== (b.played ?? false)) return false;
   if ((a.series ?? '') !== (b.series ?? '')) return false;
   if ((a.season ?? 0) !== (b.season ?? 0)) return false;
+  if ((a.folder ?? '') !== (b.folder ?? '')) return false;
   return a.kind === b.kind || a.kind === '' || b.kind === '';
 }
 
@@ -139,6 +143,7 @@ export function listFilters(q: QueryState): ListFilters {
     played: q.played ? '1' : undefined,
     series: q.series || undefined,
     season: q.season ? String(q.season) : undefined,
+    folder: q.folder || undefined,
     q: q.q || undefined,
     sort: q.sort,
     order: q.desc ? 'desc' : 'asc',
@@ -212,7 +217,7 @@ export function damaged(it: Item): boolean {
 }
 
 /** Which source fills the grid: one name per source, not per view. */
-export type ViewSource = 'items' | 'albums' | 'artists' | 'genres' | 'series';
+export type ViewSource = 'items' | 'albums' | 'artists' | 'genres' | 'series' | 'folders';
 
 /**
  * Which source the grid draws a view from.
@@ -229,7 +234,7 @@ export type ViewSource = 'items' | 'albums' | 'artists' | 'genres' | 'series';
  * their own would blank them for good, nothing ever arriving to fill them.
  * The audiobook shelf is the album view over the other releases.
  */
-export function viewSource(s: { mode: string; series?: string; season?: number }): ViewSource {
+export function viewSource(s: { mode: string; series?: string; season?: number; grouped?: boolean; folder?: string }): ViewSource {
   switch (s.mode) {
     case 'albums':
     case 'audiobooks':
@@ -243,7 +248,7 @@ export function viewSource(s: { mode: string; series?: string; season?: number }
       // shows and one show's seasons are both the series source's.
       return s.season ? 'items' : 'series';
     default:
-      return 'items';
+      return supportsFolders(s.mode) && s.grouped && !s.folder ? 'folders' : 'items';
   }
 }
 

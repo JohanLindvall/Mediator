@@ -13,7 +13,7 @@
  * of it, and it has been wrong — a performer's releases opened by name for as
  * long as the fallback was simply the first row of the table below.
  */
-import { listsTracks, type ViewMode } from './content.ts';
+import { listsTracks, supportsFolders, type ViewMode } from './content.ts';
 
 /** The narrowing a view stands in, which changes what it lists. */
 export interface Narrowing {
@@ -23,6 +23,8 @@ export interface Narrowing {
   season?: number;
   /** Listing what sounds like one thing: the order is the resemblance. */
   near?: string;
+  grouped?: boolean;
+  folder?: string;
 }
 
 export function sortOptions(
@@ -30,6 +32,16 @@ export function sortOptions(
   where: Narrowing = {},
   content: string[] | null = null,
 ): Array<[string, string]> {
+  if (supportsFolders(mode) && where.grouped && !where.folder) {
+    return [
+      ['mtime', 'Modified'],
+      ['name', 'Name'],
+      ['items', 'Items'],
+      ['size', 'Size'],
+      ['added', 'Added'],
+      ['duration', 'Length'],
+    ];
+  }
   // What sounds like one thing is listed nearest first, and nothing else
   // would be an order worth the name.
   if (where.near && (mode === 'albums' || mode === 'artists')) return [['similarity', 'Similarity']];
@@ -137,6 +149,7 @@ export function sortOptions(
  * the default, oldest first for a viewer who has turned it round.
  */
 export function openingSort(mode: ViewMode, where: Narrowing = {}): string {
+  if (supportsFolders(mode) && where.grouped && !where.folder) return 'mtime';
   if (mode === 'popular') return 'popular';
   if (mode === 'albums' && where.artist) return 'year';
   return sortOptions(mode, where)[0]![0];

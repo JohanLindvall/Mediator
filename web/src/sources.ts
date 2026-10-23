@@ -9,12 +9,14 @@ import {
   listAlbums,
   listArtists,
   listGenres,
+  listFolders,
   listMedia,
   listSeries,
   type Album,
   type Artist,
   type Counts,
   type Genre,
+  type Folder,
   type Item,
   type Series,
 } from './api.ts';
@@ -296,7 +298,7 @@ export class LibrarySource {
 }
 
 /**
- * One grouped view, fetched whole: albums, artists, genres or shows. None of
+ * One grouped view, fetched whole: albums, artists, genres, folders or shows. None of
  * them approaches the size of the file listing — a library of two hundred
  * thousand files groups into a few thousand releases — so a single request
  * answers, and the grid asks for ranges of the array rather than paging.
@@ -433,6 +435,17 @@ export class AlbumsSource extends CollectionSource<Album> {
           order: q.desc ? 'desc' : 'asc',
         }, signal).then((res) => ({ items: res.albums, matching: res.matching })),
       (q) => JSON.stringify([q.artist ?? '', q.genre ?? '', q.near ?? '', !!q.audiobooks]),
+    );
+  }
+}
+
+export class FoldersSource extends CollectionSource<Folder> {
+  constructor() {
+    super(
+      (q, signal) => listFolders(listFilters(q), signal).then(
+        (res) => ({ items: res.folders, matching: res.matching }),
+      ),
+      (q) => JSON.stringify([q.kind, q.watch ?? '', !!q.played]),
     );
   }
 }

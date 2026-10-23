@@ -36,7 +36,7 @@ test('every other view opens on the first thing it offers', () => {
 
 test('a view never opens on a key it does not offer', () => {
   for (const mode of modes) {
-    for (const where of [{}, { artist: 'Harbour Lights' }, { series: 'Harbour Lights' }, { near: 'abc' }]) {
+    for (const where of [{}, { artist: 'Harbour Lights' }, { series: 'Harbour Lights' }, { near: 'abc' }, { grouped: true }, { grouped: true, folder: 'Shared' }]) {
       const key = openingSort(mode, where);
       assert.ok(
         sortOptions(mode, where).some(([v]) => v === key),
@@ -44,6 +44,15 @@ test('a view never opens on a key it does not offer', () => {
       );
     }
   }
+});
+
+test('folder cards offer aggregate sorts and opened folders offer file sorts', () => {
+  const grouped = { grouped: true };
+  assert.ok(sortOptions('video', grouped).some(([key]) => key === 'items'));
+  assert.ok(!sortOptions('video', grouped).some(([key]) => key === 'pixels'));
+  assert.deepEqual(sortOptions('video', { ...grouped, folder: 'Shared' }), sortOptions('video'));
+  assert.deepEqual(sortOptions('audio', { ...grouped, folder: 'Shared' }), sortOptions('audio'));
+  assert.deepEqual(sortOptions('albums', grouped), sortOptions('albums'));
 });
 
 test('inside a show there is one order, and it is the episodes', () => {

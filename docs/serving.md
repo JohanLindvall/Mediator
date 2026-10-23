@@ -24,6 +24,10 @@ expose the library to the LAN.
 - JSON mutations go through `decodeJSON`: a bounded, single, non-null object
   is read completely before the decoded value is published. Reading a
   response stays separate from it.
+- `GET /api/folders` serves leaf-name groups through the ordinary collection
+  ETag policy. Opening one uses `folder=` on `/api/library`, `/api/tracks`
+  or the m3u export; `listQuery` preserves this exact displayed name through
+  each route ([collections](collections.md)).
 - Reading a request is bounded to 30 s and an idle connection to two minutes;
   a response has no write timeout, deliberately, as a stream lasts a film.
 - Stream responses carry a CSP sandbox: an SVG or a misnamed HTML file is an

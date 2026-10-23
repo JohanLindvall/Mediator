@@ -130,6 +130,7 @@ test("the listing's words for a query: only what is set, and the direction alway
     played: undefined,
     series: undefined,
     season: undefined,
+    folder: undefined,
     q: undefined,
     sort: 'mtime',
     order: 'desc',
@@ -142,11 +143,28 @@ test("the listing's words for a query: only what is set, and the direction alway
       played: '1',
       series: 'Harbour Lights',
       season: '2',
+      folder: undefined,
       q: 'storm',
       sort: 'name',
       order: 'asc',
     },
   );
+});
+
+test('folder grouping is optional in file views and drills into paged items', () => {
+  for (const mode of ['all', 'video', 'image', 'audio', 'started', 'watched', 'popular']) {
+    assert.equal(viewSource({ mode }), 'items');
+    assert.equal(viewSource({ mode, grouped: true }), 'folders');
+    assert.equal(viewSource({ mode, grouped: true, folder: 'Shared' }), 'items');
+    assert.deepEqual(arrivalPlan('items', 'folders', true, false), { reset: true, load: true });
+  }
+  for (const mode of ['albums', 'artists', 'genres', 'audiobooks', 'series']) {
+    assert.equal(viewSource({ mode, grouped: true }), viewSource({ mode }));
+  }
+  assert.ok(!sameSubject(q(), q({ folder: 'Shared' })));
+  assert.ok(!sameSubject(q({ folder: 'Shared' }), q({ folder: 'Other' })));
+  assert.ok(sameSubject(q({ folder: 'Shared' }), q({ folder: 'Shared', q: 'song' })));
+  assert.equal(listFilters(q({ folder: 'Leaf & + #' })).folder, 'Leaf & + #');
 });
 
 test('countKey and narrowed agree on every narrowing, "like this" included', () => {
