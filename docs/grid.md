@@ -12,8 +12,8 @@
   Their hover summarizes matching items, total size and known playing time,
   followed by the latest member modification and library arrival dates.
   Unknown duration and dates are omitted. The tooltip uses the existing
-  folder response without fetching on hover; its fields are part of the cell
-  key, so refreshed aggregates update the tooltip too.
+  folder response without fetching on hover; refreshed aggregates update it
+  in place, keeping the loaded thumbnail.
 - `grid.ts`: windowed virtual grid over a `GridAdapter` (`main.ts` swaps the
   items view's `LibrarySource` — 200-item pages keyed by a query generation
   counter — and whole album/artist lists). It asks only `need(a, b)` for the
@@ -34,9 +34,18 @@
   counts the whole file — all that is known without reading the stream).
   Absent parts drop with their separators; codec names as written ("H.264"),
   unknown ones verbatim.
-- Grid cells are keyed by id **plus mtime and size**, thumbnail URLs carry
+- Item cells are keyed by id **plus mtime and size**, thumbnail URLs carry
   `v=<mtime>`, so a growing file's cell retries a failed thumbnail and escapes
   the immutable cache. Never key a cell by id alone.
+- **Play counts update without replacing artwork**: item plays and verdicts
+  live in the separately refreshed overlays, outside `itemCellKey`'s body
+  key. All collection cards use `collectioncell.ts`: only the cover URL and
+  its controls key the outer markup; badges, names, captions and hover text
+  update in place. Unchanged caption markup keeps its links mounted too.
+  The normal change-event refetch still updates counts and popularity order;
+  neither a loaded cover nor an in-flight thumbnail is restarted for another
+  play. A changed cover URL (including its mtime) or recycled cell still
+  loads fresh artwork. Renderer tests pin both paths.
 - `LibrarySource` keeps its previous pages and total until refetched ones
   land, on `invalidate` and `setQuery` alike (`holdOver`), so typing never
   blanks the grid and common items keep their cells; total 0 is not held

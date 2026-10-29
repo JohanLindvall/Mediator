@@ -94,8 +94,8 @@ deletion action.
   tested): the folder (above folded discs) or playlist file via `displayPath`;
   formats commonest first (`formatOf`: probed codec, else extension; track
   hovers spell extensions via `codecName` too); a rate only with a running
-  time. Set on the cell root and cleared every render (a key change redraws in
-  place; `scrubCell` runs only on recycling); the name element keeps its own
+  time. Updated or cleared on the cell root every render without replacing
+  its artwork (`scrubCell` runs only on recycling); the name element keeps its own
   tooltip; the sheet reuses the text. The lines are never joined and re-split
   on a separator (folder names contain them). **A confined caller is never
   told where an out-of-view playlist lives** (`shownTo`, in `AllowedAlbums`
@@ -105,8 +105,8 @@ deletion action.
   mostly true over empty, the full line in `title`; a performer's adds tracks,
   running time, the span of dated releases and the majority genre
   (`Artist.Genre`, `FromYear`, `ToYear` from `buildArtists`, ties broken by
-  name so builds agree). For music, **tags are part of the cell key**,
-  enrichment adding them later.
+  name so builds agree). Track tiles include tags in their cell key;
+  collection captions update in place as enrichment adds them.
 - **A year in a release's name moves to its year** (`liftYear`): "2018 - Some
   Release (Single)" shows without it and is dated by it unless the tags give a
   year (tags outrank a typed folder); a bare-year name stays. `splitYear`

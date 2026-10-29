@@ -32,8 +32,9 @@
   drill-down, brand, address) goes through `enterView`. One `bindCollection`
   wires the five grouped sources and one `collectionOnScreen` says which is
   showing, for both `reloadGroupedView` and the guard keeping a listing's stale
-  counts out of a grouped view. The six collection cards are one
-  `renderCollectionCell`.
+  counts out of a grouped view. The six collection cards share
+  `renderCollectionCell` (`collectioncell.ts`), which updates their facts
+  without replacing unchanged artwork.
 - UI state (mode/search/sort/artist) is the URL hash (`readHash`/`writeHash`,
   `main.ts`): a view change is **pushed**, a keystroke or sort **replaces**
   (Back leaves a drill-down, not the app; a search leaves no trail); arriving

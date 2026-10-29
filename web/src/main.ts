@@ -33,6 +33,7 @@ import { icons, kindIcon } from './icons';
 import { openLightbox } from './lightbox';
 import { openPrefs } from './prefs';
 import { itemCellKey } from './cells';
+import { renderCollectionCell as drawCollectionCell, type CollectionCard } from './collectioncell';
 import { previewLeave, watchPreview } from './preview';
 import { trackViewport } from './viewport';
 import { openAlbumPanel, reloadAlbumPanel, type AlbumPanelOpts } from './albumpanel';
@@ -313,8 +314,8 @@ function renderItemCell(el: HTMLElement, item: Item | undefined): void {
   // What is in the key, and why, is with the reading of it in cells.ts.
   const key = itemCellKey(item);
   if (el.dataset.key === key) {
-    // Same item, same content: only refresh the thumb overlays (duration
-    // arrives via enrichment, progress changes while watching).
+    // Same item, same content: only refresh the thumb overlays (plays,
+    // verdicts, duration and watch progress), keeping the loaded image.
     const holder = el.querySelector<HTMLElement>('.thumb-overlays');
     if (holder) holder.innerHTML = overlaysHtml(item);
     return;
@@ -394,69 +395,14 @@ function years(from?: number, to?: number): string {
   return `${from}\u2013${to}`;
 }
 
-/**
- * What every collection card is: a cover with a fallback icon and a
- * badge, a title, and a line of facts under it. The albums, performers,
- * genres, shows and seasons each used to spell the whole of this out, and
- * what they actually differ in is the handful of fields below.
- */
-interface CollectionCard {
-  /**
-   * A second, smaller badge in the other corner, for a fact that must not
-   * take the count's place: a playlist album said "M3U" where every other
-   * card says how many tracks it holds, and its count was then nowhere on
-   * the card at all.
-   */
-  tag?: string;
-  /** What makes this rendering: a card whose key is unchanged is left alone. */
-  key: string;
-  cls: string;
-  icon: string;
-  badge: string;
-  title: string;
-  /** The line under the title, already markup where a fact is a link. */
-  sub: string;
-  /** The same line in plain text, for the tooltip; defaults to sub. */
-  subTitle?: string;
-  /** A play badge over the cover, where the card has something to play. */
-  play?: string;
-  /**
-   * Extra details on hover, set on the card as a whole since the cover is
-   * what a pointer lands on. Releases describe their path and formats;
-   * folder groups summarize their matching files and latest dates.
-   */
-  tip?: string;
-  coverId?: string;
-  coverSrc?: string;
-  mtime: number;
-}
-
 /** How alike something sounds, as a card says it: only on a "like this" listing. */
 function alike(similarity?: number): string {
   return similarity ? `${Math.round(similarity * 100)}% alike` : '';
 }
 
 function renderCollectionCell(el: HTMLElement, card: CollectionCard): void {
-  if (el.dataset.key === card.key) return;
-  el.dataset.key = card.key;
-  el.className = `cell card album-card ${card.cls}`.trimEnd();
-  // Set or taken away on every render, not only on recycling: a key change
-  // redraws the card in place, and what the last rendering said on hover is
-  // no more true of this one than its title is.
-  if (card.tip) el.title = card.tip;
-  else el.removeAttribute('title');
-  const play = card.play ? `<span class="hover-play" data-play title="${esc(card.play)}">${icons.play}</span>` : '';
-  el.innerHTML = `
-    <div class="thumb square">
-      <div class="thumb-fallback">${card.icon}</div>
-      <img alt="" decoding="async" draggable="false">
-      <span class="badge">${card.badge}</span>${card.tag ? `<span class="badge tag">${esc(card.tag)}</span>` : ''}${play}
-    </div>
-    <div class="meta">
-      <div class="title" title="${esc(hoverLines(card.title, card.tip))}">${esc(card.title)}</div>
-      <div class="sub" title="${esc(card.subTitle ?? card.sub)}">${card.sub}</div>
-    </div>`;
-  wireThumb(el, card.coverSrc ?? (card.coverId ? thumbUrl(card.coverId, THUMB_W, card.mtime) : null));
+  const src = card.coverSrc ?? (card.coverId ? thumbUrl(card.coverId, THUMB_W, card.mtime) : null);
+  drawCollectionCell(el, card, src, wireThumb);
 }
 
 function renderFolderCell(el: HTMLElement, folder: Folder | undefined): void {
@@ -469,7 +415,6 @@ function renderFolderCell(el: HTMLElement, folder: Folder | undefined): void {
     folder.added ? `Last added: ${formatDateFull(folder.added)}` : '',
   );
   renderCollectionCell(el, {
-    key: JSON.stringify(folder),
     cls: 'folder-card',
     icon: icons.folder,
     badge: count,
@@ -503,11 +448,6 @@ function renderAlbumCell(el: HTMLElement, album: Album | undefined): void {
   // not show, which is the rule every hover here follows (belongsTo).
   const tip = hoverLines(album.path, releaseShape(album));
   renderCollectionCell(el, {
-    // The year and the genre arrive with enrichment, so they belong in the
-    // key: a card rendered before the tags were read has to be redrawn when
-    // they are, and nothing else about the release will have changed. The
-    // hover too, whose running time arrives only once every track is read.
-    key: `${album.id}:${album.mtime}:${album.coverId ?? ''}:${album.tracks}:${album.year ?? ''}:${genres.join('|')}:${album.plays ?? 0}:${tip}`,
     cls: '',
     icon: icons.disc,
     // The count in the corner for every release, playlist or directory;
@@ -541,7 +481,6 @@ function renderArtistCell(el: HTMLElement, artist: Artist | undefined): void {
   const time = artist.duration ? formatDuration(artist.duration / 1000) : '';
   const span = years(artist.fromYear, artist.toYear);
   renderCollectionCell(el, {
-    key: `${artist.id}:${artist.mtime}:${artist.coverId ?? ''}:${artist.tracks}:${artist.genre ?? ''}:${artist.fromYear ?? ''}:${artist.toYear ?? ''}:${artist.plays ?? 0}`,
     cls: 'artist-card',
     icon: icons.artist,
     badge: counted(artist.albums, 'album'),
@@ -811,7 +750,6 @@ function renderGenreCell(el: HTMLElement, genre: Genre | undefined): void {
     plays(genre.plays),
   ]);
   renderCollectionCell(el, {
-    key: `${genre.id}:${genre.mtime}:${genre.coverId ?? ''}:${genre.albums}:${genre.tracks}:${genre.plays ?? 0}`,
     cls: 'genre-card',
     icon: icons.tag,
     badge: counted(genre.albums, 'album'),
@@ -838,7 +776,6 @@ function renderSeriesCell(el: HTMLElement, show: Series | undefined): void {
   }
   const sub = episodesLine(show.episodes, show.duration, show.plays);
   renderCollectionCell(el, {
-    key: `${show.id}:${show.mtime}:${show.coverId ?? ''}:${show.episodes}:${show.plays ?? 0}`,
     cls: 'series-card',
     icon: icons.series,
     badge: counted(show.seasons.length, 'season'),
@@ -857,7 +794,6 @@ function renderSeasonCell(el: HTMLElement, season: Season | undefined): void {
   }
   const sub = episodesLine(season.episodes, season.duration, season.plays);
   renderCollectionCell(el, {
-    key: `${state.series}:${season.season}:${season.episodes}:${season.coverId ?? ''}:${season.plays ?? 0}`,
     cls: 'series-card',
     icon: icons.series,
     badge: `${season.episodes} ♦`,

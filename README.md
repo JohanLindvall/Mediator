@@ -49,7 +49,7 @@ See [Development](#development).
 | Listen to music | Albums, artists, genres, playlists, a queue, shuffle, media keys, similar tracks and radio from audio analysis. |
 | Browse pictures | Full-resolution viewing, zoom, rotation, fullscreen and touch navigation. |
 | Open archives and discs | Browse supported RAR/ZIP sets and DVD images without manually extracting them. |
-| Organize a large library | Live directory watching, search, optional grouping by leaf folder name with compact thumbnails and details on hover, filters, favourites, watched state and a virtual grid. |
+| Organize a large library | Live directory watching, search, optional grouping by leaf folder name with compact thumbnails and details on hover, filters, favourites, watched state and a virtual grid that keeps artwork in place as play counts update. |
 | Keep deployment simple | One binary, an embedded web app and a local database; Docker includes ffmpeg for conversion and analysis. |
 
 [Explore the feature guide](docs/features.md) for formats, controls and details.

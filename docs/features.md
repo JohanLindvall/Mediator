@@ -997,7 +997,9 @@ one whose track only holds it. Beyond that, each group keeps the order the
 view is sorted by. Results arrive in place: the listing stays up while
 the next one is fetched and only what differs is redrawn, so typing narrows
 the grid instead of flashing it, and anything the two searches have in
-common keeps its tile and its loaded thumbnail. Type filter chips (all / videos / images / music /
+common keeps its tile and its loaded thumbnail. Play-count updates also keep
+artwork in place, while counts and popularity order stay current.
+Type filter chips (all / videos / images / music /
 albums / artists). What can be sorted on follows the view: files by
 modified date (a file stamped with a date in the future, which some copies
 leave behind, sorts after every real date rather than leading the list),

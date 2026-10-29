@@ -15,7 +15,9 @@ import type { Item } from './types.gen';
 
 /**
  * The key an item's cell is drawn under. A cell whose key is unchanged is
- * left alone, so everything the tile *shows* has to be in here.
+ * left alone apart from its overlays, so the body and hover details belong
+ * here. Plays, verdicts, duration and watch progress update in the overlays
+ * without replacing the loaded thumbnail.
  *
  * mtime and size are what make a file that changed on disk — the normal case
  * for a download that finished after the grid first saw it — re-render
@@ -38,7 +40,7 @@ export function itemCellKey(item: Item): string {
       ? `:${item.title ?? ''}:${item.artist ?? ''}:${item.year ?? ''}:${item.genre ?? ''}`
       : '';
   const shape = `:${item.vcodec ?? ''}:${item.acodec ?? ''}:${item.width ?? ''}:${item.height ?? ''}`;
-  return `${item.id}:${item.mtime}:${item.size}:${item.plays ?? 0}${tags}${shape}`;
+  return `${item.id}:${item.mtime}:${item.size}${tags}${shape}`;
 }
 
 /**

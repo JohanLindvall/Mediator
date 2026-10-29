@@ -49,3 +49,13 @@ test('the key changes when the shape arrives', () => {
   const after = { ...before, vcodec: 'h264', width: 1920, height: 1080 } as Item;
   assert.notEqual(itemCellKey(before), itemCellKey(after));
 });
+
+test('play and verdict updates leave the image intact while file changes replace it', () => {
+  const before = { id: 'abc', mtime: 1, size: 2, kind: 'audio' } as Item;
+  // These values are drawn in the overlays, which refresh even when the
+  // body key stays the same. Counting a play must not reload the thumbnail.
+  assert.equal(itemCellKey(before), itemCellKey({ ...before, plays: 1, like: 1 }));
+  assert.equal(itemCellKey(before), itemCellKey({ ...before, plays: 2, like: -1 }));
+  assert.notEqual(itemCellKey(before), itemCellKey({ ...before, mtime: 2 }));
+  assert.notEqual(itemCellKey(before), itemCellKey({ ...before, size: 3 }));
+});
