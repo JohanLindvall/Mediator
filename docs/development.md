@@ -5,7 +5,8 @@
 ## Build and test in Docker
 
 Install Git, Make and Docker with BuildKit. No local Go, Node or ffmpeg is
-needed for the standard workflow:
+needed for the standard workflow. The containers use Go 1.26 and Node 26;
+the frontend builds with TypeScript 7 and Vite 8:
 
 ```sh
 git clone https://github.com/JohanLindvall/Mediator.git

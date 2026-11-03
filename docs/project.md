@@ -57,6 +57,9 @@ updates remain separate. Review dependency changes and run the normal CI;
 the configuration does not enable automatic merging. Preserve intentional
 pins and replacements, including the RAR decoder fix documented in `go.mod`.
 Check Go and Node requirements in the guides when their build images change.
+The build uses Go 1.26 and Node 26, the frontend uses TypeScript 7 and Vite 8,
+and the runtime image uses Alpine 3.24. Concurrent npm updates share one
+lockfile; regenerate it from the combined package versions when merging them.
 
 `.github/release.yml` groups generated release notes by breaking changes,
 features, fixes, documentation, dependencies and other work. The catch-all
