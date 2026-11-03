@@ -80,7 +80,7 @@ COPY --from=gen /types.gen.ts /web/src/types.gen.ts
 
 # --- runtime -------------------------------------------------------------------
 # ffmpeg supplies conversions, video thumbnails and media analysis.
-FROM alpine:3.22
+FROM alpine:3.24
 # intel-media-driver is what lets conversions run on the graphics hardware
 # rather than the processor, which is the difference between a 4K phone clip
 # playing and buffering for ever (see hwaccel.go). ffmpeg here is built with
