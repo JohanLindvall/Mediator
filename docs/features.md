@@ -336,8 +336,13 @@ the wrong thing: some old files declare that their frames need holding back
 by less than they really do, and a browser believing them drops one frame in
 four while VLC plays the same file perfectly. That is read out of the opening
 of the file, and such a picture is re-encoded rather than copied — the only
-thing that rewrites the frame order and the declaration together. So is an MP4 holding
-HEVC labelled the way ffmpeg writes it by default (`hev1`): iPhones and
+thing that rewrites the frame order and the declaration together. Reordered
+H.264 in AVI also needs conversion when it lacks presentation timestamps:
+copying it into MP4 assigns times in the wrong order and makes browsers drop
+frames, even with a correct reorder declaration. The opening check catches
+this too; AVI without reordered frames can still be copied.
+An MP4 holding HEVC labelled the way ffmpeg writes it by default (`hev1`) also
+needs a rewrap: iPhones and
 Safari decode that picture in hardware but accept only the other label
 (`hvc1`), so such a file is relabelled by copying instead of being
 re-encoded — which is what an x265 script's output would otherwise cost on
@@ -349,8 +354,9 @@ through untouched, decided from the file's own codecs before playback
 begins rather than after a stall. That also settles which soundtrack you
 hear: a film carrying its real audio in AC3 and a commentary in AAC gives
 a browser one track it cannot decode and one it can, and left to itself it
-plays the commentary. Only a picture it cannot decode (old MPEG-4/DivX,
-often HEVC, and the MPEG-2 on a DVD) is re-encoded.
+plays the commentary. Pictures with unsafe frame timing, or codecs the browser
+cannot decode (old MPEG-4/DivX, often HEVC, and the MPEG-2 on a DVD), are
+re-encoded.
 That soundtrack conversion **becomes a file while you watch it**. It starts
 as a live stream, which plays at once but cannot answer a range request —
 so a browser managing its own buffer disconnects when it is full and

@@ -80,14 +80,18 @@ decoder's own words.
 
 ## A film stutters in the browser and plays smoothly in VLC.
 
-Usually the
-stream lies about how far it reorders its frames: it declares a depth the
+One cause is a
+stream that lies about how far it reorders its frames: it declares a depth the
 encoder did not keep to, ffmpeg and VLC buffer past it, and a browser that
 takes the declaration at its word shows frames early and drops the late ones.
+Reordered H.264 in AVI can also lack presentation timestamps. Copying it into
+MP4 then gives frames times that run backwards in display order, so the browser
+drops frames. This can affect silent video too; audio synchronization is not
+required for the fault.
 The server reads the opening of every film when it is opened and, where it
-finds this, has the player convert the film instead of playing the file as it
-is — the log says `picture must be re-encoded rather than copied`. That costs
-a re-encode for exactly those files and nothing for the rest.
+finds either problem, has the player convert the film — the log says
+`picture must be re-encoded rather than copied`. Files with usable timing
+keep the ordinary playback route.
 
 ## Music stutters or stops on a phone.
 
