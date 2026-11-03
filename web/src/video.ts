@@ -551,7 +551,7 @@ class VideoOverlay {
    * DVD is not the shape), and the menu leaves out a shape the file already
    * is (shapeChoices).
    */
-  private toggleShapeMenu(show = this.shapeMenu.hidden): void {
+  private toggleShapeMenu(show = !!this.shapeMenu.hidden): void {
     if (show) {
       const v = this.video;
       const it = this.item;
@@ -728,7 +728,7 @@ class VideoOverlay {
     }
   }
 
-  private toggleCastMenu(show = this.castMenu.hidden): void {
+  private toggleCastMenu(show = !!this.castMenu.hidden): void {
     this.toggleMenu(this.castMenu, this.airplayBtn, show);
   }
 
@@ -1629,7 +1629,7 @@ class VideoOverlay {
     }
   }
 
-  private toggleQualityMenu(show = this.qualityMenu.hidden): void {
+  private toggleQualityMenu(show = !!this.qualityMenu.hidden): void {
     this.toggleMenu(this.qualityMenu, this.qualityBtn, show);
   }
 
@@ -1701,7 +1701,7 @@ class VideoOverlay {
     void this.onMediaError();
   }
 
-  private toggleAudioMenu(show = this.audioMenu.hidden): void {
+  private toggleAudioMenu(show = !!this.audioMenu.hidden): void {
     this.toggleMenu(this.audioMenu, this.audioBtn, show);
   }
 
@@ -1864,7 +1864,7 @@ class VideoOverlay {
     return convertMode(this.item.vcodec, (t) => this.video.canPlayType(t), true, this.item.reencode);
   }
 
-  private toggleSubMenu(show = this.subMenu.hidden): void {
+  private toggleSubMenu(show = !!this.subMenu.hidden): void {
     this.toggleMenu(this.subMenu, this.ccBtn, show);
   }
 

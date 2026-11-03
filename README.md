@@ -122,7 +122,8 @@ installation method and redacted logs.
 
 The build and test pipeline runs in Docker. Install **Git, Make and Docker
 with BuildKit**; local Go and Node installations are optional. The Docker build
-uses Go 1.26 and Node 26, with TypeScript 7 and Vite 8 for the frontend.
+uses Go 1.26 and Node 26, with TypeScript 7 and Vite 8 for the frontend
+(including Vite asset declarations for type checking).
 
 ```sh
 git clone https://github.com/JohanLindvall/Mediator.git

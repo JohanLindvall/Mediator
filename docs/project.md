@@ -60,6 +60,7 @@ Check Go and Node requirements in the guides when their build images change.
 The build uses Go 1.26 and Node 26, the frontend uses TypeScript 7 and Vite 8,
 and the runtime image uses Alpine 3.24. Concurrent npm updates share one
 lockfile; regenerate it from the combined package versions when merging them.
+TypeScript loads `vite/client` declarations for CSS imports and other assets.
 
 `.github/release.yml` groups generated release notes by breaking changes,
 features, fixes, documentation, dependencies and other work. The catch-all

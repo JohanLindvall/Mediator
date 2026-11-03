@@ -96,6 +96,8 @@
   player is `touch-action: none`, every gesture over it being the player's (a
   double tap is fullscreen, never zoom); the picture viewer keeps
   `manipulation` for browser panning.
+- Menu toggles coerce `HTMLElement.hidden` to a boolean before deciding
+  whether to open: DOM typings also allow the string `until-found`.
 - The player's control row wraps, so `keepMenuOnScreen` measures each menu
   (anchored to its button's right edge) as it opens and slides it on screen.
 - Every await in the player is guarded by the film's id (`refreshItem`,
