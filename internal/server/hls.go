@@ -485,18 +485,15 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	copyVideo = effectiveCopy(copyVideo, q)
-	// The same fault the pipe has: a soundtrack-only conversion copies the
-	// picture through, and a stream that reorders further than it declares
-	// has to be re-encoded whatever was asked for (reorder.go).
+	// Probe before judging whether the picture can be copied: mustReencode
+	// leaves unknown codecs alone, including on a first request for HLS.
+	// The same probe supplies the captions and the table's film length.
+	it = s.probed(r.Context(), it)
+	// A soundtrack-only conversion still copies the picture, so unsafe
+	// frame ordering or missing presentation times require a full conversion.
 	if copyVideo && s.mustReencode(r.Context(), it) {
 		copyVideo = false
 	}
-
-	// The subtitle renditions below need the probed listing, and a film
-	// asked about cold would otherwise deny the captions it carries inside
-	// itself. This is the moment the probe exists for: something is opening.
-	// The table needs the film's length from the same probe.
-	it = s.probed(r.Context(), it)
 
 	sess, err := s.hls.session(r.Context(), it, t, copyVideo, r.URL.Query().Get("a"), q)
 	if err != nil {
@@ -1255,14 +1252,17 @@ func (h *HLS) restartAt(s *hlsSession, k int) error {
 	old := s.run
 	_, have := s.have[k]
 	wait := hlsWaitFor(s.runStateLocked(), k, time.Now())
+	// endRun writes ended under sm. Keep the decision and cancellation
+	// together, so finishing cannot race the read or turn a completed run
+	// into a cancelled one. Wait for cleanup only after releasing the lock.
+	if !have && !wait && old != nil && !old.state.ended {
+		old.cancel()
+	}
 	s.sm.Unlock()
 	if have || wait {
 		return nil // somebody got here first
 	}
 	if old != nil {
-		if !old.state.ended {
-			old.cancel()
-		}
 		<-old.exited
 		// A run that ended without making a segment it was asked for is
 		// counted against that segment, whatever ended it — an error, or

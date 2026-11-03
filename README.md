@@ -54,7 +54,8 @@ See [Development](#development).
 
 [Explore the feature guide](docs/features.md) for formats, controls and details.
 Browser and receiver codec support varies; Mediator copies compatible streams
-and converts when needed. The published Docker image is amd64 only. Native
+and converts when needed, including reordered video with missing presentation
+timestamps. The published Docker image is amd64 only. Native
 builds can run without ffmpeg, with fewer playback and analysis capabilities.
 
 ## Docker

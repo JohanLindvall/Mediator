@@ -13,6 +13,45 @@ import (
 	"github.com/JohanLindvall/Mediator/internal/library"
 )
 
+// Deciding whether a run ended and cancelling it form one critical section.
+// The cancel callback observes that section synchronously: no scheduling or
+// repeated goroutine race is needed to expose an unlocked state check.
+func TestHLSRestartCancelsUnderTheRunStateLock(t *testing.T) {
+	for _, ended := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ended=%v", ended), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			r := &hlsRun{
+				ctx: ctx, exited: make(chan struct{}), fileStart: 1, until: 2,
+				state: hlsRunState{next: 1, until: 2, ended: ended},
+			}
+			s := &hlsSession{run: r}
+			cancelled := false
+			r.cancel = func() {
+				cancelled = true
+				if s.sm.TryLock() {
+					s.sm.Unlock()
+					t.Error("run can finish between checking its state and cancelling it")
+				}
+				cancel()
+				close(r.exited)
+			}
+			if ended {
+				close(r.exited)
+			}
+			// A seek behind the run must stop it; a closed converter then
+			// refuses its replacement, keeping this independent of ffmpeg.
+			h := &HLS{closed: true}
+			if err := h.restartAt(s, 0); err != errHLSClosed {
+				t.Fatalf("restart = %v, want the replacement refused", err)
+			}
+			if cancelled == ended {
+				t.Errorf("ended=%v: cancelled=%v", ended, cancelled)
+			}
+		})
+	}
+}
+
 // writeSession lays out a session directory: the playlist naming a segment,
 // and, where asked for, the segment itself. A name in the playlist is not a
 // file on disk, which is the distinction everything here turns on.

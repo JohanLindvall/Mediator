@@ -55,6 +55,10 @@ the first segment (0.31 s vs 56 s for a whole file).
   as soon as a fresh start (`hlsWaitFor`: the run's pace, 1 s per segment
   until known), else a run starts there (`hlsFirstWait` bounds the wait);
   a second run ending without it gives up (`hlsRunFailures`).
+- A seek checks whether the old run ended and cancels it under the session's
+  state lock (`sm`), then releases that lock before waiting for cleanup.
+  Completion uses the same lock, so it cannot race the check or have its
+  result mistaken for cancellation.
 - Runs are judged by output, not exit status (the graphics engine errors
   flushing a run cut by `-to`; writing it off would send later runs to the
   processor).
@@ -66,7 +70,9 @@ the first segment (0.31 s vs 56 s for a whole file).
   start tolerance at 24 fps, not for low rates or deep reordering; it
   wants measuring first.
 - The conversion is chosen from codecs, not decoding (a refused container
-  decodes nothing); an H.264 picture is copied.
+  decodes nothing). Codecs are probed before the frame-timing check, even on
+  the first request: an H.264 picture is copied only where its reordering
+  and presentation timestamps allow it ([conversion](conversion.md)).
 - A finished playlist is relabelled VOD (ffmpeg leaves
   `#EXT-X-PLAYLIST-TYPE:EVENT`, read as live); EVENT stays while growing.
 - The master BANDWIDTH is the stream served, not the source

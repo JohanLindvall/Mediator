@@ -2,7 +2,7 @@
 
 package server
 
-// Streams that lie about how far their frames are reordered.
+// Streams whose frame order or timestamps cannot be copied for a browser.
 //
 // H.264 carries `max_num_reorder_frames` in its parameter set: how many
 // decoded frames a player must hold before it can present them in order. A
@@ -26,6 +26,14 @@ package server
 // frame structure and the declaration together. Verified on the same file —
 // re-encoded, its timestamps come out strictly in order and the stutter is
 // gone.
+//
+// A correct declaration is not enough when presentation timestamps are
+// missing. AVI holds decode times, and copying reordered H.264 from it into
+// MP4 assigns those times to pictures shown in a different order. A B-pyramid
+// declaring two and running three needs no deeper buffer, but its copy still
+// presents half the frames behind ones already shown. Even +genpts keeps
+// that ordering. Decoding and re-encoding gives each displayed frame its
+// proper time; an AVI without B-frames needs no such conversion.
 //
 // AVI is where this turns up, that container having no way to express
 // reordering at all, so whatever its encoders wrote went unchecked. It is not
@@ -159,7 +167,7 @@ func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 		v, answered := s.look(ctx, key, it)
 		if answered && v {
 			s.log.Info("picture must be re-encoded rather than copied",
-				"path", it.Rel, "why", "the stream reorders further than it declares")
+				"path", it.Rel, "why", "frame reordering or missing presentation timestamps")
 		}
 		return answered && v
 	}
@@ -173,14 +181,14 @@ func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 // longer running.
 func (s *Server) look(ctx context.Context, key string, it library.Item) (v, answered bool) {
 	defer func() { s.reorder.settle(key, v, answered) }()
-	return reorderUnderstated(ctx, it)
+	return copyTimingUnsafe(ctx, it)
 }
 
-// reorderUnderstated runs the look itself. answered says the file was read
+// copyTimingUnsafe runs the look itself. answered says the file was read
 // and judged; without it the first answer means nothing, since no ffprobe,
 // a pipe that cannot be read twice, a timeout and an unreadable document
 // all leave the film exactly as it was.
-func reorderUnderstated(ctx context.Context, it library.Item) (understated, answered bool) {
+func copyTimingUnsafe(ctx context.Context, it library.Item) (unsafe, answered bool) {
 	probe := library.FFprobePath()
 	if probe == "" {
 		return false, false
@@ -229,6 +237,7 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 		return false, true // too short to reorder anything worth the name
 	}
 	run, longest, inversions := 0, 0, 0
+	missingPTS := 0
 	seen := -1.0
 	for _, f := range doc.Frames {
 		if f.Type == "B" {
@@ -236,6 +245,9 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 			longest = max(longest, run)
 		} else {
 			run = 0
+		}
+		if f.PTS == "" || f.PTS == "N/A" {
+			missingPTS++
 		}
 		// The frames come back in the order the decoder emitted them, which
 		// is the order a player would show them — so a timestamp below one
@@ -247,6 +259,13 @@ func reorderUnderstated(ctx context.Context, it library.Item) (understated, answ
 				seen = pts
 			}
 		}
+	}
+	// Without presentation times there can be no observed inversions yet:
+	// a copy creates them by substituting decode times. Require actual
+	// B-frames and an entirely untimed opening, not an occasional missing
+	// timestamp. best_effort_timestamp_time would conceal this distinction.
+	if longest > 0 && missingPTS == len(doc.Frames) {
+		return true, true
 	}
 	return reorderVerdict(doc.Streams[0].Declared, longest, inversions), true
 }

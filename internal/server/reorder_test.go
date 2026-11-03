@@ -21,7 +21,7 @@ import (
 // drops the frames that arrive behind what it has already shown, which is a
 // film at three quarters of its frame rate with a limp — and a copy preserves
 // it exactly, which is why it has to be found before one is made.
-func TestReorderUnderstatedIsFound(t *testing.T) {
+func TestCopyTimingIsJudged(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg not installed")
@@ -35,30 +35,39 @@ func TestReorderUnderstatedIsFound(t *testing.T) {
 	// accused wholesale: a B-pyramid puts three consecutive B-frames under a
 	// declaration of two, and that is honest — the middle frame is itself a
 	// reference. Being wrong here re-encodes every frame of an innocent film.
-	for name, args := range map[string][]string{
-		"a modern capture.avi": {"-c:v", "libx264", "-preset", "ultrafast", "-bf", "3", "-x264-params", "b-adapt=0"},
-		"a plain capture.avi":  {"-c:v", "libx264", "-preset", "ultrafast", "-bf", "0"},
+	for _, c := range []struct {
+		name string
+		bf   string
+		want bool
+	}{
+		{"a modern capture.mp4", "3", false},
+		{"a modern capture.mkv", "3", false},
+		{"a plain capture.avi", "0", false},
+		// The same honest pyramid loses its presentation timestamps in AVI.
+		// A copy would assign decode times to frames shown in another order.
+		{"a reordered capture.avi", "3", true},
 	} {
-		path := filepath.Join(dir, name)
-		cmd := exec.Command(ffmpeg, append([]string{"-hide_banner", "-loglevel", "error",
+		path := filepath.Join(dir, c.name)
+		cmd := exec.CommandContext(t.Context(), ffmpeg, "-hide_banner", "-loglevel", "error",
 			"-f", "lavfi", "-i", "testsrc=size=160x120:rate=25:duration=4",
-			"-pix_fmt", "yuv420p"}, append(args, "-y", path)...)...)
+			"-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+			"-bf", c.bf, "-x264-params", "b-adapt=0", "-y", path)
 		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Skipf("ffmpeg could not build %s: %v: %s", name, err, out)
+			t.Skipf("ffmpeg could not build %s: %v: %s", c.name, err, out)
 		}
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		it := library.Item{
-			ID: name, Name: name, Path: path, Kind: library.KindVideo, VCodec: "h264",
+			ID: c.name, Name: c.name, Path: path, Kind: library.KindVideo, VCodec: "h264",
 			Size: info.Size(), ModTime: info.ModTime().UnixMilli(),
 		}
-		understated, answered := reorderUnderstated(t.Context(), it)
+		unsafe, answered := copyTimingUnsafe(t.Context(), it)
 		if !answered {
-			t.Errorf("%s was not judged at all", name)
-		} else if understated {
-			t.Errorf("%s was accused of lying about its reordering", name)
+			t.Errorf("%s was not judged at all", c.name)
+		} else if unsafe != c.want {
+			t.Errorf("%s: unsafe to copy = %v, want %v", c.name, unsafe, c.want)
 		}
 	}
 }
@@ -98,7 +107,7 @@ func TestReorderSaysNothingAboutWhatItCannotRead(t *testing.T) {
 		ID: "abc", Name: "gone.avi", Path: filepath.Join(t.TempDir(), "gone.avi"),
 		Kind: library.KindVideo, VCodec: "h264",
 	}
-	if understated, answered := reorderUnderstated(t.Context(), missing); understated || answered {
+	if unsafe, answered := copyTimingUnsafe(t.Context(), missing); unsafe || answered {
 		t.Error("a file that could not be read was accused, or counted as judged")
 	}
 	// And an item whose streams are not known yet is nobody's answer.

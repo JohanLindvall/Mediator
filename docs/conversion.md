@@ -147,9 +147,11 @@
     settles its waiter without reporting a playback failure. The box and
     codec parsing refuses short or overflowing records, and the
     initialisation buffer is bounded.
-- **A stream can understate its reordering** (`reorder.go`): more B-frames than
-  `max_num_reorder_frames` makes a browser emit early and drop frames (ffmpeg
-  and VLC cope); a faithful copy keeps the lie, so re-encode.
+- **Frame timing is checked before copying** (`copyTimingUnsafe`,
+  `reorder.go`). A stream can understate its reordering:
+  more B-frames than `max_num_reorder_frames` makes a browser emit early and
+  drop frames (ffmpeg and VLC cope); a faithful copy keeps the lie, so
+  re-encode.
   - One ffprobe over `reorderProbeFrames` of the opening; `reorderVerdict`
     decides. Two signals, **not equals**: **backwards output timestamps** are
     direct evidence (two needed; an edit list causes one); a **long B-run** is
@@ -159,6 +161,15 @@
     (`IBBPBBP…` under 1) is ordinary, and an unguarded comparison or a
     `declared < 2` guard condemns such files to a re-encode. A declaration of
     *none* with any B-frame needs no margin.
+  - **Reordered frames need presentation times too.** The same opening probe
+    requires a re-encode when it observes B-frames but no frame has a PTS.
+    AVI's decode times cannot substitute for presentation times: an honest
+    H.264 B-pyramid declaring two and running three still produces backwards
+    frame times when copied into MP4 (50 of the first 100 frames at 25 fps).
+    `+genpts` preserves that fault; decoding and re-encoding produces 40 ms
+    intervals. `best_effort_timestamp_time` hides the missing PTS and must not
+    replace it in this check. An occasional missing timestamp, a timed
+    MP4/Matroska pyramid, or an AVI without B-frames does not trigger it.
   - **The verdict rides the listing** (`stampReencode`) so the player checks it
     **before** handing the element the file (`load`), not after a second of
     playback; only existing verdicts are stamped, never a look per tile.
@@ -179,6 +190,8 @@
     `Reencode`, so `plannedRoute` (`playback.ts`) converts and `tryRemux` stands
     down. **Not** for a television (it decodes generously). Common in AVI,
     which cannot express reordering.
+    HLS probes codecs before asking for this verdict, so a first request
+    without a preceding item fetch has the same protection.
 - **How much to convert turns on whether the picture is *proven*, not on
   what it is called** (`convertMode` in `playback.ts`, tested); its two
   callers mean opposite things, so never merge them. `trackMode` (playing,
