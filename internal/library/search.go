@@ -53,7 +53,10 @@ func matchWords(text string, words []string) bool {
 
 // How directly something answers a search, best first. A listing is ordered
 // by its tier before anything else: what the search names comes first, then
-// what shows every word on its card, then what was found further away — a
+// what holds every word in its name — the title in the file listing, the
+// release's title among releases, the performer's name among performers, the
+// genre's among genres — then what shows every word anywhere on its card,
+// then what was found further away — a
 // track of a release, a release of a performer, the performers of a genre, an
 // episode of a show, the folder a file is kept in — none of which the card
 // shows.
@@ -67,6 +70,7 @@ func matchWords(text string, words []string) bool {
 // view's own order, whichever way it runs.
 const (
 	hitName   = iota // the search is its name, word for word
+	hitInName        // every word is in its name
 	hitCard          // every word is in what its card shows
 	hitBeyond        // found by something its card does not show
 )
@@ -113,23 +117,20 @@ func newHits(words []string) *hits {
 }
 
 // rank is where a thing's own segmented text puts it: its tier, then how
-// many words the answer holds only inside longer words — judged on the card
-// where the card shows every word, else on the whole text. Lower first.
+// many words the answer holds only inside longer words — judged on the name
+// where the name holds every word, else on the card where the card shows
+// every word, else on the whole text. Lower first.
 func (h *hits) rank(text string, nameEnd, cardEnd int32) int {
 	if nameEnd > 1 && text[1:nameEnd-1] == h.phrase {
 		return h.at(hitName, 0)
 	}
-	card, partial := text[:cardEnd], 0
-	for i, w := range h.words {
-		if strings.Contains(card, h.whole[i]) {
-			continue
-		}
-		if !strings.Contains(card, w) {
-			return h.at(hitBeyond, h.partial(text))
-		}
-		partial++
+	if partial, ok := h.within(text[:nameEnd]); ok {
+		return h.at(hitInName, partial)
 	}
-	return h.at(hitCard, partial)
+	if partial, ok := h.within(text[:cardEnd]); ok {
+		return h.at(hitCard, partial)
+	}
+	return h.at(hitBeyond, h.partial(text))
 }
 
 // partial counts the words text does not hold as tokens of their own.
@@ -141,6 +142,21 @@ func (h *hits) partial(text string) int {
 		}
 	}
 	return n
+}
+
+// within reports whether text holds every word, and how many of them it
+// holds only inside longer words.
+func (h *hits) within(text string) (partial int, ok bool) {
+	for i, w := range h.words {
+		if strings.Contains(text, h.whole[i]) {
+			continue
+		}
+		if !strings.Contains(text, w) {
+			return 0, false
+		}
+		partial++
+	}
+	return partial, true
 }
 
 // at is the rank of a tier with that many partial words: every rank of one

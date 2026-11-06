@@ -994,8 +994,12 @@ performer by any release of theirs that is found, so typing a song's
 title counts and lists the album it is on and who made it — and the
 search stays in force as you move between views and drill into a
 performer, until you clear it. What a search names comes first — the
-performer called that, the release, the track — then whatever shows the
-words on its card, then what was found a page further in, by a track, a
+performer called that, the release, the track — then whatever holds every
+word in the name the view is about (the track's title in the file listing,
+the release's title among releases, the performer's name among performers,
+the genre's among genres), then whatever shows the words elsewhere on its
+card, so a song titled with them lists before one merely by a performer of
+that name; then what was found a page further in, by a track, a
 release or the folder something is kept in. Within each group a whole word
 beats part of one: "gorse" lists a card reading "Gorse" before one reading
 "Gorseland", and a release found by a track titled with the word before

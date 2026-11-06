@@ -68,7 +68,11 @@
   - **Results rank by how directly they answer** (`rankByHit`, after every
     view's sort — items, releases, performers, genres, shows — and so for
     queue-all too): first what the search names, word for word as `tokenize`
-    reads words (`hitName`); then what shows every word on its card in this
+    reads words (`hitName`); then what holds every word in that name, in any
+    order (`hitInName`: a track's title, or its file name where it has none;
+    a release's title; a performer's, a genre's or a show's name), so each
+    view ranks by the name it is about and its other keys only follow; then
+    what shows every word on its card in this
     view (`hitCard`: a track's title, performer, release, genre and year; a
     release's title, performer, genres and year; a performer's name, genre and
     years; a genre's or a show's name); then what was found further away
@@ -76,8 +80,8 @@
     performer's releases, a genre's bands, a show's episodes).
   - **Within a tier a whole word beats part of one** (`hits.rank`): each
     tier runs by how many words were found only inside longer words, none
-    first — judged on the card in `hitCard`, on the whole text in
-    `hitBeyond`. A whole word never lifts a thing out of its tier: every file
+    first — judged on the name in `hitInName`, on the card in `hitCard`, on
+    the whole text in `hitBeyond`. A whole word never lifts a thing out of its tier: every file
     under a root of that name holds it whole in its path, and would bury
     every card showing it. A thing its own text does not find but a member
     does ranks as found further away, by the member's answer (where its own

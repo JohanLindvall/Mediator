@@ -24,12 +24,14 @@ func TestHitRanks(t *testing.T) {
 	}{
 		{"lee shore", hitName, 0},
 		{"LEE  SHORE!", hitName, 0},
-		{"shore lee", hitCard, 0}, // every word, but not the name as written
-		{"lee", hitCard, 0},
+		{"shore lee", hitInName, 0}, // every word, but not the name as written
+		{"lee", hitInName, 0},
 		{"pale harrow", hitCard, 0},
 		{"shore 2019", hitCard, 0},
-		{"sho", hitCard, 1},
+		{"sho", hitInName, 1},
 		{"pale harr", hitCard, 1},
+		{"lee harrow", hitCard, 0}, // every word on the card, not all in the name
+		{"sho harr", hitCard, 2},
 		{"sho 201", hitCard, 2},
 		{"saltings", hitBeyond, 0},
 		{"lee saltings", hitBeyond, 0},
@@ -42,9 +44,14 @@ func TestHitRanks(t *testing.T) {
 			t.Errorf("%q ranks %d, want %d (tier %d, %d partial)", c.search, got, want, c.tier, c.partial)
 		}
 	}
-	// On a card that shows the word, the card decides: part of a word there
-	// stays part of one, however whole the folder holds it.
-	text, nameEnd, cardEnd = segmentedText([]string{"Gorseland"}, []string{"Pale Harrow"}, []string{"/library/Gorse"})
+	// On a name that holds the word, the name decides: part of a word there
+	// stays part of one, however whole the card or the folder holds it.
+	text, nameEnd, cardEnd = segmentedText([]string{"Gorseland"}, []string{"Gorse"}, []string{"/library/Gorse"})
+	if h := newHits(searchWords("gorse")); h.rank(text, nameEnd, cardEnd) != h.at(hitInName, 1) {
+		t.Errorf("a part of a word in the name ranks %d, want %d", h.rank(text, nameEnd, cardEnd), h.at(hitInName, 1))
+	}
+	// On a card that shows the word, the card decides likewise.
+	text, nameEnd, cardEnd = segmentedText([]string{"Lee Shore"}, []string{"Gorseland"}, []string{"/library/Gorse"})
 	if h := newHits(searchWords("gorse")); h.rank(text, nameEnd, cardEnd) != h.at(hitCard, 1) {
 		t.Errorf("a part of a word on the card ranks %d, want %d", h.rank(text, nameEnd, cardEnd), h.at(hitCard, 1))
 	}
@@ -52,7 +59,7 @@ func TestHitRanks(t *testing.T) {
 	// comes before any of the next, whatever the words.
 	for n := 1; n <= 4; n++ {
 		h := newHits(make([]string, n))
-		for _, tier := range []int{hitCard, hitBeyond} {
+		for _, tier := range []int{hitInName, hitCard, hitBeyond} {
 			for p := range n {
 				if h.at(tier, p) >= h.at(tier, p+1) {
 					t.Errorf("with %d words, tier %d: %d partial ranks %d, %d partial %d",
@@ -60,9 +67,9 @@ func TestHitRanks(t *testing.T) {
 				}
 			}
 		}
-		if !(h.at(hitName, 0) < h.at(hitCard, 0) && h.at(hitCard, n) < h.at(hitBeyond, 0)) {
-			t.Errorf("with %d words the tiers overlap: name %d, card %d–%d, beyond from %d",
-				n, h.at(hitName, 0), h.at(hitCard, 0), h.at(hitCard, n), h.at(hitBeyond, 0))
+		if !(h.at(hitName, 0) < h.at(hitInName, 0) && h.at(hitInName, n) < h.at(hitCard, 0) && h.at(hitCard, n) < h.at(hitBeyond, 0)) {
+			t.Errorf("with %d words the tiers overlap: name %d, in name %d–%d, card %d–%d, beyond from %d",
+				n, h.at(hitName, 0), h.at(hitInName, 0), h.at(hitInName, n), h.at(hitCard, 0), h.at(hitCard, n), h.at(hitBeyond, 0))
 		}
 	}
 }
@@ -127,7 +134,9 @@ func TestReleasesFoundByATrackRankByIt(t *testing.T) {
 		}
 		return out
 	}
-	if got, want := names(false), []string{"Gorse Walk", "Brackenfold", "Gorseland", "Windward", "Leeward"}; !slices.Equal(got, want) {
+	// Part of the word in its own title before part of it in its performer's
+	// name, both on the card.
+	if got, want := names(false), []string{"Gorse Walk", "Gorseland", "Brackenfold", "Windward", "Leeward"}; !slices.Equal(got, want) {
 		t.Errorf("by name: %v, want %v", got, want)
 	}
 	if got, want := names(true), []string{"Gorse Walk", "Gorseland", "Brackenfold", "Windward", "Leeward"}; !slices.Equal(got, want) {
@@ -243,5 +252,42 @@ func TestAPerformerSearchListsWhoItNamesFirst(t *testing.T) {
 	}
 	if want := []string{"Lee Shore", "Tern Signal", "Pale Harrow", "Gorse Beacon"}; !slices.Equal(names, want) {
 		t.Errorf("performers %v, want %v", names, want)
+	}
+}
+
+// Every word in the name a view is about comes before every word anywhere
+// else on the card, whole words or not: the title in the file listing, the
+// release's title among releases, the performer's name among performers —
+// each sorted against it, then found on the card, then further away.
+func TestAViewsOwnNameListsFirst(t *testing.T) {
+	l := New([]string{"/library"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	add := func(path string, mtime int64, title, artist, album string) {
+		l.upsert(path, KindAudio, 1000, time.Unix(mtime, 0), fileKey{}, false)
+		l.setMeta(PathID(path), tagMeta{title: title, artist: artist, album: album}, 1000)
+	}
+	// Oldest first, so newest first would put the card's matches first.
+	add("/library/a/01 a.mp3", 100, "Tide Over Marram", "Pale Harrow", "Saltings")
+	add("/library/b/01 b.mp3", 200, "Brinewater", "Marram", "Tidelines")
+	add("/library/c/01 c.mp3", 300, "Shingle", "Tern Signal", "Marram Tide")
+	titles := []string{}
+	for _, it := range l.List(Query{Search: "marram tide", Sort: "mtime", Desc: true}).Items {
+		titles = append(titles, it.Title)
+	}
+	if want := []string{"Tide Over Marram", "Shingle", "Brinewater"}; !slices.Equal(titles, want) {
+		t.Errorf("tracks %v, want %v", titles, want)
+	}
+	var releases []string
+	for _, a := range l.SearchAlbums(AlbumQuery{Search: "marram", Sort: "name", Desc: true}) {
+		releases = append(releases, a.Name)
+	}
+	if want := []string{"Marram Tide", "Tidelines", "Saltings"}; !slices.Equal(releases, want) {
+		t.Errorf("releases %v, want %v", releases, want)
+	}
+	var performers []string
+	for _, a := range l.SearchArtists("marr", "name", true, PathFilter{}) {
+		performers = append(performers, a.Name)
+	}
+	if want := []string{"Marram", "Tern Signal", "Pale Harrow"}; !slices.Equal(performers, want) {
+		t.Errorf("performers %v, want %v", performers, want)
 	}
 }
