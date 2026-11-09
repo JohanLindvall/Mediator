@@ -298,6 +298,17 @@ export function hlsClock(header: string | null | undefined): 'film' | 'session' 
   return header?.trim().toLowerCase() === 'film' ? 'film' : 'session';
 }
 
+/**
+ * What the receiver button opens: the menu where the network has sets on it
+ * or is still being asked, the browser's picker only where it has answered
+ * none. A set that takes both AirPlay and DLNA is then offered both ways —
+ * the menu lists it and ends with the picker — rather than the picker
+ * winning every press made before the search came back.
+ */
+export function receiverPress(found: number, searching: boolean): 'menu' | 'picker' {
+  return found > 0 || searching ? 'menu' : 'picker';
+}
+
 export function playButtonIcon(playing: boolean): 'pause' | 'play' {
   return playing ? 'pause' : 'play';
 }

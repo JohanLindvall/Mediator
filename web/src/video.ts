@@ -40,7 +40,7 @@ import {
   watchAirPlay,
   watchRemoteState,
 } from './airplay';
-import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
+import { Cast, fillReceiverMenu, knownRenderers, renderers, renderersPending } from './cast';
 import { CastTransport, type CastHooks } from './casting';
 import type { CastStatus, RendererInfo } from './types.gen';
 import { preferredLang, rememberTrack, rememberedTrack } from './audiopref';
@@ -79,6 +79,7 @@ import {
   playsOnReceiver,
   qualityChoices,
   qualityLabel,
+  receiverPress,
   rewrapWorthTheWait,
   wantsFaststart,
   type CropBox,
@@ -629,10 +630,13 @@ class VideoOverlay {
    */
   private async findReceivers(): Promise<void> {
     const found = await renderers();
-    if (this.closed || found.length === 0) return;
+    if (this.closed) return;
+    // Rebuilt even when nothing answered: a menu opened during the search
+    // says "Looking…" until it is told.
+    this.buildCastMenu(found);
+    if (found.length === 0) return;
     this.netReceivers = true;
     this.showReceiverButton();
-    this.buildCastMenu(found);
   }
 
   private showReceiverButton(): void {
@@ -710,6 +714,7 @@ class VideoOverlay {
       here: this.tv != null,
       currentId: this.tv?.cast.renderer.id ?? null,
       picker: airPlaySupported(this.video) || remotePlaybackSupported(this.video),
+      searching: renderersPending(),
       onPick: (target) => void this.startCast(target),
       onHere: () => {
         this.toggleCastMenu(false);
@@ -2757,8 +2762,13 @@ class VideoOverlay {
       // Where the network has renderers on it there is a choice to make, so
       // the button opens the list. Where it has none, the only thing behind
       // it is the browser's own picker and a menu of one would be furniture.
-      if (knownRenderers().length > 0) this.toggleCastMenu();
-      else showAirPlayPicker(this.video);
+      // Still being asked is not none (receiverPress): a stale answer is
+      // asked again here, and the menu opens on the wait.
+      void this.findReceivers();
+      if (receiverPress(knownRenderers().length, renderersPending()) === 'menu') {
+        if (this.castMenu.hidden) this.buildCastMenu(knownRenderers());
+        this.toggleCastMenu();
+      } else showAirPlayPicker(this.video);
     });
     this.audioBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();

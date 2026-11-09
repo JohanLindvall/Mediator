@@ -11,7 +11,7 @@ import {
   showAirPlayPicker,
   watchAirPlay,
 } from './airplay';
-import { Cast, fillReceiverMenu, knownRenderers, renderers } from './cast';
+import { Cast, fillReceiverMenu, knownRenderers, renderers, renderersPending } from './cast';
 import { CastTransport, type CastHooks } from './casting';
 import type { RendererInfo } from './types.gen';
 import { claimMediaKeys, setPlaybackState } from './mediakeys';
@@ -19,7 +19,7 @@ import { reportFault } from './report';
 import { TrackCard } from './trackcard';
 import { playingAudio } from './nowplaying';
 import { clamp, esc, formatDuration, tempoLabel, trackTitle } from './format';
-import { playButtonIcon, singleAudioElement } from './playback';
+import { playButtonIcon, receiverPress, singleAudioElement } from './playback';
 import { AudioDecks } from './audiodecks';
 import { recall, remember } from './remember';
 import { icons } from './icons';
@@ -1279,9 +1279,13 @@ export class AudioPlayer {
     this.els.airplay.addEventListener('click', (ev) => {
       ev.stopPropagation();
       // A television on the network is a choice to make; without one the
-      // button's only meaning is the browser's own picker.
-      if (knownRenderers().length > 0) this.toggleCastMenu();
-      else showAirPlayPicker(this.audio);
+      // button's only meaning is the browser's own picker. Still being asked
+      // is not without (receiverPress): the menu opens on the wait.
+      void this.findReceivers();
+      if (receiverPress(knownRenderers().length, renderersPending()) === 'menu') {
+        if (this.castMenu.hidden) this.buildCastMenu(knownRenderers());
+        this.toggleCastMenu();
+      } else showAirPlayPicker(this.audio);
     });
     document.addEventListener('pointerdown', (ev) => {
       // A press anywhere but on a menu or its button closes it.
@@ -1597,10 +1601,12 @@ export class AudioPlayer {
    */
   private async findReceivers(): Promise<void> {
     const found = await renderers();
+    // Rebuilt even when nothing answered: a menu opened during the search
+    // says "Looking…" until it is told.
+    this.buildCastMenu(found);
     if (found.length === 0) return;
     this.netReceivers = true;
     this.showReceiverButton();
-    this.buildCastMenu(found);
   }
 
   /**
@@ -1625,6 +1631,7 @@ export class AudioPlayer {
       here: this.castTarget != null,
       currentId: this.castTarget?.id ?? null,
       picker: airPlaySupported(this.audio) || remotePlaybackSupported(this.audio),
+      searching: renderersPending(),
       onPick: (target) => this.startCast(target),
       onHere: () => {
         this.toggleCastMenu(false);

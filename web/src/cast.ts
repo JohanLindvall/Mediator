@@ -51,6 +51,16 @@ export function renderers(force = false): Promise<RendererInfo[]> {
   return inFlight;
 }
 
+/**
+ * Whether a search is under way. The receiver button asks this the moment it
+ * is pressed: a search waits seconds for slow sets, and a press inside that
+ * wait must not read "no televisions" and go to the browser's picker, which
+ * on a phone is offered from the first frame and so always pressed first.
+ */
+export function renderersPending(): boolean {
+  return inFlight !== null;
+}
+
 /** What is known without asking — for deciding whether to offer a button. */
 export function knownRenderers(): RendererInfo[] {
   return known;
@@ -168,6 +178,8 @@ export function fillReceiverMenu(
     currentId: string | null;
     /** Offer the browser's own picker as a final entry. */
     picker: boolean;
+    /** The network has not answered yet: say so where its sets will be. */
+    searching: boolean;
     onPick: (r: RendererInfo) => void;
     onHere: () => void;
     onPicker: () => void;
@@ -179,6 +191,14 @@ export function fillReceiverMenu(
     found
       .map((r) => `<button class="vo-menu-item" data-rid="${esc(r.id)}">${esc(r.name)}</button>`)
       .join('') +
+    // Asked before the network answered: the sets arrive here when it does,
+    // and the picker below is already a choice.
+    (found.length === 0 && o.searching
+      ? `<button class="vo-menu-item" disabled>Looking for televisions…</button>`
+      : '') +
+    (found.length === 0 && !o.searching && !o.picker && !o.here
+      ? `<button class="vo-menu-item" disabled>No televisions found</button>`
+      : '') +
     // The browser's own picker, where it has one, is one more entry rather
     // than a second button: they are the same intention.
     (o.picker ? `<button class="vo-menu-item" data-picker>Other devices…</button>` : '');

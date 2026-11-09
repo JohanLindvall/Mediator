@@ -930,6 +930,10 @@ body.viewing #app {
 .vo-menu-item:hover {
   background: rgba(255, 255, 255, 0.1);
 }
+.vo-menu-item:disabled {
+  color: var(--muted);
+  background: none;
+}
 .vo-menu-item.on {
   color: var(--accent-2);
   font-weight: 700;

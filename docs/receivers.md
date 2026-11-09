@@ -20,6 +20,16 @@
     its decks to the bar rather than leaving them detached.
   - A rejected `watchAvailability` shows the button and lets Chrome's dialog
     decide; only an explicit `false` hides it.
+  - **One button, both routes**: with DLNA sets known it opens a menu (the
+    sets, then "Other devices…" for the browser's picker), so a set taking
+    both is offered both ways. `receiverPress` (`playback.ts`, tested)
+    opens the menu while the search is in flight (`renderersPending`), with
+    "Looking for televisions…" until `findReceivers` rebuilds it (also when
+    nothing answered); only an answered empty search goes straight to the
+    picker. A press also re-asks a stale answer. An unanswered search is not
+    an empty one: it takes 2.5 s and a phone shows the button at once, so
+    the first press usually lands inside it. The picker is never opened
+    after an await: it needs the press's own activation.
   - Both routes hand over a **URL** (hence signing). A set merely discovered
     over DIAL never appears in `remote.prompt()` (DIAL launches a named app);
     it is reached by AirPlay from an Apple device, or by DLNA.

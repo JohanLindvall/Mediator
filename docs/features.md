@@ -170,7 +170,10 @@ stops a spare player to obtain permission, which could disturb playback
 over Bluetooth. A pause from the lock screen takes effect at
 once. On a phone the AirPlay button is always offered, its picker listing
 the phone's own outputs too, and the page never searches for receivers
-itself. An album
+itself. Where the server also finds a television over DLNA, the button
+opens a menu listing those sets with "Other devices…" (the AirPlay picker)
+at its foot, so a set that takes both is reachable either way; pressed
+before the search answers, the menu opens saying it is looking. An album
 or playlist opens as a sheet listing its tracks, numbered once rather than
 twice — the "01." a file carries in its name is dropped, unless the digits
 are the title; because the sheet covers

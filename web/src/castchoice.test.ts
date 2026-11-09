@@ -2,7 +2,7 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { castAudioChoice } from './playback.ts';
+import { castAudioChoice, receiverPress } from './playback.ts';
 
 type T = { index: number; default?: boolean; lang?: string };
 
@@ -35,4 +35,13 @@ test('with no default flag the first track stands for it', () => {
 test('a single soundtrack never names a track', () => {
   assert.equal(castAudioChoice([{ index: 0 }], 0), undefined);
   assert.equal(castAudioChoice([], 0), undefined);
+});
+
+// A press before the search answers is a press for the menu: the picker it
+// used to open offered a set that takes both only by AirPlay.
+test('the receiver button opens the menu while the network is being asked', () => {
+  assert.equal(receiverPress(0, true), 'menu');
+  assert.equal(receiverPress(1, false), 'menu');
+  assert.equal(receiverPress(1, true), 'menu');
+  assert.equal(receiverPress(0, false), 'picker');
 });
