@@ -295,6 +295,66 @@ test('cast: a set seen playing again re-arms the handover wait', async () => {
   assert.deepEqual(told(events), ['playing', 'playing', 'ended']);
 });
 
+test('cast: a final receiver position advances after the page clock falls behind, exactly once', async () => {
+  const { tv, set, clock, events, shown } = harness({ pollEvery: 1 });
+  tv.begin(0, 300);
+  tv.run();
+  set.says({ state: 'PLAYING', position: 30 });
+  clock.tick();
+  await settle();
+  // No intervening ticks: a background page has not seen the film play out.
+  set.says({ state: 'STOPPED', position: 300, duration: 300 });
+  clock.tick();
+  await settle();
+  assert.deepEqual(told(events), ['playing', 'ended']);
+  assert.deepEqual(shown, { pos: 300, dur: 300 });
+  assert.equal(tv.playing, false);
+  for (let i = 0; i < 5; i++) {
+    clock.tick();
+    await settle(); // next-item lookup is still pending
+  }
+  assert.deepEqual(told(events), ['playing', 'ended']);
+  assert.equal(clock.running, false);
+  tv.begin(0, 200);
+  tv.run();
+  set.says({ state: 'PLAYING', position: 1 });
+  clock.tick();
+  await settle();
+  assert.equal(tv.pos, 1, 'the successor gets its own running transport');
+});
+
+test('cast: reset clocks during queued handover preserve the ending for fallback playback', async () => {
+  const { tv, set, clock, events } = harness({ pollEvery: 1, handover: 3 });
+  tv.begin(0, 300);
+  tv.run();
+  await tv.queueNext('next');
+  set.says({ state: 'PLAYING', position: 299 });
+  clock.tick();
+  await settle();
+  set.says({ state: 'STOPPED', position: 0, duration: 0 });
+  for (let i = 0; i < 3; i++) {
+    clock.tick();
+    await settle();
+  }
+  assert.deepEqual(told(events), ['playing', 'ended']);
+  assert.equal(tv.pos, 300);
+});
+
+test('cast: a positive final position short of the end remains a remote stop', async () => {
+  const { tv, set, clock, events } = harness({ pollEvery: 1 });
+  tv.begin(0, 300);
+  tv.run();
+  set.says({ state: 'PLAYING', position: 299 });
+  clock.tick();
+  await settle();
+  // The receiver was rewound and stopped between polls.
+  set.says({ state: 'STOPPED', position: 40 });
+  clock.tick();
+  await settle();
+  assert.deepEqual(told(events), ['playing', 'stopped@300']);
+  assert.equal(tv.pos, 40);
+});
+
 test('cast: with nothing queued a stop is taken at its word at once', async () => {
   const { tv, set, clock, events } = harness({ pollEvery: 1, handover: 5 });
   set.says({ state: 'PLAYING', position: 98 });

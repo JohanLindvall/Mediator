@@ -45,7 +45,7 @@ See [Development](#development).
 | What you want to do | What Mediator provides |
 | --- | --- |
 | Watch video | Resume across devices, subtitles, soundtrack selection, playback speed, picture-in-picture and a bitrate selector. |
-| Play on a television | DLNA from the server, plus AirPlay and Remote Playback where the browser and receiver support them. |
+| Play on a television | DLNA from the server, plus AirPlay and Remote Playback where supported; finished videos and queued music advance automatically on the receiver. |
 | Listen to music | Albums, artists, genres, playlists, a queue, shuffle, media keys, similar tracks and radio from audio analysis. |
 | Browse pictures | Full-resolution viewing, zoom, rotation, fullscreen and touch navigation. |
 | Open archives and discs | Browse supported RAR/ZIP sets and DVD images without manually extracting them. |

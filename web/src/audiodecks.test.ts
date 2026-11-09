@@ -25,6 +25,8 @@ function setup(reuse: boolean) {
     currentTime = 0;
     loop = false;
     preload = '';
+    webkitCurrentPlaybackTargetIsWireless = false;
+    remote = { state: 'disconnected' };
     pending: ReturnType<typeof deferred> | null = null;
     name: string;
     constructor(name: string) { this.name = name; }
@@ -146,6 +148,36 @@ test('discarding a preload does not stop the current track', async () => {
   assert.equal(a.source, null);
   assert.deepEqual(env.calls, ['a clear', 'a load']);
 });
+
+for (const route of ['AirPlay', 'Remote Playback'] as const) {
+  test(`${route} advances on the connected desktop element and resumes deck swaps after disconnect`, async () => {
+    const { decks, a, b, env } = setup(false);
+    await decks.load('/track-one', true);
+    decks.preload('/track-two'); // buffered before the receiver connected
+    if (route === 'AirPlay') b.webkitCurrentPlaybackTargetIsWireless = true;
+    else b.remote.state = 'connected';
+    env.gesture = false;
+    env.hidden = true;
+    for (const url of ['/track-two', '/track-three']) {
+      env.calls.length = 0;
+      decks.preload(url);
+      assert.deepEqual(env.calls, [], 'the unused deck does not preload while remote');
+      await decks.load(url, true);
+      assert.equal(decks.current, b, 'the chosen receiver belongs to this element');
+      assert.equal(b.src, url);
+      assert.equal(b.paused, false);
+      assert.equal(b.loop, true);
+      assert.equal(a.source, null, 'a preload from before connection is released');
+      assert.deepEqual(env.calls.slice(0, 2), [`b src ${url}`, 'b play hidden']);
+      assert.ok(!env.calls.some((call) => call === 'b pause' || call === 'b load'));
+    }
+    b.webkitCurrentPlaybackTargetIsWireless = false;
+    b.remote.state = 'disconnected';
+    env.gesture = true;
+    await decks.load('/track-four', true);
+    assert.equal(decks.current, a);
+  });
+}
 
 test('a refused current play remains observable', async () => {
   const { decks, env } = setup(true);

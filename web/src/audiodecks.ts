@@ -4,16 +4,18 @@
  * The music bar's media elements, kept separate from its controls so source
  * changes and play/pause races can be exercised without a browser UI.
  */
+import { playingRemotely } from './airplay.ts';
+
 export class AudioDecks {
   readonly elements: readonly [HTMLAudioElement, HTMLAudioElement];
-  readonly reuse: boolean;
+  private readonly singleElement: boolean;
   private index = 0;
   private urls = ['', ''];
   private attempt = 0;
 
   constructor(elements: readonly [HTMLAudioElement, HTMLAudioElement], reuse: boolean) {
     this.elements = elements;
-    this.reuse = reuse;
+    this.singleElement = reuse;
   }
 
   get current(): HTMLAudioElement {
@@ -24,11 +26,17 @@ export class AudioDecks {
     return this.elements[1 - this.index]!;
   }
 
+  /** A receiver's route belongs to the current element, on desktop too. */
+  get reuse(): boolean {
+    return this.singleElement || playingRemotely(this.current);
+  }
+
   /**
    * iOS keeps the element the listener actually started. Playing an empty
    * spare and immediately pausing it is not proof that a later background
    * play will be allowed, and can disturb the active audio session.
-   * Other browsers retain the prebuffered, alternating decks.
+   * A connected AirPlay or Remote Playback receiver keeps that element too.
+   * Other local playback retains the prebuffered, alternating decks.
    */
   load(url: string, autoplay: boolean): Promise<void> {
     this.attempt++;
@@ -49,6 +57,7 @@ export class AudioDecks {
     const started = autoplay ? this.play() : Promise.resolve();
     if (!autoplay) this.pause();
     if (previous !== this.current) this.stop(previous);
+    else if (this.reuse) this.clear(this.idle);
     return started;
   }
 

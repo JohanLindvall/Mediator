@@ -25,6 +25,13 @@ can offer. It also works from a phone that is nowhere near either the
 server or the television, since only the instructions come from the page.
 See [Playing to a television](deployment.md#playing-to-a-television).
 
+When an item finishes over DLNA or AirPlay, playback advances on the same
+receiver: videos follow the listing they were opened from, skipping known
+damaged files, and music follows the queue's shuffle and repeat settings.
+At the end of the listing or queue, playback stops. Keep the controlling
+page open; it chooses and sends the next item. A DLNA remote stop well before
+the end leaves playback stopped.
+
 ## AirPlay and Cast
 
 the same button also carries the browser's own

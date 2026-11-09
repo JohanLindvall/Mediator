@@ -7,6 +7,11 @@
   receiver is reported (`webkitplaybacktargetavailabilitychanged`,
   `remote.watchAvailability`; an empty picker is worse than none).
   `watchRemoteState` merges the two connection events.
+  - Finished videos follow the player's listing on the same element. Music
+    follows its queue while `AudioDecks.reuse` keeps the element connected
+    to AirPlay or Remote Playback, including on desktop. The idle deck does
+    not preload while connected, and any earlier preload is released at the
+    next track. Disconnecting restores ordinary local deck selection.
   - `watchAirPlay` attaches WebKit's listener (system route detection, a
     documented power cost) and Chrome's watch only while the document is
     visible (WebKit answers at once on re-attach); a chosen route is
@@ -213,6 +218,12 @@
     predating a local control or a change of item is discarded; queue replies
     follow the latest request, and a playing set's position of zero means
     zero.
+    A positive final position from a stopped set corrects the clock before
+    judging completion, so a background page's missed ticks do not conceal
+    an ending. A stopped set's zero instead preserves the last position,
+    including throughout the queued handover wait. Once ended or stopped,
+    polling stands down before calling the adapter: an asynchronous search
+    for the next video cannot receive a second ending for the same file.
   - While a set holds the film nothing reaches `startSource` (the one door for
     sound fix, track change, escalation and rewrap; a source here is a second,
     audible showing); source-bearing polls stop when the cast begins; media

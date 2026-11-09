@@ -28,7 +28,7 @@
  * from inside its own call is the kind of re-entrancy that goes wrong
  * quietly.
  */
-import { castStep, type CastPoll } from './playback.ts';
+import { castOver, castStep, type CastPoll } from './playback.ts';
 
 /** What the set says when asked, with the URI it is holding where it says one. */
 export interface CastAnswer extends CastPoll {
@@ -251,6 +251,12 @@ export class CastTransport<C extends CastLike = CastLike> {
     // and the rule below judges an ending against it — so it is taken
     // first, and the caller sees the same number the verdict was reached by.
     if (st?.duration) this.dur = st.duration;
+    // Background tabs can miss most of a file's progress. A final position
+    // from the set outranks that stale clock; zero at STOPPED commonly means
+    // the set has reset its clock, so retain the last position in that case.
+    const over = st != null && castOver(st.state);
+    if (this.hasPlayed && over && st.position !== undefined &&
+        Number.isFinite(st.position) && st.position > 0 && !this.hooks.seeking()) this.pos = st.position;
     const step = castStep(this.hasPlayed, st, this.pos, this.dur);
     this.hasPlayed = step.seen;
     switch (step.action) {
@@ -269,6 +275,11 @@ export class CastTransport<C extends CastLike = CastLike> {
         // So with something queued, a stop is given a few polls to become
         // the handover it probably is, and only then taken at its word.
         if (this.next != null && ++this.stops < (this.opts.handover ?? 0)) break;
+        // Finding or preparing the next item can outlast another poll. One
+        // ending owns that handover; repeated STOPPED replies cannot skip it.
+        this.playing = false;
+        this.stop();
+        this.hooks.onClock(this.pos, this.dur);
         if (step.action === 'ended') this.hooks.onEnded();
         else this.hooks.onStopped();
         return;
@@ -286,7 +297,7 @@ export class CastTransport<C extends CastLike = CastLike> {
     // A set that has not opened the file will not say where it is, and a
     // zero there would drag the clock back to the beginning.
     if (st?.position !== undefined && Number.isFinite(st.position) && st.position >= 0 &&
-        step.action !== 'opening' && !this.hooks.seeking()) this.pos = st.position;
+        !over && step.action !== 'opening' && !this.hooks.seeking()) this.pos = st.position;
     this.hooks.onClock(this.pos, this.dur);
     this.hooks.onPoll?.();
   }

@@ -89,6 +89,12 @@
   reaches `audio-refused`. Verify iOS's audio session and car Bluetooth on a
   device after deployment; the per-track `audio-stalls`/`audio-refused`
   reports name no cause, and request logs are blind behind a buffering proxy.
+- **AirPlay and Remote Playback keep their connected element**, including
+  on desktop (`AudioDecks.reuse`). Each queue advance replaces its source
+  and requests playback together, preserving the receiver route. The spare
+  deck does not preload while connected; a previously buffered track is
+  released at the boundary. Local playback resumes normal deck selection
+  after disconnection.
 - The tab title (`nowplaying.ts`) is the player's file, else the bar's track,
   else the app's name.
 - Media keys are **claimed, not registered** (`mediakeys.ts`): the video
