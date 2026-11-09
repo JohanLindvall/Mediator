@@ -85,7 +85,18 @@
     even `/usr/share/mime/globs2` and `/etc/mime.types`; a set judges by that
     name alone.
   - Offered is the file, or a rewrap with ranges where the set does not list
-    our container; never the live conversion (no ranges or length). A set that
+    our container; never the live conversion (no ranges or length).
+  - **An interlaced film is deinterlaced into a file first** (`castFieldsKind`,
+    `remuxFields`): a set shows a picture flagged progressive as it is, so
+    one the combing look convicts ([conversion](conversion.md)) would arrive
+    combed. The copy maps the chosen soundtrack and converts a sound the set
+    cannot take, so it replaces the track and sound copies. It is whole before
+    the set is handed it, so it is made only where `fieldsWait` (pixels over
+    `fieldsPixelRate`, a conservative 60 million a second: measured 7.1× real
+    time at 480 lines, 1.64× at 1080) is within `castFieldsWait` (2 min);
+    otherwise, or if it fails, the file goes as it is and
+    `CastStatus.Note` says why. A made copy stays in the scratch space, so a
+    second cast starts at once. A set that
     will not say what it accepts is assumed to accept everything (its refusal
     on screen beats ours).
   - Music carries full DIDL: tagged title, artist under both spellings, album,
@@ -133,7 +144,10 @@
   - A set's fetch carries `tv=1` (minted by `remuxQuery`, honoured by
     `handleRemux`), lifting the rewrap's 404 for a picture reordering beyond
     its declaration — right for a browser, wrong for a set decoding like VLC
-    (else `716 Resource not found`). It authorises nothing else.
+    (else `716 Resource not found`). It authorises nothing else. Every kind
+    but the plain copy also names its `mode` (`remuxModes`): unnamed, the
+    set's fetch asks for the plain copy, which refuses the films a sound fix
+    or a deinterlaced copy is for.
   - Refusals reach the viewer as sentences naming the set (`castFault`), the
     SOAP fault going to the log.
   - **A cast claims the set before preparing the film** (`castClaim`; the set

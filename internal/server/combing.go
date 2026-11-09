@@ -21,8 +21,9 @@ package server
 // re-encoded rather than played or copied (mustReencode), and the conversion
 // deinterlaces every frame in the order found (pictureFilter).
 //
-// Not asked of a television, like the frame-order look: a set takes the file
-// as it is either way.
+// A television cannot take the live conversion — it wants a length and
+// ranges — so a cast hands it a deinterlaced file instead, made before the
+// set is given the URL (castFieldsKind, remuxFields).
 
 import (
 	"bytes"

@@ -1114,6 +1114,15 @@ func (s *Server) handleRemux(w http.ResponseWriter, r *http.Request) {
 		// choice cannot be said to a television or to any browser but Safari,
 		// so it is made by handing over a file holding only that language.
 		kind = remuxTrack
+	case "fields", "fieldsaudio":
+		// A television's deinterlaced copy (remuxFields), made by the cast
+		// before it handed this URL over; the order comes from the combing
+		// look, remembered for the run.
+		kind = remuxFields
+		if r.URL.Query().Get("mode") == "fieldsaudio" {
+			kind = remuxFieldsSound
+		}
+		it.Interlace = s.interlacing(r.Context(), it)
 	}
 	// A copy is faithful, and for some streams that is exactly the problem:
 	// one that reorders further than it declares plays correctly only where

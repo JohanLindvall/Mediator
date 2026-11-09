@@ -153,7 +153,7 @@ func TestRemuxTrackIsItsOwnFile(t *testing.T) {
 	if got := key[strings.LastIndex(key, "|")+1:]; got != string(remuxTrack) {
 		t.Errorf("read back kind %q; want %q", got, remuxTrack)
 	}
-	for _, other := range []remuxKind{remuxCopy, remuxSound} {
+	for _, other := range []remuxKind{remuxCopy, remuxSound, remuxFields, remuxFieldsSound} {
 		if remuxName(it, 1, other) == name {
 			t.Errorf("kind %q is written to the same file as %q", other, remuxTrack)
 		}
@@ -175,8 +175,12 @@ func TestARewrapForASetSaysSo(t *testing.T) {
 		want string
 	}{
 		{remuxCopy, "&tv=1"},
-		{remuxSound, "&tv=1"},
+		// Every other kind says which it is, or the set's fetch is served
+		// the plain copy — which refuses the very films a sound fix is for.
+		{remuxSound, "&tv=1&mode=audio"},
 		{remuxTrack, "&tv=1&mode=track"},
+		{remuxFields, "&tv=1&mode=fields"},
+		{remuxFieldsSound, "&tv=1&mode=fieldsaudio"},
 	} {
 		if got := remuxQuery(c.kind); got != c.want {
 			t.Errorf("kind %q asks %q, want %q", c.kind, got, c.want)

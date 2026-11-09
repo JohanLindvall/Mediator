@@ -40,6 +40,16 @@
   asks for the container copy wherever `opensDirectly` holds. A conversion
   would re-encode a playable VP9 picture (the MP4 rewrap refuses VP9) and
   transcode an Opus dub to AAC.
+- **A television gets a deinterlaced copy** (`?mode=fields`/`fieldsaudio`,
+  `remuxFields`/`remuxFieldsSound`): the one kind that re-encodes the
+  picture (`fieldsEncodeArgs`: libx264 veryfast CRF 20 behind
+  `pictureFilter`), for a film the combing look found interlaced
+  ([conversion](conversion.md)), since a set takes no live conversion. The
+  sound is copied where an MP4 holds it and a set decodes it
+  (`fieldsCopySound`) and converted otherwise. The field order is not in the
+  key (one identity, one order); the handler stamps it from the combing
+  verdict and the copy is refused without one. Progress is bytes over the
+  source's size, as for every copy, and so only approximate here.
 - **Safari asks for the rewrap too**, up to `REWRAP_WAIT_LIMIT` = 2 GiB
   (`rewrapWorthTheWait`): a disk-speed copy (~270 MB/s) gives the file
   itself (native seeking, its own clock, no held ffmpeg); past the limit

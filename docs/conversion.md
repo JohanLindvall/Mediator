@@ -235,7 +235,9 @@
   `testsrc`.
   - Only `combCandidate` pictures are decoded: up to 1088 lines and 31 fps
     (fields are coded as 25 or 29.97 frames; unread shape counts as asked).
-    Inputs seeked by position or read through a pipe get no look.
+    Inputs seeked by position or read through a pipe get no look. A
+    television gets a deinterlaced file instead of a conversion
+    ([receivers](receivers.md)).
   - The verdict is the field order (`"tff"`/`"bff"`), kept in a
     `verdictCache[string]` (`Server.combing`, the same leader/follower cache
     as the reorder look). `mustReencode` asks both looks at once, so an

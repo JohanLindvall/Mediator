@@ -551,7 +551,12 @@ That conversion deinterlaces every frame in the field order it found. The
 check is once per film per run, and applies only to pictures up to 1080 lines
 at up to 30 frames a second. The first open may play a moment natively
 before switching; after that, the listing carries the verdict, so the film
-is converted from the start.
+is converted from the start. Cast to a television, such a film is
+deinterlaced into a file before the set is given it, since a set cannot
+play a live conversion. The player shows the progress. The copy is made
+only when it should take under two minutes, which covers short
+standard-definition films; anything longer goes to the set as it is, with
+a note saying why. The copy is kept, so casting it again starts at once.
 
 ## HDR to ordinary colour
 

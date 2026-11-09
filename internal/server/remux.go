@@ -108,7 +108,25 @@ const (
 	// Copying it into an MP4 would be a container neither the set nor the
 	// codecs asked for; copying it into its own is lossless and costs a read.
 	remuxTrack remuxKind = "trk"
+	// remuxFields is the one copy that re-encodes the picture: a film whose
+	// frames are fields combed together however it is flagged (combing.go),
+	// deinterlaced into a file for a television, which needs a length and
+	// ranges and so cannot be handed the live conversion. The soundtrack is
+	// copied; remuxFieldsSound converts it as well, for a sound no set
+	// decodes or no MP4 holds. The field order comes with the item
+	// (Item.Interlace), the same for a file of one identity, so it is not in
+	// the key.
+	remuxFields      remuxKind = "dei"
+	remuxFieldsSound remuxKind = "dea"
 )
+
+// fieldsEncodeArgs is the picture of a deinterlaced copy: the conversion's
+// encoder, a little finer, since the copy is kept and watched on the largest
+// screen in the house rather than streamed to a phone.
+func fieldsEncodeArgs(it library.Item) []string {
+	return []string{"-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+		"-vf", pictureFilter(it.Interlace), "-pix_fmt", "yuv420p"}
+}
 
 // trackContainer is the container a soundtrack copy of this file keeps, as an
 // extension and as the muxer that writes it. Matroska only, deliberately: an
@@ -322,7 +340,7 @@ func remuxKeyFromName(name string) (string, bool) {
 	// one carries no marker, so a name from before there was a second kind
 	// reads as what it is rather than being deleted and made again.
 	kind := remuxCopy
-	for _, k := range []remuxKind{remuxSound, remuxTrack} {
+	for _, k := range []remuxKind{remuxSound, remuxTrack, remuxFields, remuxFieldsSound} {
 		if rest, marked := strings.CutSuffix(base, "-"+string(k)); marked {
 			base, kind = rest, k
 			break
@@ -460,6 +478,10 @@ func (r *Remuxer) File(ctx context.Context, it library.Item, audio string, kind 
 		}
 	case remuxTrack:
 		if !trackCopyable(it) {
+			return "", ErrNoRemux
+		}
+	case remuxFields, remuxFieldsSound:
+		if it.Kind != library.KindVideo || it.Interlace == "" {
 			return "", ErrNoRemux
 		}
 	default:
@@ -722,8 +744,14 @@ func (r *Remuxer) run(ctx context.Context, it library.Item, track int, kind remu
 	// languages hands a television all four and lets it choose, which is how
 	// a Swedish release comes out in Danish; DLNA has no way to say which,
 	// so the choice is made by what is in the file it is given.
-	args = append(args, "-map", pictureMap, "-map", audioMapN(track), "-sn", "-dn", "-c:v", "copy")
-	if kind == remuxSound {
+	args = append(args, "-map", pictureMap, "-map", audioMapN(track), "-sn", "-dn")
+	fields := kind == remuxFields || kind == remuxFieldsSound
+	if fields {
+		args = append(args, fieldsEncodeArgs(it)...)
+	} else {
+		args = append(args, "-c:v", "copy")
+	}
+	if kind == remuxSound || kind == remuxFieldsSound {
 		// The picture goes through untouched — it was never the problem —
 		// and only the soundtrack is made into something the browser has a
 		// decoder for. The settings are the live conversion's, so the same
@@ -740,7 +768,7 @@ func (r *Remuxer) run(ctx context.Context, it library.Item, track int, kind remu
 	// file already in an MP4 that mislabelling is the whole fault being
 	// fixed; for a picture being copied out of some other container it would
 	// be a fault newly introduced, which is why the codec is asked as well.
-	if misTaggedHEVC(it) || it.VCodec == "hevc" {
+	if !fields && (misTaggedHEVC(it) || it.VCodec == "hevc") {
 		args = append(args, "-tag:v", "hvc1")
 	}
 	if kind == remuxTrack {

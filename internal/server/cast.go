@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"mime"
 	"net"
 	"net/http"
@@ -665,6 +666,25 @@ func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it libra
 		// why.
 		kind, wantCopy = castSoundKind(it, d.Accepts)
 	}
+	// **Fields** outrank both: a set shows a picture flagged progressive as
+	// it is, so a film whose frames are fields combed together (combing.go)
+	// arrives combed on the largest screen there is. The cure is a re-encode,
+	// and a set cannot take the live one — it wants a length and ranges — so
+	// it is a deinterlaced file, made before the URL is handed over like
+	// every other copy here. That copy maps the chosen soundtrack and
+	// converts a sound the set cannot take, so it does the other two jobs as
+	// well. It is made only where the wait is short (castFieldsWait); a long
+	// film plays as it is, and the viewer is told why.
+	fields := false
+	if order := s.interlacing(ctx, it); order != "" {
+		if wait := fieldsWait(it); wait <= castFieldsWait {
+			it.Interlace = order
+			kind, wantCopy, fields = castFieldsKind(it, d.Accepts), true, true
+		} else {
+			note = fmt.Sprintf("The television plays this film interlaced: deinterlacing it first would take about %d minutes",
+				int(wait.Round(time.Minute)/time.Minute))
+		}
+	}
 	if wantCopy {
 		// Making the copy is a read of the whole film at disk speed with a
 		// television waiting on it, which is playback by every measure the
@@ -688,6 +708,11 @@ func (s *Server) castSourceNoted(ctx context.Context, d *dlna.Renderer, it libra
 		if err == nil {
 			path = "remux/" + url.PathEscape(it.ID) + "?a=" + strconv.Itoa(audioTrack(audio)) + remuxQuery(kind)
 			mimeType = remuxMime(it, kind)
+		} else if fields {
+			// The file itself still plays, combed as it is, with whichever
+			// soundtrack the set picks out of it.
+			note = "The television plays this film interlaced: it could not be deinterlaced first"
+			s.log.Debug("cast: cannot deinterlace", "item", it.Name, "err", err)
 		} else {
 			// Nothing is lost but the choice: the file itself still plays,
 			// with whichever soundtrack the set picks out of it. The
@@ -930,15 +955,8 @@ var noReceiverAudio = map[string]bool{"dts": true, "dca": true, "truehd": true, 
 var dtsSinks = []string{"audio/vnd.dts", "audio/vnd.dts.hd", "audio/x-dts"}
 
 func castSoundKind(it library.Item, accepts func(string) bool) (remuxKind, bool) {
-	if !noReceiverAudio[strings.ToLower(it.ACodec)] {
+	if !castSoundDeaf(it, accepts) {
 		return remuxCopy, false
-	}
-	if codec := strings.ToLower(it.ACodec); codec == "dts" || codec == "dca" {
-		for _, name := range dtsSinks {
-			if accepts(name) {
-				return remuxCopy, false
-			}
-		}
 	}
 	// The picture is copied through and only the sound is re-encoded, so the
 	// question is whether this film can take a sound fix at all — the same
@@ -950,6 +968,64 @@ func castSoundKind(it library.Item, accepts func(string) bool) (remuxKind, bool)
 		return remuxCopy, false
 	}
 	return remuxSound, true
+}
+
+// castSoundDeaf says the set cannot be expected to decode this soundtrack.
+func castSoundDeaf(it library.Item, accepts func(string) bool) bool {
+	if !noReceiverAudio[strings.ToLower(it.ACodec)] {
+		return false
+	}
+	if codec := strings.ToLower(it.ACodec); codec == "dts" || codec == "dca" {
+		for _, name := range dtsSinks {
+			if accepts(name) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// fieldsCopySound are the soundtracks a deinterlaced copy carries through
+// unchanged: what an MP4 holds and a set decodes. Anything else — a sound
+// the set cannot take, or one no MP4 holds (PCM, Vorbis, WMA) — is
+// converted on the way.
+var fieldsCopySound = map[string]bool{"aac": true, "mp3": true, "ac3": true, "eac3": true, "": true}
+
+// castFieldsKind is which deinterlaced copy a set needs: the soundtrack
+// carried through, or converted with the picture.
+func castFieldsKind(it library.Item, accepts func(string) bool) remuxKind {
+	if fieldsCopySound[strings.ToLower(it.ACodec)] && !castSoundDeaf(it, accepts) {
+		return remuxFields
+	}
+	return remuxFieldsSound
+}
+
+const (
+	// castFieldsWait is the longest a set is kept waiting on a deinterlaced
+	// copy. The copy is whole before the set is handed it, and the viewer
+	// watches a percentage meanwhile; past this, combing on the screen is the
+	// lesser fault. Once made the copy is kept in the scratch space, so the
+	// next cast of the film starts at once.
+	castFieldsWait = 2 * time.Minute
+	// fieldsPixelRate is how many pixels a second the deinterlacing encode
+	// gets through, conservatively: measured here, 480 lines at 29.97 fps
+	// encoded at 7.1 times real time (65 million a second) and 1080 lines at
+	// 1.64 (102 million, on a busier machine).
+	fieldsPixelRate = 60e6
+)
+
+// fieldsWait estimates how long a deinterlaced copy of the film takes, or
+// answers more than castFieldsWait where it has no length or shape to go on.
+func fieldsWait(it library.Item) time.Duration {
+	if it.Duration <= 0 || it.Width <= 0 || it.Height <= 0 {
+		return castFieldsWait + time.Second
+	}
+	fps := it.FPS
+	if fps <= 0 {
+		fps = 30
+	}
+	pixels := float64(it.Width) * float64(it.Height) * fps * float64(it.Duration) / 1000
+	return time.Duration(pixels / fieldsPixelRate * float64(time.Second))
 }
 
 // castTrackKind is which copy the viewer's soundtrack choice needs, if it
@@ -996,10 +1072,20 @@ func remuxMime(it library.Item, kind remuxKind) string {
 // screen, which is a self-inflicted wound and not a way past anything.
 func remuxQuery(kind remuxKind) string {
 	q := "&tv=1"
-	if kind == remuxTrack {
-		q += "&mode=track"
+	if mode := remuxModes[kind]; mode != "" {
+		q += "&mode=" + mode
 	}
 	return q
+}
+
+// remuxModes is how each kind of copy is asked for by `handleRemux`'s
+// `mode`: every kind but the plain copy has to say which it is, or the set
+// is served — or refused — the plain one.
+var remuxModes = map[remuxKind]string{
+	remuxSound:       "audio",
+	remuxTrack:       "track",
+	remuxFields:      "fields",
+	remuxFieldsSound: "fieldsaudio",
 }
 
 // castAliases are other names the same bytes can honestly be handed over
