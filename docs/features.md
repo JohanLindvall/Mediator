@@ -543,6 +543,16 @@ untouched, since only the frames the file itself flags are processed. The
 hardware converter does not deinterlace, deliberately — nothing large
 enough to reach it is interlaced.
 
+Some files are interlaced but marked progressive, so neither the browser nor
+the flag-trusting deinterlacer would notice. When such a film is opened, the
+server compares the fields of a few seconds of its picture. If they belong
+to two moments, the film is converted instead of being played as it is.
+That conversion deinterlaces every frame in the field order it found. The
+check is once per film per run, and applies only to pictures up to 1080 lines
+at up to 30 frames a second. The first open may play a moment natively
+before switching; after that, the listing carries the verdict, so the film
+is converted from the start.
+
 ## HDR to ordinary colour
 
 a 4K release is often graded in wide colour

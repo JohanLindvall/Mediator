@@ -127,9 +127,9 @@ The server (`internal/server`, `internal/dlna`, `main.go`):
   (`content.go`, `library/paths.go`).
 - [conversion](docs/conversion.md): how a file reaches the element — live
   conversion, the graphics hardware, the bitrate ladder, the page-fed
-  stream, reordering, soundtracks, seeking (`convert.go`, `hwaccel.go`,
-  `hdr.go`, `reorder.go`, `deinterlace.go`, `keyframe.go`, `timeparam.go`,
-  `fsfault_*.go`, `web/src/playback.ts`, `video.ts`, `mse.ts`).
+  stream, reordering, interlacing, soundtracks, seeking (`convert.go`,
+  `hwaccel.go`, `hdr.go`, `reorder.go`, `deinterlace.go`, `combing.go`,
+  `keyframe.go`, `timeparam.go`, `fsfault_*.go`, `web/src/playback.ts`, `video.ts`, `mse.ts`).
 - [rewrap](docs/rewrap.md): copies into a container the browser opens,
   sound fixes and soundtrack copies, the scratch space (`remux.go`,
   `scratch.go`).

@@ -253,7 +253,7 @@ func planConversion(ctx context.Context, ffmpeg string, it library.Item, t float
 		}
 		args = append(args,
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-			"-vf", videoFilter(filters), "-pix_fmt", "yuv420p")
+			"-vf", pictureFilter(it.Interlace, filters), "-pix_fmt", "yuv420p")
 		if absolute {
 			// On the grid and nowhere else: a scene cut may not add a
 			// keyframe of its own, or the muxer could take it for the

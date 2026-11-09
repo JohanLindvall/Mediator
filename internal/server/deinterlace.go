@@ -51,7 +51,26 @@ const (
 // belong to neither, and no deinterlacer afterwards can take them apart
 // again — the combing becomes a permanent smear instead.
 func videoFilter(rest ...string) string {
-	return strings.Join(append([]string{deinterlacer}, rest...), ",")
+	return pictureFilter("", rest...)
+}
+
+// pictureFilter is videoFilter for a picture the combing look has judged
+// (combing.go): interlace is the field order it found, or empty for none.
+//
+// A file that flags its fields needs nothing more than the deinterlacer
+// above. One that is interlaced and says it is progressive gets nothing from
+// it — `deint=interlaced` believes the flag — so for such a file the filter
+// works on **every** frame, and in the field order the look measured rather
+// than the one bwdif assumes for a frame flagged progressive, which is top
+// first. That assumption is not harmless: measured on a bottom-first 480i
+// file flagged progressive, deinterlaced top first left 9 of 138 frames
+// still reading as combed; bottom first, none.
+func pictureFilter(interlace string, rest ...string) string {
+	first := deinterlacer
+	if interlace == "tff" || interlace == "bff" {
+		first = "bwdif=mode=send_frame:parity=" + interlace + ":deint=all"
+	}
+	return strings.Join(append([]string{first}, rest...), ",")
 }
 
 // square undoes an anamorphic frame before it is scaled into a picture.

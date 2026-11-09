@@ -223,6 +223,37 @@
   merges the fields for good; test-pinned); **`send_frame` stated
   explicitly**, the default `send_field` doubling every re-encode's frame
   rate. `crop.go` has none: bars are black in both fields.
+- **Interlaced pictures flagged progressive are found by looking**
+  (`combing.go`): fields combed into frames flagged progressive reach a
+  browser combed, and `deint=interlaced` trusts the flag. `idet` over
+  `combProbeFrames` (120) from a quarter in (at most `combSampleCap`, 300 s)
+  compares the fields; `combVerdict` convicts when more than half of the
+  decided frames are fields and at least 30 were decided (undetermined frames
+  are left out: a still scene's fields agree either way). Measured on one
+  directory: the combed file 138/138 bottom first, 33 progressive files at
+  most 21/138. Synthetic progressive `testsrc2` fools idet; tests use
+  `testsrc`.
+  - Only `combCandidate` pictures are decoded: up to 1088 lines and 31 fps
+    (fields are coded as 25 or 29.97 frames; unread shape counts as asked).
+    Inputs seeked by position or read through a pipe get no look.
+  - The verdict is the field order (`"tff"`/`"bff"`), kept in a
+    `verdictCache[string]` (`Server.combing`, the same leader/follower cache
+    as the reorder look). `mustReencode` asks both looks at once, so an
+    interlaced picture is converted wherever a copy would be made (rewrap
+    404, soundtrack conversions, `Reencode` on `/api/item` and the listing).
+  - **The look runs on its own clock** (`combProbeTimeout`, 20 s) and
+    outlives its asker: the item fetch's 1.5 s budget, shared with the probe
+    and the reorder look, can be overrun by a 1080-line decode, and a look
+    cut off with it would be repeated on every open. The asker waits up to
+    its own context and asks once per call; an unfinished look is not cached.
+  - A re-encode (piped and segmented) stamps `Item.Interlace` (never indexed,
+    never sent) and `pictureFilter` swaps in
+    `bwdif=mode=send_frame:parity=<order>:deint=all` ahead of any scale. The
+    order is stated because bwdif assumes top first for a frame flagged
+    progressive: on the bottom-first file that left 9/138 frames combed,
+    against none with the measured order. The conversion keeps the source's
+    frame rate. Thumbnails keep `videoFilter` (no look before a tile), and
+    the hardware converter never sees a candidate (below `hwPixelRate`).
 - **The film's picture is ffmpeg's `V:0`, never `v:0`** (`pictureMap`,
   `pictureStream`, `convert.go`): a cover the file carries (a WMV's embedded
   picture, an MP4's artwork, a Matroska attachment) is a video stream to

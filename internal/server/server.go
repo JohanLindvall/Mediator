@@ -101,6 +101,9 @@ type Server struct {
 	// reorder remembers which pictures cannot be handed to a browser by
 	// copying, however playable their codec is (reorder.go).
 	reorder reorderCache
+	// combing remembers which pictures are interlaced however they are
+	// flagged, and in which field order (combing.go).
+	combing verdictCache[string]
 	// embsubs caches the subtitles extracted from inside video files
 	// (embsubs.go): the read is the whole container, and the player asks
 	// again with a new ?shift= on every seek.
@@ -552,7 +555,11 @@ func (s *Server) stampReencode(items []library.Item) {
 		if items[i].Kind != library.KindVideo {
 			continue
 		}
-		if v, ok := s.reorder.get(itemKey(items[i])); ok && v {
+		key := itemKey(items[i])
+		if v, ok := s.reorder.get(key); ok && v {
+			items[i].Reencode = true
+		}
+		if v, ok := s.combing.get(key); ok && v != "" {
 			items[i].Reencode = true
 		}
 	}
@@ -1223,6 +1230,11 @@ func (s *Server) handleTranscode(w http.ResponseWriter, r *http.Request) {
 	// here, where the header has been read.
 	if copyVideo && s.mustReencode(r.Context(), it) {
 		copyVideo = false
+	}
+	// A re-encode deinterlaces what the combing look found interlaced,
+	// flagged or not (combing.go).
+	if !copyVideo {
+		it.Interlace = s.interlacing(r.Context(), it)
 	}
 
 	// A failure that produced nothing can be started over — the aspect put

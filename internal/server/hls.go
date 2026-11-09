@@ -494,6 +494,11 @@ func (s *Server) handleHLSStart(w http.ResponseWriter, r *http.Request) {
 	if copyVideo && s.mustReencode(r.Context(), it) {
 		copyVideo = false
 	}
+	// A re-encode deinterlaces what the combing look found interlaced,
+	// flagged or not (combing.go).
+	if !copyVideo {
+		it.Interlace = s.interlacing(r.Context(), it)
+	}
 
 	sess, err := s.hls.session(r.Context(), it, t, copyVideo, r.URL.Query().Get("a"), q)
 	if err != nil {

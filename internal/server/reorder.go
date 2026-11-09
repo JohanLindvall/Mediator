@@ -63,13 +63,14 @@ const (
 	reorderProbeTimeout = 20 * time.Second
 )
 
-// reorderCache remembers the answer for the run, keyed by the file's identity.
-// One ffprobe of the opening per film per process: the same shape of cost
+// verdictCache remembers a look's answer for the run, keyed by the file's
+// identity. One look per film per process: the same shape of cost
 // EnsureCodecs already pays at the moment a film is opened, and for the same
-// reason — it is the moment something has to decide how to serve it.
-type reorderCache struct {
+// reason — it is the moment something has to decide how to serve it. Two
+// looks use it: the frame order here, and the combing (combing.go).
+type verdictCache[V any] struct {
 	mu   sync.Mutex
-	seen map[string]bool
+	seen map[string]V
 	// looking is the look in flight, by key. Opening a film fires several
 	// requests at once — the item, the rewrap or the playlist — and each of
 	// them asks this question about the same file, so without it the same
@@ -78,18 +79,22 @@ type reorderCache struct {
 	looking map[string]chan struct{}
 }
 
-func (c *reorderCache) get(key string) (bool, bool) {
+// reorderCache is the frame-order verdict: true where the picture must be
+// re-encoded.
+type reorderCache = verdictCache[bool]
+
+func (c *verdictCache[V]) get(key string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	v, ok := c.seen[key]
 	return v, ok
 }
 
-func (c *reorderCache) put(key string, v bool) {
+func (c *verdictCache[V]) put(key string, v V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.seen == nil {
-		c.seen = map[string]bool{}
+		c.seen = map[string]V{}
 	}
 	c.seen[key] = v
 }
@@ -97,27 +102,27 @@ func (c *reorderCache) put(key string, v bool) {
 // claim answers where the film has been judged, and otherwise either hands
 // the caller the job — a nil channel — or the look already in flight, to
 // wait on rather than run a second one beside it.
-func (c *reorderCache) claim(key string) (v, known bool, wait chan struct{}) {
+func (c *verdictCache[V]) claim(key string) (v V, known bool, wait chan struct{}) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if v, ok := c.seen[key]; ok {
 		return v, true, nil
 	}
 	if ch, running := c.looking[key]; running {
-		return false, false, ch
+		return v, false, ch
 	}
 	if c.looking == nil {
 		c.looking = map[string]chan struct{}{}
 	}
 	c.looking[key] = make(chan struct{})
-	return false, false, nil
+	return v, false, nil
 }
 
 // settle writes down what the look found and releases whoever waited on it.
 // A look that could not finish is released without a verdict: nothing is
 // remembered, and whoever was waiting looks again with a budget of their
 // own, which is what "interrupted is not answered" means here.
-func (c *reorderCache) settle(key string, v, answered bool) {
+func (c *verdictCache[V]) settle(key string, v V, answered bool) {
 	if answered {
 		c.put(key, v)
 	}
@@ -139,6 +144,11 @@ func (c *reorderCache) settle(key string, v, answered bool) {
 // cached as an acquittal, which with the short budget an item fetch gives
 // it would have excused a film for the life of the process.
 //
+// Two looks, side by side: the frame order here, and whether the picture
+// is interlaced however it is flagged (combing.go) — fields a browser shows
+// combed, which a copy keeps exactly as it keeps a lie about reordering.
+// They run at once, since the item fetch gives both one short budget.
+//
 // One look at a time per film, too. Opening a film asks this from more than
 // one place at once — the item endpoint, and behind it the rewrap or the
 // first playlist — and each of them used to start an ffprobe of its own on
@@ -150,6 +160,14 @@ func (s *Server) mustReencode(ctx context.Context, it library.Item) bool {
 	if it.Kind != library.KindVideo || it.VCodec == "" {
 		return false
 	}
+	fields := make(chan string, 1)
+	go func() { fields <- s.interlacing(ctx, it) }()
+	reordered := s.reordered(ctx, it)
+	return <-fields != "" || reordered
+}
+
+// reordered is the frame-order half of mustReencode.
+func (s *Server) reordered(ctx context.Context, it library.Item) bool {
 	key := itemKey(it)
 	for {
 		v, known, wait := s.reorder.claim(key)

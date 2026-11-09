@@ -118,11 +118,19 @@ type Item struct {
 	// Reencode says the picture cannot be played by copying it, and so not
 	// as it is either: the stream reorders its frames further than it
 	// declares, which a browser that trusts the declaration shows as a
-	// stutter (server/reorder.go). The player then has it converted rather
-	// than handing the file to the element. Stamped by the server on the
-	// copy /api/item hands out, once the file has been looked at; never on
-	// the indexed item and never written down.
+	// stutter (server/reorder.go), or its frames are two fields combed
+	// together, which a browser shows as teeth on anything that moves
+	// (server/combing.go). The player then has it converted rather than
+	// handing the file to the element. Stamped by the server on the copy
+	// /api/item hands out, once the file has been looked at; never on the
+	// indexed item and never written down.
 	Reencode bool `json:"reencode,omitempty"`
+	// Interlace is the field order the combing look found in a picture —
+	// "tff" or "bff" — or empty where it found none. Stamped by the server
+	// on the copy a conversion plans from, so the deinterlacer works on
+	// every frame in the right order whatever the file flags; never on the
+	// indexed item, never written down and never sent.
+	Interlace string `json:"-"`
 	// The picture's shape and rate, from the same probe. Kept because how
 	// much work a conversion is depends on them and on nothing else: pixels
 	// per second is what decides whether this machine's processor can keep
