@@ -91,33 +91,6 @@
     from the stamper's set; `affinities` hands its verdicts to `spokenWith`
     instead of `spokenSet` re-reading. Two readings can straddle an album
     build.
-  - **Shown tempo** (`tempo.go`, `Item.BPM`, `sort=tempo`): column 50 is never
-    shown (5–10 BPM whole-lag steps) nor changed (vectors compare only under
-    one recipe). `bpmOf` reads the decode's onset envelopes
-    (`describeWindows`): candidates a quarter beat apart, scored at their
-    period and three multiples under the prior toward 120, the correlation
-    read between frames (`correlationAt`). Tags are ignored (2% carry one,
-    mostly 0 or a bitrate). Not done: period from multiple peaks (no gain),
-    envelope smoothing (hides real tempos), a drawn beat (phase unknown).
-    - Floors, each with a test showing the tempo it prevents
-      (`TestAnEncodersFlickerIsNoTempo`): onsets floor each band `tempoTopDB`
-      (80 dB) under the loudest (MP3 encoders' empty bands flicker like
-      drums; the vector's onsets stay unfloored), and the strongest must reach
-      `bpmOnsetFloor` (residue peaks 0.4–3.4, the weakest real track 15).
-      Clarity under `bpmClarity` (0.3) shows nothing; spoken tracks have none
-      (`stamp`). A strong vibrato can still read as a tempo.
-    - Stored apart (`blob.PutTempo`, `tempos`, `tempoVersion`, pruned,
-      `LoadTempos`). A current non-empty vector lacking a tempo is re-read for
-      it alone (`needsAnalysis`) without rewriting the vector (`analyzeOne`
-      reports freshness); tempo batches publish via `publishRead` without
-      moving the features generation, which would rebuild resemblances for
-      nothing. Stamper and order read one map (`publishTempos`); none sorts
-      last.
-    - Offered where a listing is only tracks (`listsTracks`, `content.ts`):
-      the music chip, plus All and Popular on a music-only face; `sortOptions`
-      takes the face at both key checks, and boot reads the address only after
-      `/api/info`. Shown whole (`tempoLabel`) on tile, sheet (not under
-      480px), bar and hover.
   - Similarity is cosine over per-column z-scored unit vectors (`similar.go`),
     brute force deliberately (56 × 100k is milliseconds; an index is one more
     thing to keep right). `Similar` keeps the n best in a sorted slice,

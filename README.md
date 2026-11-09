@@ -219,7 +219,7 @@ The server uses JSON for metadata and HTTP Range requests for media. The
 
 | Endpoint                                  | Description                              |
 | ----------------------------------------- | ---------------------------------------- |
-| `GET /api/library?kind&q&folder&sort&order&offset&limit` | Paged, filtered, sorted listing; `folder` selects the exact displayed leaf folder name across all parents and roots. `sort=tempo` orders music by the tempo read from the sound (each track's `bpm`), those with none last |
+| `GET /api/library?kind&q&folder&sort&order&offset&limit` | Paged, filtered, sorted listing; `folder` selects the exact displayed leaf folder name across all parents and roots. |
 | `GET /api/folders?kind&q&sort&order` | File groups by leaf folder name, merging equal names; each carries an item count and representative thumbnail ID. Search, `watch`, `played`, `hidden` and `fav` filter members before grouping; sorts: `name`, `mtime`, `added`, `items`, `size`, `duration` |
 | `GET /api/albums?q&artist&genre&sort&order` | Albums (directory + m3u), narrowed to one performer or one genre; `audiobooks=1` lists the audiobook shelf instead. Each carries `path` (where the release is kept, as the listing names a file) and `formats` (what its tracks are, commonest first) |
 | `GET /api/artists?q&sort&order`           | Artists, grouped from album tags         |

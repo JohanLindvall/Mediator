@@ -44,7 +44,6 @@ export interface Item {
   aspect?: string;
   hidden?: boolean;
   favourite?: boolean;
-  bpm?: number;
 }
 
 export interface AudioTrack {

@@ -100,9 +100,8 @@ function musicFace(content: string[] | null): boolean {
  * Whether a view's items are tracks and nothing else: the music chip's, and
  * on a face that shows nothing but music the listings that elsewhere mix
  * kinds — All and Popular — which are where such a face lists its tracks,
- * there being no music chip on it to repeat All. What a track has and a
- * film does not (a tempo, a queue) is offered wherever this says so, and
- * one rule is what keeps the sort menu and the queue button agreeing.
+ * there being no music chip on it to repeat All. The queue-all button is
+ * offered wherever this says so.
  */
 export function listsTracks(mode: ViewMode, content: string[] | null): boolean {
   switch (mode) {

@@ -32,8 +32,7 @@ type ListQueryParams struct {
 	// Folder selects all files whose immediate folder has this displayed name.
 	Folder string `json:"folder,omitempty"`
 	// Sort is the view's own key. Items: "name" | "mtime" | "size" | "added" |
-	// "duration" | "popular" | "pixels" | "bitrate" | "tempo" | "episode" |
-	// "random";
+	// "duration" | "popular" | "pixels" | "bitrate" | "episode" | "random";
 	// the grouped views take theirs (year, artist, genre, tracks, albums,
 	// episodes, seasons …) and "similarity" where near is set.
 	Sort  string `json:"sort,omitempty"`

@@ -13,7 +13,7 @@
  * of it, and it has been wrong — a performer's releases opened by name for as
  * long as the fallback was simply the first row of the table below.
  */
-import { listsTracks, supportsFolders, type ViewMode } from './content.ts';
+import { supportsFolders, type ViewMode } from './content.ts';
 
 /** The narrowing a view stands in, which changes what it lists. */
 export interface Narrowing {
@@ -27,11 +27,7 @@ export interface Narrowing {
   folder?: string;
 }
 
-export function sortOptions(
-  mode: ViewMode,
-  where: Narrowing = {},
-  content: string[] | null = null,
-): Array<[string, string]> {
+export function sortOptions(mode: ViewMode, where: Narrowing = {}): Array<[string, string]> {
   if (supportsFolders(mode) && where.grouped && !where.folder) {
     return [
       ['mtime', 'Modified'],
@@ -124,12 +120,6 @@ export function sortOptions(
         ['added', 'Added'],
         ['duration', 'Length'],
       ];
-      // One fact only music has: how fast it goes, as the analysis read it
-      // from the sound — offered wherever the listing is tracks and nothing
-      // else (listsTracks), which on a face of music alone is All and
-      // Popular, there being no music chip there. A track with none comes
-      // after every one that has, whichever way the order runs.
-      if (listsTracks(mode, content)) opts.push(['tempo', 'Tempo']);
       return opts;
     }
   }

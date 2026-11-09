@@ -7,10 +7,14 @@
   `SetMetaDB` tracks changes, `LoadFromDB` restores, `PersistLoop` batches
   every 2 s (failed writes stay dirty). `PruneDB` (deleting vanished files'
   records and everything derived from them: metadata, thumbnails, borders,
-  vectors, tempos, fingerprints, skips) and then the state-store prune on the
+  vectors, fingerprints, skips) and then the state-store prune on the
   same `LiveIDs` (nil when empty) run after **every** *completed* scan via
   `pruneAll` in `main` — never on an empty index, or an unmounted root would
   wipe the cache.
+- `blob.Open` creates every bucket the build uses and deletes the ones an
+  earlier build wrote and nothing reads now (`droppedBuckets`): their pages
+  return to bolt's free list for new writes (the file itself never shrinks).
+  `tempos` is one, the shown tempo the library no longer reads.
 - `LoadFromDB` restores only what the roots and the `-exclude` globs still
   admit (either may have changed since the record was written), before the
   first scan.

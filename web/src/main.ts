@@ -62,7 +62,6 @@ import {
   hoverLines,
   mediaShape,
   releaseShape,
-  tempoLabel,
 } from './format';
 import { watchState } from './playback';
 import {
@@ -285,14 +284,10 @@ function overlaysHtml(item: Item): string {
     ? `<span class="plays" title="${item.like > 0 ? 'Liked' : 'Disliked'}">${item.like > 0 ? icons.thumbUp : icons.thumbDown}</span>`
     : '';
   const spoken = item.spoken ? `<span class="plays" title="Spoken word">${icons.book}</span>` : '';
-  // The tempo, in the corner a track's tile leaves free: the duration has
-  // the other bottom corner, the marks and the format the top two. Absent
-  // rather than guessed where the analysis has not read one.
-  const tempo = item.kind === 'audio' && item.bpm ? `<span class="tempo">${tempoLabel(item.bpm)}</span>` : '';
   // The marks share one row at the top-left, styled like the duration pill;
   // the watched tick keeps that corner and the row starts after it (CSS).
   const marks = plays || like || spoken ? `<div class="marks">${plays}${like}${spoken}</div>` : '';
-  return progressHtml(item) + dur + tempo + marks;
+  return progressHtml(item) + dur + marks;
 }
 
 /**
@@ -1390,7 +1385,7 @@ function showArtist(name: string): void {
 function renderSortOptions(): void {
   groupWrap.hidden = !supportsFolders(state.mode);
   groupSelect.value = state.grouped ? 'folders' : 'flat';
-  const opts = sortOptions(state.mode, state, shownContent());
+  const opts = sortOptions(state.mode, state);
   // A key that does not survive the change of view falls back to the one
   // that view opens on, rather than being sent to a server that would
   // quietly ignore it.
@@ -1874,9 +1869,7 @@ function readHash(): void {
   // key from one of them means nothing in another. renderSortOptions falls
   // back for anything that does not fit.
   const s = p.get('s') ?? '';
-  state.sort = sortOptions(state.mode, state, shownContent()).some(([v]) => v === s)
-    ? s
-    : openingSort(state.mode, state);
+  state.sort = sortOptions(state.mode, state).some(([v]) => v === s) ? s : openingSort(state.mode, state);
   // And the direction the same way: an address that names one keeps it,
   // and one that does not opens the view the way the view opens — a link to
   // a season lands on its first episode, not its last.

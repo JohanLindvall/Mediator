@@ -207,13 +207,6 @@ type Item struct {
 	Aspect    string `json:"aspect,omitempty"`
 	Hidden    bool   `json:"hidden,omitempty"`
 	Favourite bool   `json:"favourite,omitempty"`
-	// BPM is the track's tempo in beats per minute, as the analysis read it
-	// from the sound (tempo.go), stamped on the copy like the counts above:
-	// it is kept beside the vector with the file's identity, not on the
-	// indexed item, so a file that changes simply stops having one until it
-	// is read again. Nought where there is none worth showing — not read
-	// yet, no steady pulse, or a reading rather than music.
-	BPM float64 `json:"bpm,omitempty"`
 
 	Path     string       `json:"-"` // absolute path on disk (virtual for archived items)
 	stored   *storedEntry // non-nil: content lives inside some other file
@@ -410,11 +403,6 @@ type Library struct {
 	// own tags name nobody — written by the same build, read by the stamper
 	// so that every door agrees. See Item.Performer.
 	performers map[string]string
-	// tempos is every track's tempo as read (tempo.go), and tempoView the
-	// copy the stamper and the tempo sort read — replaced wholesale when the
-	// analysis publishes, so holding it is holding one publish's answer.
-	tempos    map[string]tempoRec
-	tempoView map[string]tempoRec
 
 	version int64
 	changed chan struct{}
@@ -1450,13 +1438,12 @@ func (l *Library) List(q Query) Result {
 }
 
 // sortEntry is one item on its way through a sort, with the keys a query
-// needs computed — the shuffle hash, the tempo shown — computed once here
+// needs computed — the shuffle hash — computed once here
 // rather than once per comparison. The name's key is the item's own
 // (nameKey), made when the name was.
 type sortEntry struct {
-	it    *Item
-	rand  uint64  // precomputed shuffle key, never computed per comparison
-	tempo float64 // the tempo shown, for the tempo order; nought for none
+	it   *Item
+	rand uint64 // precomputed shuffle key, never computed per comparison
 }
 
 // byField orders entries by one stored number, ties broken by name so that
@@ -1513,15 +1500,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	if popular {
 		aff = l.affinities()
 	}
-	// The tempo order reads what the tiles show, the stamper's own rule, so
-	// the two cannot disagree: the published tempos, and nothing for a
-	// reading. Taken here for the affinity's reason — the spoken verdicts
-	// ride on the scaled vectors, a lazy rebuild of the whole library.
-	var tempos map[string]tempoRec
-	var spoken func(string) bool
-	if q.Sort == "tempo" {
-		tempos, spoken = l.tempoSnapshot(), l.spokenSet(l.scaledVectors())
-	}
 
 	l.mu.RLock()
 	entries := make([]sortEntry, 0, len(l.items))
@@ -1564,10 +1542,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		e := sortEntry{it: it}
 		switch q.Sort {
 		case "mtime", "size", "added", "duration", "pixels", "bitrate": // ordered by stored fields
-		case "tempo":
-			if it.Kind == KindAudio && !spoken(it.ID) {
-				e.tempo = tempos[it.ID].shown(it)
-			}
 		case "random":
 			e.rand = shuffleKey(it.ID, q.Seed)
 		}
@@ -1595,13 +1569,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		// only rate obtainable without reading the stream, and for a
 		// variable-rate file it is the truer one anyway.
 		order = byField(bitsPerSecond)
-	case "tempo":
-		order = func(a, b sortEntry) int {
-			if c := cmp.Compare(a.tempo, b.tempo); c != 0 {
-				return c
-			}
-			return byName(a, b)
-		}
 	case "episode":
 		order = func(a, b sortEntry) int {
 			if c := cmp.Compare(a.it.Season, b.it.Season); c != 0 {
@@ -1651,22 +1618,6 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 	if q.Desc {
 		inner := order
 		order = func(a, b sortEntry) int { return -inner(a, b) }
-	}
-	if q.Sort == "tempo" {
-		// A track with no tempo to show — not read yet, no steady pulse, a
-		// reading — goes after every one that has, whichever way the listing
-		// runs: the order is of tempos, and at the head of a slowest-first
-		// listing it would be a screenful of tracks saying nothing.
-		inner := order
-		order = func(a, b sortEntry) int {
-			if ka, kb := a.tempo > 0, b.tempo > 0; ka != kb {
-				if ka {
-					return -1
-				}
-				return 1
-			}
-			return inner(a, b)
-		}
 	}
 	if q.Sort == "mtime" {
 		// A time later than now is not a time (knownTime), and goes after

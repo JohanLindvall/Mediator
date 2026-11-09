@@ -681,24 +681,7 @@ length nobody could measure be read from fixed marks instead; and a read
 the clock ran out on is offered
 again an hour later rather than written off for the run, which would have
 left that track out of radio, out of the resemblances and out of its own
-release's sound. Four things are read off it:
-
-- **How fast it goes.** Each track's tempo, in beats a minute: on its tile
-  beside the length, in a release's sheet beside each track's length, in
-  the music bar beside the performer, and on hover — and a listing of
-  tracks can be ordered by it (*Tempo*): the Music chip's, and on a face
-  that shows only music, All and Popular. A track with none comes last
-  whichever way the order runs. It is read from the sound rather than the tags:
-  across the library measured, 587 of 28,767 files carried a BPM tag at
-  all, 447 of those said nought and 46 said 320, a bitrate in the wrong
-  field. Read against the tags that were plausible it agreed within one
-  beat a minute on most, and like every tempo estimator it sometimes reads
-  half or double what a drummer would count. Nothing is shown where
-  nothing steady is struck — a sustained chord, a drone, a pulse too faint
-  to trust — nor for a reading. A library analysed before this reads each
-  track once more for its tempo, in the same background pass and at the
-  same second or so a track; its vectors and resemblances are left exactly
-  as they were meanwhile.
+release's sound. What is read off it:
 
 - **Radio, and similar tracks.** The bar's radio button keeps the queue
   going with the tracks that sound most like the one playing, fetching a

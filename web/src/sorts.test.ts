@@ -79,29 +79,3 @@ test('a season opens on its first episode, and everything else newest first', ()
     assert.equal(openingDesc(mode), true, `${mode} opened ascending`);
   }
 });
-
-// How fast it goes is music's own order: offered wherever a listing is
-// tracks and nothing else, and nowhere a film, a picture or a mixed listing
-// would sort as nothing. On a face of music alone that is All and Popular —
-// there is no music chip there, All being the tracks — and it was reported
-// missing exactly there.
-test('the tempo order is offered wherever the listing is tracks alone', () => {
-  const offers = (mode: ViewMode, content: string[] | null) =>
-    sortOptions(mode, {}, content).some(([v]) => v === 'tempo');
-  for (const mode of modes) {
-    assert.equal(offers(mode, null), mode === 'audio', `${mode}, everything shown`);
-    assert.equal(offers(mode, ['music', 'videos']), mode === 'audio', `${mode}, music and films`);
-    assert.equal(
-      offers(mode, ['music']),
-      mode === 'audio' || mode === 'all' || mode === 'popular',
-      `${mode}, music alone`,
-    );
-    // The music chip's own listing is tracks wherever it is drawn, and a face
-    // of films alone never draws it (modeShown).
-    assert.equal(offers(mode, ['videos']), mode === 'audio', `${mode}, films alone`);
-  }
-  // A release, a performer or a genre has no one tempo, whatever the face.
-  assert.ok(!offers('albums', ['music']));
-  // And offering it moves no view's opening order.
-  assert.equal(openingSort('all'), sortOptions('all', {}, ['music'])[0]![0]);
-});

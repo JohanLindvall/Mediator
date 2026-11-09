@@ -109,9 +109,9 @@ The library (`internal/library`, `internal/blob`, `internal/state`):
   intros and credits found in the sound (`series.go`, `fingerprint.go`,
   `skipdetect.go`, `server/skips.go`, `web/src/skips.ts`).
 - [music](docs/music.md): plays, verdicts and owner flags; how music sounds
-  (analysis, tempo, similarity, speech, audiobooks); radio and artist radio
+  (analysis, similarity, speech, audiobooks); radio and artist radio
   (`plays.go`, `likes.go`, `ownercounts.go`, `analyze.go`, `features.go`,
-  `tempo.go`, `similar.go`, `spoken.go`, `station.go`).
+  `similar.go`, `spoken.go`, `station.go`).
 - [archives](docs/archives.md): rar and zip sets, unpacking, DVD-Video and
   the loopback input (`rar.go`, `archive.go`, `zipset.go`, `pack.go`,
   `unpack.go`, `openitem.go`, `disc.go`, `ps.go`, `loopback.go`).
