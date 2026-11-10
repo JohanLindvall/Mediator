@@ -103,9 +103,12 @@ func TestFoldersFilterBeforeGroupingAndChoosingArtwork(t *testing.T) {
 			}
 		}
 	}
-	// A folder named by the query ranks before a member or ancestor match.
-	if got := l.SearchFolders(Query{Search: "shared", Sort: "name"})[0].Name; got != "Shared" {
+	// Within one case-match group, a named folder beats a member or ancestor.
+	if got := l.SearchFolders(Query{Search: "SHARED", Sort: "name"})[0].Name; got != "Shared" {
 		t.Fatalf("search led with %q instead of the named folder", got)
+	}
+	if got := l.SearchFolders(Query{Search: "shared", Sort: "name"})[0].Name; got != "Other" {
+		t.Fatalf("matching-case member should lead, got %q", got)
 	}
 }
 

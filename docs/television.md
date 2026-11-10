@@ -16,12 +16,15 @@
     episode).
   - **Search finds a show by name or by any one episode's own text**
     (`answers`, `answering`, shared by `SearchSeries` and `CountsFor`;
-    `Item.lower` kept as `eps`), as the file listing does, after grouping over
+    `Item.lower` and its literal text kept as `eps`), as the file listing does, after grouping over
     what the caller may see (hidden episodes reveal nothing). Matched only
     through some seasons, a show is a copy naming them (`Series.Matched`) for
     the seasons view (`seasonsOffered` in `query.ts`, tested), whose listing
     searches episodes too; the card stays whole. The seasons view refetches
     shows when the search changes (`CollectionSource.searched`).
+    Literal matches in the show name or any permitted episode rank first,
+    matching case before ignoring case, then the existing word relevance and
+    selected sort apply ([search](names.md#order-and-search)).
     Hidden/favourite flags do not affect show counts.
   - **A restriction regroups** (`AllowedSeries`), never filters the cached
     list, so shows, counts, running times and seasons are the reachable ones

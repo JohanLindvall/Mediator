@@ -44,6 +44,7 @@ type Genre struct {
 	Likes    int   `json:"likes,omitempty"`    // the net verdict on the releases in it
 	ModTime  int64 `json:"mtime"`
 
+	literal  literalText
 	lower    string // tokenized search text
 	nameEnd  int32  // where its name ends in lower; its card is its name (hitTier)
 	cardEnd  int32
@@ -140,7 +141,7 @@ func genresFrom(albums []*Album) []*Genre {
 		// words someone remembers about a genre are the bands in it. Release
 		// titles are deliberately left out: a genre holds hundreds, and the
 		// text would be the whole library.
-		g.lower, g.nameEnd, g.cardEnd = segmentedText([]string{g.Name}, nil, names)
+		g.lower, g.nameEnd, g.cardEnd, g.literal = segmentedText([]string{g.Name}, nil, names)
 		g.sortName = naturalKey(g.Name)
 		out = append(out, g)
 	}
@@ -195,6 +196,7 @@ func (l *Library) SearchGenres(search, sortKey string, desc bool, paths PathFilt
 		func(g *Genre) string { return g.sortName },
 		func(g *Genre) string { return g.ID })
 	rankByHit(out, words, func(g *Genre) (string, int32, int32) { return g.lower, g.nameEnd, g.cardEnd }, nil)
+	rankByLiteral(out, search, func(g *Genre, q literalQuery) int { return q.rank(g.literal) })
 	return out
 }
 

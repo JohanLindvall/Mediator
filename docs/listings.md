@@ -4,6 +4,11 @@
 
 - `List` serves pages from a cached per-(query, version) sorted result; never
   add per-request work that walks the index.
+  - Search relevance is applied before paging: literal matches with matching
+    case, literal matches ignoring case, then token-only matches. Each group
+    retains name/card relevance, whole-word preference and the selected sort.
+    Both literal spellings are indexed alongside token text, so cached pages
+    require no further text processing ([search](names.md#order-and-search)).
   - `Query.Folder` selects the exact displayed leaf directory name, across
     roots and parent paths, and participates in the cache key. Folder cards
     use their own selection/group-version cache (`folders.go`), while their

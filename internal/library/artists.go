@@ -39,6 +39,7 @@ type Artist struct {
 	// hands out: how much this performer sounds like the one asked about.
 	Similarity float32 `json:"similarity,omitempty"`
 
+	literal  literalText
 	lower    string // tokenized search text
 	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
 	cardEnd  int32
@@ -162,7 +163,7 @@ func artistsFrom(albums []*Album) []*Artist {
 		if ar.FromYear > 0 {
 			card = append(card, strconv.Itoa(ar.FromYear), strconv.Itoa(ar.ToYear))
 		}
-		ar.lower, ar.nameEnd, ar.cardEnd = segmentedText([]string{ar.Name}, card, ar.searchParts)
+		ar.lower, ar.nameEnd, ar.cardEnd, ar.literal = segmentedText([]string{ar.Name}, card, ar.searchParts)
 		ar.searchParts = nil // only ever needed to build the line above
 		ar.sortName = naturalKey(ar.Name)
 		out = append(out, ar)
@@ -258,5 +259,26 @@ func (l *Library) SearchArtists(search, sortKey string, desc bool, paths PathFil
 		func(a *Artist) string { return a.ID })
 	rankByHit(out, words, func(a *Artist) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd },
 		func(a *Artist) (int, bool) { p, ok := through[a]; return p, ok })
+	if literal := newLiteralQuery(search); literal.exact != "" && len(out) > 1 {
+		byArtist := make(map[string]int, len(out))
+		for _, a := range out {
+			byArtist[strings.ToLower(a.Name)] = literal.rank(a.literal)
+		}
+		// Only matching performers can move. An exact answer is already best;
+		// do not scan their tracks, or unrelated and spoken releases.
+		var albums []*Album
+		for _, a := range l.AllowedAlbums(l.Albums(), paths) {
+			if best, ok := byArtist[strings.ToLower(a.Artist)]; ok && best != literalExact && !a.Spoken {
+				albums = append(albums, a)
+			}
+		}
+		for a, rank := range l.albumLiteralRanks(albums, search, paths) {
+			key := strings.ToLower(a.Artist)
+			byArtist[key] = min(byArtist[key], rank)
+		}
+		rankByLiteral(out, search, func(a *Artist, _ literalQuery) int {
+			return byArtist[strings.ToLower(a.Name)]
+		})
+	}
 	return out
 }

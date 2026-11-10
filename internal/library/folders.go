@@ -24,9 +24,10 @@ type Folder struct {
 	CoverTime int64  `json:"coverTime"`
 	CoverSVG  bool   `json:"coverSvg,omitempty"`
 
-	nameKey string
-	lower   string
-	partial int // best member's search match, when the folder name misses
+	nameKey     string
+	lower       string
+	literalRank int
+	partial     int // best member's search match, when the folder name misses
 }
 
 // leafFolder uses the real containing directory, including a root's own
@@ -78,6 +79,7 @@ func (l *Library) SearchFolders(q Query) []*Folder {
 	selected := l.buildQuery(q, version)
 	words := searchWords(q.Search)
 	hits := newHits(words)
+	literal := newLiteralQuery(q.Search)
 	groups := make(map[string]*Folder)
 	unknownDuration := make(map[string]bool)
 	now := nowMillis()
@@ -89,7 +91,7 @@ func (l *Library) SearchFolders(q Query) []*Folder {
 			f := groups[name]
 			if f == nil {
 				f = &Folder{ID: "f" + PathID(name), Name: name, nameKey: naturalKey(name),
-					lower: searchText(name), partial: len(words)}
+					lower: searchText(name), partial: len(words), literalRank: literal.rank(newLiteralText(name))}
 				groups[name] = f
 			}
 			f.Items++
@@ -100,6 +102,7 @@ func (l *Library) SearchFolders(q Query) []*Folder {
 			}
 			f.Duration += it.Duration
 			unknownDuration[name] = unknownDuration[name] || it.Duration <= 0
+			f.literalRank = min(f.literalRank, literal.rank(it.literal))
 			f.partial = min(f.partial, hits.partial(it.lower))
 			// A deterministic representative from the permitted, matching items.
 			// Its own mtime, rather than the group's, versions the thumbnail.
@@ -135,6 +138,7 @@ func (l *Library) SearchFolders(q Query) []*Folder {
 	rankByHit(out, words,
 		func(f *Folder) (string, int32, int32) { return f.lower, int32(len(f.lower)), int32(len(f.lower)) },
 		func(f *Folder) (int, bool) { return f.partial, !matchWords(f.lower, words) })
+	rankByLiteral(out, q.Search, func(f *Folder, _ literalQuery) int { return f.literalRank })
 	c.query, c.version, c.watchVer, c.items = q, selected.version, selected.watchVer, out
 	return out
 }

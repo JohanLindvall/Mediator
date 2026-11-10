@@ -210,16 +210,17 @@ type Item struct {
 
 	Path     string       `json:"-"` // absolute path on disk (virtual for archived items)
 	stored   *storedEntry // non-nil: content lives inside some other file
-	lower    string       // tokenized name+path+metadata for search
-	nameKey  string       // the name as it sorts (naturalKey)
-	nameEnd  int32        // where the name the card shows ends in lower (hitTier)
-	cardEnd  int32        // and where the rest of what it shows ends
-	ino      fileKey      // identity of the underlying file, for deduplication
-	symlink  bool         // reached through a symbolic link
-	enriched bool         // tags and duration have been looked for
-	shape    int          // which reading of the picture's shape this is (shape.go)
-	probed   bool         // ffprobe has run over it (see Probe.Probed)
-	judged   bool         // a track with no length was asked whether it is media, this run (needsEnrich)
+	literal  literalText
+	lower    string  // tokenized name+path+metadata for search
+	nameKey  string  // the name as it sorts (naturalKey)
+	nameEnd  int32   // where the name the card shows ends in lower (hitTier)
+	cardEnd  int32   // and where the rest of what it shows ends
+	ino      fileKey // identity of the underlying file, for deduplication
+	symlink  bool    // reached through a symbolic link
+	enriched bool    // tags and duration have been looked for
+	shape    int     // which reading of the picture's shape this is (shape.go)
+	probed   bool    // ffprobe has run over it (see Probe.Probed)
+	judged   bool    // a track with no length was asked whether it is media, this run (needsEnrich)
 }
 
 // Archived reports whether the item's content is bytes inside another file
@@ -1636,9 +1637,10 @@ func (l *Library) buildQuery(q Query, version int64) *queryResult {
 		}
 	}
 	slices.SortFunc(entries, order)
-	// What the search names comes first, then what shows it on its tile, then
-	// what was found by where it is kept — each in the order just sorted.
+	// Within each literal group, rank names, then cards, then matches further
+	// away; each tie retains the selected sort. Apply relevance before paging.
 	rankByHit(entries, words, func(e sortEntry) (string, int32, int32) { return e.it.lower, e.it.nameEnd, e.it.cardEnd }, nil)
+	rankByLiteral(entries, q.Search, func(e sortEntry, q literalQuery) int { return q.rank(e.it.literal) })
 	l.mu.RUnlock()
 
 	items := make([]*Item, len(entries))

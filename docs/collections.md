@@ -15,8 +15,10 @@ matching files, sum their sizes, take the newest valid modification and
 arrival times, and show total duration only when every member has one. A
 stable member ID selects the representative thumbnail from that same
 permitted selection; its own mtime versions the image, and SVGs use their
-native stream route. Folder-name search hits rank before member hits using
-the existing word-ranking rule.
+native stream route. Literal search matches (matching case first) rank by
+the best answer in the folder name or any selected member. Within those
+groups, folder-name word hits rank before member word hits, then the selected
+sort decides ties; all views share the [search hierarchy](names.md#order-and-search).
 
 The result is cached by the full selection and group version, with the watch
 version for watch filters, under its own lock. It never shares the item

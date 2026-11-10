@@ -13,7 +13,7 @@ import (
 // The text segments and the ranks they give, without a library: the tier,
 // then how many words were found only inside longer ones.
 func TestHitRanks(t *testing.T) {
-	text, nameEnd, cardEnd := segmentedText([]string{"Lee Shore"}, []string{"Pale Harrow", "2019"}, []string{"/library/Saltings"})
+	text, nameEnd, cardEnd, _ := segmentedText([]string{"Lee Shore"}, []string{"Pale Harrow", "2019"}, []string{"/library/Saltings"})
 	if want := searchText("Lee Shore", "Pale Harrow", "2019", "/library/Saltings"); text != want {
 		t.Fatalf("segmented text %q, want searchText's %q", text, want)
 	}
@@ -46,12 +46,12 @@ func TestHitRanks(t *testing.T) {
 	}
 	// On a name that holds the word, the name decides: part of a word there
 	// stays part of one, however whole the card or the folder holds it.
-	text, nameEnd, cardEnd = segmentedText([]string{"Gorseland"}, []string{"Gorse"}, []string{"/library/Gorse"})
+	text, nameEnd, cardEnd, _ = segmentedText([]string{"Gorseland"}, []string{"Gorse"}, []string{"/library/Gorse"})
 	if h := newHits(searchWords("gorse")); h.rank(text, nameEnd, cardEnd) != h.at(hitInName, 1) {
 		t.Errorf("a part of a word in the name ranks %d, want %d", h.rank(text, nameEnd, cardEnd), h.at(hitInName, 1))
 	}
 	// On a card that shows the word, the card decides likewise.
-	text, nameEnd, cardEnd = segmentedText([]string{"Lee Shore"}, []string{"Gorseland"}, []string{"/library/Gorse"})
+	text, nameEnd, cardEnd, _ = segmentedText([]string{"Lee Shore"}, []string{"Gorseland"}, []string{"/library/Gorse"})
 	if h := newHits(searchWords("gorse")); h.rank(text, nameEnd, cardEnd) != h.at(hitCard, 1) {
 		t.Errorf("a part of a word on the card ranks %d, want %d", h.rank(text, nameEnd, cardEnd), h.at(hitCard, 1))
 	}
@@ -74,6 +74,8 @@ func TestHitRanks(t *testing.T) {
 	}
 }
 
+// These queries use uniformly mismatched case so every literal answer
+// belongs to the same group; these tests pin the inner word-ranking rules.
 // A whole word comes before part of one, in each tier: the tile titled with
 // the word before the ones whose title only holds it, and a folder named by
 // it before one whose name holds it — each kept in the view's order, and the
@@ -93,7 +95,7 @@ func TestWholeWordsListBeforePartsOfWords(t *testing.T) {
 	add("/library/Gorsemoor/01 f.mp3", 600, "Brinewater")
 	titles := func(desc bool) []string {
 		var out []string
-		for _, it := range l.List(Query{Search: "gorse", Sort: "mtime", Desc: desc}).Items {
+		for _, it := range l.List(Query{Search: "GORSE", Sort: "mtime", Desc: desc}).Items {
 			out = append(out, it.Title)
 		}
 		return out
@@ -129,7 +131,7 @@ func TestReleasesFoundByATrackRankByIt(t *testing.T) {
 	l := libForWholeness(t)
 	names := func(desc bool) []string {
 		var out []string
-		for _, a := range l.SearchAlbums(AlbumQuery{Search: "gorse", Sort: "name", Desc: desc}) {
+		for _, a := range l.SearchAlbums(AlbumQuery{Search: "GORSE", Sort: "name", Desc: desc}) {
 			out = append(out, a.Name)
 		}
 		return out
@@ -150,7 +152,7 @@ func TestPerformersFoundByAReleaseRankByIt(t *testing.T) {
 	l := libForWholeness(t)
 	names := func(desc bool) []string {
 		var out []string
-		for _, a := range l.SearchArtists("gorse", "name", desc, PathFilter{}) {
+		for _, a := range l.SearchArtists("GORSE", "name", desc, PathFilter{}) {
 			out = append(out, a.Name)
 		}
 		return out
@@ -177,7 +179,7 @@ func TestShowsFoundByAnEpisodeRankByIt(t *testing.T) {
 		l.upsert(p, KindVideo, 10, time.Unix(1, 0), fileKey{}, false)
 	}
 	var names []string
-	for _, s := range l.SearchSeries("gorse", "name", false, PathFilter{}) {
+	for _, s := range l.SearchSeries("GORSE", "name", false, PathFilter{}) {
 		names = append(names, s.Name)
 	}
 	// Part of its name on the card first; then by an episode titled with the
@@ -213,7 +215,7 @@ func TestASearchListsWhatItNamesFirst(t *testing.T) {
 	l := libForRanking(t)
 	titles := func(desc bool) []string {
 		var out []string
-		for _, it := range l.List(Query{Search: "lee shore", Sort: "mtime", Desc: desc}).Items {
+		for _, it := range l.List(Query{Search: "LEE SHORE", Sort: "mtime", Desc: desc}).Items {
 			out = append(out, it.Title)
 		}
 		return out
@@ -233,7 +235,7 @@ func TestASearchListsWhatItNamesFirst(t *testing.T) {
 func TestAReleaseSearchListsWhatItNamesFirst(t *testing.T) {
 	l := libForRanking(t)
 	var names []string
-	for _, a := range l.SearchAlbums(AlbumQuery{Search: "lee shore", Sort: "name"}) {
+	for _, a := range l.SearchAlbums(AlbumQuery{Search: "LEE SHORE", Sort: "name"}) {
 		names = append(names, a.Name)
 	}
 	// By name, Live and Saltings would come before Windward.
@@ -247,7 +249,7 @@ func TestAReleaseSearchListsWhatItNamesFirst(t *testing.T) {
 func TestAPerformerSearchListsWhoItNamesFirst(t *testing.T) {
 	l := libForRanking(t)
 	var names []string
-	for _, a := range l.SearchArtists("lee shore", "name", true, PathFilter{}) {
+	for _, a := range l.SearchArtists("LEE SHORE", "name", true, PathFilter{}) {
 		names = append(names, a.Name)
 	}
 	if want := []string{"Lee Shore", "Tern Signal", "Pale Harrow", "Gorse Beacon"}; !slices.Equal(names, want) {
@@ -266,11 +268,12 @@ func TestAViewsOwnNameListsFirst(t *testing.T) {
 		l.setMeta(PathID(path), tagMeta{title: title, artist: artist, album: album}, 1000)
 	}
 	// Oldest first, so newest first would put the card's matches first.
+	// Two spaces in the query keep all answers in the token-only group.
 	add("/library/a/01 a.mp3", 100, "Tide Over Marram", "Pale Harrow", "Saltings")
 	add("/library/b/01 b.mp3", 200, "Brinewater", "Marram", "Tidelines")
 	add("/library/c/01 c.mp3", 300, "Shingle", "Tern Signal", "Marram Tide")
 	titles := []string{}
-	for _, it := range l.List(Query{Search: "marram tide", Sort: "mtime", Desc: true}).Items {
+	for _, it := range l.List(Query{Search: "marram  tide", Sort: "mtime", Desc: true}).Items {
 		titles = append(titles, it.Title)
 	}
 	if want := []string{"Tide Over Marram", "Shingle", "Brinewater"}; !slices.Equal(titles, want) {

@@ -283,6 +283,7 @@ type Series struct {
 	// ones its seasons view offers. Absent, every season is on offer.
 	Matched []int `json:"matched,omitempty"`
 
+	literal  literalText
 	lower    string
 	nameEnd  int32 // where its name ends in lower; its card is its name (hitTier)
 	cardEnd  int32
@@ -295,8 +296,9 @@ type Series struct {
 
 // seriesEpisode is one episode as a search sees it.
 type seriesEpisode struct {
-	season int
-	lower  string
+	season  int
+	lower   string
+	literal literalText
 }
 
 // Season is one season of one show.
@@ -379,7 +381,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 			a.seasons[it.Season] = se
 		}
 		n, k := plays[it.ID], likes[it.ID]
-		a.s.eps = append(a.s.eps, seriesEpisode{it.Season, it.lower})
+		a.s.eps = append(a.s.eps, seriesEpisode{it.Season, it.lower, it.literal})
 		a.s.Episodes++
 		a.s.Size += it.Size
 		a.s.Plays += n
@@ -449,7 +451,7 @@ func (l *Library) buildSeries(allowed func(string) bool) []*Series {
 			a.s.Seasons = append(a.s.Seasons, *se)
 		}
 		slices.SortFunc(a.s.Seasons, func(x, y Season) int { return cmp.Compare(x.Season, y.Season) })
-		a.s.lower, a.s.nameEnd, a.s.cardEnd = segmentedText([]string{a.s.Name}, nil, nil)
+		a.s.lower, a.s.nameEnd, a.s.cardEnd, a.s.literal = segmentedText([]string{a.s.Name}, nil, nil)
 		a.s.sortName = naturalKey(a.s.Name)
 		out = append(out, a.s)
 	}
@@ -558,6 +560,16 @@ func (l *Library) SearchSeries(search, sortKey string, desc bool, paths PathFilt
 		func(s *Series) string { return s.ID })
 	rankByHit(out, words, func(s *Series) (string, int32, int32) { return s.lower, s.nameEnd, s.cardEnd },
 		byEpisode(words))
+	rankByLiteral(out, search, func(s *Series, q literalQuery) int {
+		best := q.rank(s.literal)
+		for _, e := range s.eps {
+			best = min(best, q.rank(e.literal))
+			if best == literalExact {
+				break
+			}
+		}
+		return best
+	})
 	return out
 }
 

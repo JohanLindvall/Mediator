@@ -1001,7 +1001,16 @@ as on their own name. A release is found by any track on it too, and a
 performer by any release of theirs that is found, so typing a song's
 title counts and lists the album it is on and who made it — and the
 search stays in force as you move between views and drill into a
-performer, until you clear it. What a search names comes first — the
+performer, until you clear it. Results first prefer the complete query as
+written, including punctuation and case, then the same text ignoring case,
+then matches found only by splitting it into words. For example,
+`disk7/FRESH/` puts that contiguous path before `disk7/fresh/`, and both
+before paths with those words separated by other directories. Albums,
+performers, shows and folder groups inherit this preference from matching
+members the caller can see. Leading and trailing query whitespace is ignored;
+spacing inside a phrase is preserved. These preferences apply before the
+selected sort, in either direction, without hiding the broader word matches.
+Within each of these groups, what a search names comes first — the
 performer called that, the release, the track — then whatever holds every
 word in the name the view is about (the track's title in the file listing,
 the release's title among releases, the performer's name among performers,

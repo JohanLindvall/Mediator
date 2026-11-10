@@ -11,8 +11,8 @@ import (
 // its absolute path (every directory above it, not just the ones below the
 // root) and its tag metadata; queries are tokenized the same way and every
 // query word must appear somewhere in that text. Punctuation and word order
-// never matter, so "song tide" finds "Tide.Song.mp3" while the user is still
-// typing.
+// do not exclude matches, so "song tide" finds "Tide.Song.mp3" while the user
+// is still typing.
 //
 // The path indexed is the absolute one because the display path starts at the
 // root's own base name: a library rooted deep in a mount point could not be
@@ -52,8 +52,8 @@ func matchWords(text string, words []string) bool {
 }
 
 // How directly something answers a search, best first. A listing is ordered
-// by its tier before anything else: what the search names comes first, then
-// what holds every word in its name — the title in the file listing, the
+// within each literal group by its tier: what the search names comes first,
+// then what holds every word in its name — the title in the file listing, the
 // release's title among releases, the performer's name among performers, the
 // genre's among genres — then what shows every word anywhere on its card,
 // then what was found further away — a
@@ -78,12 +78,15 @@ const (
 // segmentedText is searchText built in three parts — the name a card shows,
 // the rest of what it shows, and everything else the thing is found by —
 // with where the first two end, so hits.rank can read how directly a search
-// was answered without tokenizing anything again.
-func segmentedText(name, card, beyond []string) (text string, nameEnd, cardEnd int32) {
-	var b strings.Builder
+// was answered without tokenizing anything again. The original fields and
+// their lowercase spelling are retained for the outer literal ranking.
+func segmentedText(name, card, beyond []string) (text string, nameEnd, cardEnd int32, literal literalText) {
+	var b, raw strings.Builder
 	b.WriteByte(' ')
 	add := func(parts []string) {
 		for _, p := range parts {
+			raw.WriteString(p)
+			raw.WriteByte(0) // fields must never make a literal phrase together
 			for _, t := range tokenize(p) {
 				b.WriteString(t)
 				b.WriteByte(' ')
@@ -95,7 +98,7 @@ func segmentedText(name, card, beyond []string) (text string, nameEnd, cardEnd i
 	add(card)
 	cardEnd = int32(b.Len())
 	add(beyond)
-	return b.String(), nameEnd, cardEnd
+	return b.String(), nameEnd, cardEnd, newLiteralText(raw.String())
 }
 
 // hits is a search made ready to rank what it found: its words, each again
@@ -210,4 +213,57 @@ func rankByHit[T any](out []T, words []string, text func(T) (string, int32, int3
 		t, nameEnd, cardEnd := text(x)
 		return h.rank(t, nameEnd, cardEnd)
 	})
+}
+
+// literalText preserves punctuation, spacing and case separately from the
+// token index. NUL separates fields, including archive/member paths.
+type literalText struct {
+	exact  string
+	folded string
+}
+
+func newLiteralText(text string) literalText {
+	return literalText{exact: text, folded: strings.ToLower(text)}
+}
+
+const (
+	literalExact = iota
+	literalFolded
+	literalMiss
+)
+
+type literalQuery struct{ exact, folded string }
+
+func newLiteralQuery(query string) literalQuery {
+	query = strings.TrimSpace(query)
+	// A NUL cannot be part of a field-spanning literal match.
+	if strings.ContainsRune(query, 0) {
+		query = ""
+	}
+	return literalQuery{query, strings.ToLower(query)}
+}
+
+func (q literalQuery) rank(text literalText) int {
+	if q.exact == "" {
+		return literalMiss
+	}
+	if strings.Contains(text.exact, q.exact) {
+		return literalExact
+	}
+	if strings.Contains(text.folded, q.folded) {
+		return literalFolded
+	}
+	return literalMiss
+}
+
+// rankByLiteral is the outermost relevance order: the complete query as
+// written, then ignoring case, then token-only answers. The stable pass
+// retains name/card tiers, word completeness and the selected sort inside
+// each group. Empty queries leave the selected sort alone.
+func rankByLiteral[T any](out []T, query string, rank func(T, literalQuery) int) {
+	q := newLiteralQuery(query)
+	if q.exact == "" {
+		return
+	}
+	rankBy(out, func(x T) int { return rank(x, q) })
 }

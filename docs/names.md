@@ -65,8 +65,30 @@
     `answering`); tracks are checked only for releases their own text missed.
     Album and artist listings, like-this, chips and queue-all share this;
     genres do not.
-  - **Results rank by how directly they answer** (`rankByHit`, after every
-    view's sort — items, releases, performers, genres, shows — and so for
+  - **Literal matches lead** (`rankByLiteral`): the complete trimmed query
+    occurring in one original field, with its punctuation, spaces and case,
+    comes first; the same substring ignoring case comes second; token-only
+    answers follow. This is the outermost order in all six views, before
+    name/card relevance or whole-word preference. Thus a literal path wins
+    over a title matching only scattered words, and matching case wins even
+    over a whole word with different case. Blank queries do not rank.
+    `segmentedText` also builds `literalText`, preserving the original text
+    and its lowercase copy at index time. NUL boundaries prevent separate
+    fields (or archive/container names) from manufacturing a literal phrase;
+    queries containing NUL receive no literal preference. Display decoding
+    applies before both indexes. Token matching still determines membership,
+    so punctuation and case never exclude the broader answers or change counts.
+    Collections inherit the best literal answer from their permitted members,
+    even when their own text already answers by tokens: albums through tracks,
+    performers through non-spoken releases and their tracks, shows through
+    episodes, folders through the selected files. Genres retain their own
+    name-and-performer search scope. Album member checks hold the index read
+    lock once per pass and respect path restrictions. Performer ranking scans
+    members only for matching performers without an exact literal answer;
+    unrelated and spoken releases are skipped.
+  - **Within each literal group, results rank by how directly they answer**
+    (`rankByHit`, after every view's sort — items, releases, performers,
+    genres, shows, folders — and so for
     queue-all too): first what the search names, word for word as `tokenize`
     reads words (`hitName`); then what holds every word in that name, in any
     order (`hitInName`: a track's title, or its file name where it has none;
@@ -90,7 +112,7 @@
     whole, where a filter stops at the first), a performer by their best
     release (`performersAnswering`), a show by its best episode
     (`byEpisode`).
-  - Each rank keeps the view's sort, either direction (`rankBy`, a stable
+  - Each final rank keeps the view's sort, either direction (`rankBy`, a stable
     counting sort). The text is built in three segments with where the first
     two end (`segmentedText`, `nameEnd`, `cardEnd` on each item and
     collection), and a whole word is a token between spaces (`" w "`), so a

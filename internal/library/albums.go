@@ -59,6 +59,7 @@ type Album struct {
 	// entry for nearly every release, and more only where one mixes them.
 	Formats []string `json:"formats,omitempty"`
 
+	literal  literalText
 	lower    string // tokenized search text (name, artist, genre, year, path)
 	nameEnd  int32  // where its name ends in lower, and the rest of its card (hitTier)
 	cardEnd  int32
@@ -233,7 +234,36 @@ func (l *Library) SearchAlbums(q AlbumQuery) []*Album {
 		func(a *Album) string { return a.ID })
 	rankByHit(out, words, func(a *Album) (string, int32, int32) { return a.lower, a.nameEnd, a.cardEnd },
 		func(a *Album) (int, bool) { p, ok := byTrack[a]; return p, ok })
+	literal := l.albumLiteralRanks(out, q.Search, q.Paths)
+	rankByLiteral(out, q.Search, func(a *Album, _ literalQuery) int { return literal[a] })
 	return out
+}
+
+// albumLiteralRanks asks only permitted tracks, even when the release's own
+// text already matches by words. A literal member match outranks a scattered
+// word match in the collection's own name. Hold the index lock once per pass.
+func (l *Library) albumLiteralRanks(albums []*Album, query string, paths PathFilter) map[*Album]int {
+	q := newLiteralQuery(query)
+	if q.exact == "" {
+		return nil
+	}
+	allowed := paths.allower()
+	ranks := make(map[*Album]int, len(albums))
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	for _, a := range albums {
+		best := q.rank(a.literal)
+		for _, id := range a.TrackIDs {
+			if best == literalExact {
+				break
+			}
+			if it := l.items[id]; it != nil && allowed(it.Path) {
+				best = min(best, q.rank(it.literal))
+			}
+		}
+		ranks[a] = best
+	}
+	return ranks
 }
 
 // albumsAnswering is the releases a search finds, in the order given: by
@@ -884,7 +914,7 @@ func fillAlbum(a *Album, path string, tracks []*Item, plays map[string]int, know
 	if len(genres) == 0 {
 		genres = []string{a.Genre}
 	}
-	a.lower, a.nameEnd, a.cardEnd = segmentedText([]string{a.Name},
+	a.lower, a.nameEnd, a.cardEnd, a.literal = segmentedText([]string{a.Name},
 		append([]string{a.Artist, year}, genres...), []string{displayText(path)})
 	a.sortName = naturalKey(a.Name)
 }

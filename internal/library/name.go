@@ -78,7 +78,7 @@ func displayText(s string) string {
 // the decoded name and path, and whatever tags enrichment has found. Every
 // place that touches those fields rebuilds it from here, so none of them can
 // drop half the text by forgetting an argument.
-func itemSearchText(it *Item) (text string, nameEnd, cardEnd int32) {
+func itemSearchText(it *Item) (text string, nameEnd, cardEnd int32, literal literalText) {
 	year := ""
 	if it.Year > 0 {
 		year = strconv.Itoa(it.Year)
@@ -100,7 +100,7 @@ func itemSearchText(it *Item) (text string, nameEnd, cardEnd int32) {
 // changes a field feeding it calls this. Caller must hold l.mu, or own the
 // item.
 func (it *Item) indexText() {
-	it.lower, it.nameEnd, it.cardEnd = itemSearchText(it)
+	it.lower, it.nameEnd, it.cardEnd, it.literal = itemSearchText(it)
 	it.nameKey = naturalKey(it.Name)
 }
 
