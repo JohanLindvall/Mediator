@@ -6,7 +6,7 @@
 # image (web/dist, web/node_modules and web/src/types.gen.ts are dockerignored).
 
 # --- Go sources, shared by the gen / build / check stages -------------------
-FROM golang:1.26-alpine AS gosrc
+FROM golang:1.27-alpine AS gosrc
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
